@@ -45,9 +45,9 @@ class OfficeBoundaryTests(unittest.TestCase):
 
     def test_role_rules_and_task_intent_have_required_sections(self):
         for path in (
-            OFFICE / "worker-01/CLAUDE.md",
-            OFFICE / "leader/CLAUDE.md",
-            OFFICE / "reviewer/CLAUDE.md",
+            OFFICE / "worker-01/AGENTS.md",
+            OFFICE / "leader/AGENTS.md",
+            OFFICE / "reviewer/AGENTS.md",
         ):
             text = path.read_text(encoding="utf-8")
             self.assertIn("## 할 일", text)
@@ -58,8 +58,12 @@ class OfficeBoundaryTests(unittest.TestCase):
         memory = (OFFICE / "MEMORY.md").read_text(encoding="utf-8").splitlines()
         self.assertLessEqual(len(memory), 120)
 
+    def test_rules_live_in_agents_files(self):
+        self.assertEqual(list(OFFICE.rglob("CLAUDE.md")), [])
+        self.assertIn("`AGENTS.md`", (OFFICE / "AGENTS.md").read_text(encoding="utf-8"))
+
     def test_worker_does_not_own_baseline_files(self):
-        rules = (OFFICE / "worker-01/CLAUDE.md").read_text(encoding="utf-8")
+        rules = (OFFICE / "worker-01/AGENTS.md").read_text(encoding="utf-8")
         self.assertIn("scripts/", rules)
         self.assertIn("templates/", rules)
         self.assertIn("production", rules)
