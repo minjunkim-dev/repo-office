@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Run the baseline checks named by the office gates and write the task report."""
+"""Run this repository's baseline checks for one task and write its REPORT.md.
+
+Usage: claude-office/tools/run_gates.py <task folder with INTENT.md>
+
+Product tasks run the product's own CI commands instead; see QUALITY_GATES.md.
+"""
 
 import subprocess
 import sys
@@ -7,15 +12,19 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-REPORT = ROOT / "claude-office/worker-01/tasks/office-smoke/REPORT.md"
 COMMANDS = (
     [sys.executable, "-m", "unittest", "discover", "-s", "scripts", "-p", "test_*.py"],
     [sys.executable, "-m", "unittest", "discover", "-s", "tools", "-p", "test_*.py"],
 )
 
 
-def main():
-    lines = ["# office-smoke 관문 보고", ""]
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if len(argv) != 1 or not (Path(argv[0]) / "INTENT.md").is_file():
+        print("usage: run_gates.py <task folder with INTENT.md>", file=sys.stderr)
+        return 2
+    task = Path(argv[0]).resolve()
+    lines = [f"# {task.name} 관문 보고", ""]
     failed = False
     for command in COMMANDS:
         result = subprocess.run(command, cwd=ROOT)
@@ -33,8 +42,9 @@ def main():
         "- 미확인: 별도 세션의 Standards·Spec 리뷰와 원격 CI 결과는 이 로컬 실행에 포함되지 않는다.",
         "",
     ])
-    REPORT.write_text("\n".join(lines), encoding="utf-8")
-    print(REPORT)
+    report = task / "REPORT.md"
+    report.write_text("\n".join(lines), encoding="utf-8")
+    print(report)
     return 1 if failed else 0
 
 
