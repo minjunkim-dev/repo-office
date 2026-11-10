@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import unittest.mock
 
 
 OFFICE = Path(__file__).resolve().parent
@@ -269,6 +270,24 @@ class PipelineTests(unittest.TestCase):
     def test_task_names_are_safe_folder_and_terminal_names(self):
         for bad in ("../x", "검색", "A", "a" * 25):
             self.assertEqual(self.engine.new(bad, ".", "true", [], "main"), 2)
+
+    def test_claude_older_than_the_read_block_is_refused(self):
+        too_old = self.engine.claude_too_old
+        self.assertIsNone(too_old("2.1.257 (Claude Code)\n"))
+        self.assertIsNone(too_old("2.10.0 (Claude Code)"))
+        for version in ("2.1.256 (Claude Code)", "9.9.9", "fake 9.9.9 (Claude Code)", "", "unknown"):
+            self.assertIn("2.1.257", too_old(version))
+
+    def test_worker_starts_only_the_binary_whose_version_passed(self):
+        fake, calls = Path(self.tmp.name) / "claude", []
+        self.engine.hc = lambda *args, check=True: calls.append(args) or ""
+        for version, started in (("2.1.256", False), ("2.1.257", True)):
+            fake.write_text(f"#!/bin/sh\necho '{version} (Claude Code)'\n", encoding="utf-8")
+            fake.chmod(0o755)
+            with unittest.mock.patch.dict(os.environ, {"PATH": f"{self.tmp.name}{os.pathsep}{os.environ['PATH']}"}):
+                error = self.engine.run_worker("w", self.job, ["claude", "--flag"], "hi")
+            self.assertEqual(error is None, started)
+            self.assertEqual([c[-2:] for c in calls if c[0] == "run"], [(str(fake), "--flag")] if started else [])
 
     def test_workers_reads_files_only(self):
         self.engine.run("search", FakeWorker(self.job))

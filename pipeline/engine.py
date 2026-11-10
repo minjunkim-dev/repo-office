@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -69,9 +70,23 @@ def hc(*args, check=True):
     return subprocess.run(["hc", *args], capture_output=True, text=True, check=check).stdout
 
 
+def claude_too_old(version):
+    """Older Claude Code ignores blockReadsOutsideWorkingDirectories without a word, so workers could read any file."""
+    found = re.fullmatch(r"(\d+)\.(\d+)\.(\d+) \(Claude Code\)\s*", version)
+    if found and tuple(map(int, found.groups())) >= (2, 1, 257):
+        return None
+    return f"Claude Code 2.1.257 or later is needed (blockReadsOutsideWorkingDirectories); `claude --version` gave: {version.strip() or 'nothing'}"
+
+
 def run_worker(name, cwd, argv, message):
     """Start an interactive worker in hc, give it one short message, wait for the turn, then end it."""
-    hc("run", "--bg", "--name", name, "--cwd", str(cwd), *argv)
+    # hc resolves PATH on its own, so pin the binary whose version was checked.
+    binary = shutil.which(argv[0])
+    binary = binary and os.path.abspath(binary)  # which() keeps a relative PATH entry relative, and hc starts in cwd
+    version = subprocess.run([binary, "--version"], capture_output=True, text=True).stdout if binary else ""
+    if error := claude_too_old(version):
+        return error
+    hc("run", "--bg", "--name", name, "--cwd", str(cwd), binary, *argv[1:])
     try:
         hc("wait", "--timeout", "90", name, check=False)
         if "trust this folder" in hc("read", "--lines", "0", name, check=False):
