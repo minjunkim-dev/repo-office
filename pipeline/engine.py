@@ -92,8 +92,23 @@ def block(job, reason):
     return BLOCKED
 
 
+def missing(job, name, *files):
+    """One-line error for the first absent task folder or file, else None."""
+    if not job.is_dir():
+        return f"no such task: {name}"
+    for file in files:
+        if not (job / file).exists():
+            hint = f": run {name} first" if file == "state.json" else f": {job / file}"
+            return f"{file} missing{hint}"
+    return None
+
+
 def run(name, runner=run_worker):
     job = JOBS / name
+    error = missing(job, name, "task.json")
+    if error:
+        print(error, file=sys.stderr)
+        return 2
     task, config = load(job / "task.json", None), load(STAGES, None)
     flow = config["flow"]
     ids = [stage["id"] for stage in flow]
@@ -169,6 +184,10 @@ def run(name, runner=run_worker):
 
 def approve(name):
     job = JOBS / name
+    error = missing(job, name, "task.json", "state.json")
+    if error:
+        print(error, file=sys.stderr)
+        return 2
     state_path = job / "state.json"
     state = load(state_path, None)
     stage = next(s for s in load(STAGES, None)["flow"] if s["id"] == state["stage"])

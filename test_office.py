@@ -1,6 +1,8 @@
 """The office pipeline: stage order, sessions, permissions, approvals and stops, with a fake worker."""
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -118,6 +120,29 @@ class PipelineTests(unittest.TestCase):
         self.engine.approve("search")
         self.engine.run("search", FakeWorker(self.job))
         self.assertEqual(self.engine.approve("search"), 2)
+
+    def refused(self, command, name):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = command(name)
+        self.assertEqual(code, 2)
+        self.assertEqual(len(err.getvalue().splitlines()), 1)
+        self.assertNotIn("Traceback", err.getvalue())
+
+    def test_a_missing_task_folder_is_a_one_line_error(self):
+        for command in (self.engine.run, self.engine.approve):
+            self.refused(command, "nope")
+        self.assertFalse((Path(self.tmp.name) / "nope").exists())
+
+    def test_a_missing_task_json_is_a_one_line_error(self):
+        (self.job / "task.json").unlink()
+        for command in (self.engine.run, self.engine.approve):
+            self.refused(command, "search")
+        self.assertFalse((self.job / "state.json").exists())
+        self.assertFalse((self.job / "BLOCKED.md").exists())
+
+    def test_approve_without_state_json_is_a_one_line_error(self):
+        self.refused(self.engine.approve, "search")
 
     def test_a_failed_check_goes_back_to_implement_then_stops_on_the_second_failure(self):
         worker = FakeWorker(self.job)
