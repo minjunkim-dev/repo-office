@@ -92,6 +92,37 @@ def block(job, reason):
     return BLOCKED
 
 
+def slug(url):
+    """owner/repo of a GitHub URL (https, ssh or a PR link), else None."""
+    found = re.search(r"github\.com[:/]+([\w.-]+)/([\w.-]+?)(?:\.git)?(?:[/\s]|$)", url)
+    return f"{found[1]}/{found[2]}".lower() if found else None
+
+
+def unpinned(job, task):
+    """Why this checkout may not review the task's PR, else None.
+
+    The review worker gets its prompt, permissions, preflight script and REVIEW.md from this checkout. For a
+    PR of this same repository they must be origin/main's copies, or the PR could rewrite its own review.
+    Only a PR that provably belongs to another repository skips the comparison.
+    """
+    def git(cwd, *args):
+        return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True)
+
+    pr_file = job / "pr.txt"  # a person wrote it; workers cannot edit it
+    pr = slug(pr_file.read_text(encoding="utf-8")) if pr_file.exists() else None
+    own = slug(git(BASELINE, "remote", "get-url", "origin").stdout)
+    common = [git(d, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip() for d in (BASELINE, task["repo"])]
+    if pr and own and pr != own and common[0] and common[1] and common[0] != common[1]:
+        return None
+    git(BASELINE, "fetch", "-q", "origin", "main")  # offline: the comparison below uses the last fetched main
+    # A missing origin/main makes diff fail, which also blocks. Ignored files (jobs/) are not compared.
+    if git(BASELINE, "diff", "--quiet", "origin/main").returncode or git(
+            BASELINE, "status", "--porcelain", "--untracked-files=all").stdout.strip():
+        return (f"the PR under review is not known to belong to another repository, and {BASELINE} differs from "
+                "origin/main: run the task from a clean checkout at origin/main")
+    return None
+
+
 def missing(job, name, *files):
     """One-line error for the first absent task folder or file, else None."""
     if not job.is_dir():
@@ -154,6 +185,8 @@ def run(name, runner=run_worker):
             if result.returncode or dirty:
                 failed = f"`{task['test']}` exit {result.returncode}" + (", uncommitted changes" if dirty else "")
         else:
+            if stage["id"] == "review" and (reason := unpinned(job, task)):
+                return block(job, reason)
             out = job / stage["out"]
             out.unlink(missing_ok=True)
             prompt = job / f"{stage['id']}.prompt.md"
