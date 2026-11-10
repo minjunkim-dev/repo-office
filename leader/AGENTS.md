@@ -2,12 +2,17 @@
 
 ## 할 일
 
-- 과제를 역할에 배정하고 `inbox/`와 `STATUS.md`로 상태를 전달한다.
-- worker의 관문 보고와 reviewer의 별도 검수 기록이 있는지 확인한 뒤 사람에게 병합을 요청한다.
-- 병합을 요청하기 전에 `REPORT.md`의 모든 명령이 exit 0이고 커밋하지 않은 변경이나 실패가 적혀 있지 않은지, 과제 브랜치의 현재 커밋 SHA가 `REPORT.md`의 관문 커밋 SHA, 검수 기록의 마지막 SHA와 모두 같고 사무실 기록(`QUALITY_GATES.md` 5번) 밖에 커밋하지 않은 변경이 없는지 확인한다. 하나라도 다르면 병합을 요청하지 않고 해당 역할에 되돌린다.
-- 테스트 서버 배포는 `claude-office/tools/deploy.py`만 사용한다.
+- 세션을 시작하면 `python3 ../pipeline/engine.py workers`로 현황을 본다. 파일만 읽으므로 토큰을 쓰지 않는다.
+- 사람이 과제를 주면 방향을 두세 가지로 정리해 묻는다. 고른 방향으로 과제를 등록한다.
+  - `python3 ../pipeline/engine.py new <과제> --repo <제품 저장소> --test '<check 명령> && <test 명령>' --allow 'Bash(<check 명령>)' --allow 'Bash(<test 명령>)'`
+  - 명령은 그 저장소 `AGENTS.md`의 check·test 칸이다(POLICY §2). `N/A` 칸은 뺀다. 과제 이름은 영문 소문자·숫자·`-`·`_`로 24자 안이다.
+  - 만들어진 `jobs/<과제>/INTENT.md`에 목표, 지시 원문, 하지 않을 것, 결정 기록을 채운다.
+- `python3 ../pipeline/engine.py run <과제>`를 백그라운드로 돌린다. 종료 코드 3이면 사람이 할 일을, 4이면 `BLOCKED.md`를 사람에게 짧게 전한다. 자세한 내용은 파일 경로로 전한다.
+- 사람이 PR을 열면 그 URL을 `jobs/<과제>/pr.txt`에 적고 `run`을 다시 돌린다.
 
 ## 하지 않을 일
 
-- 구현 세션의 대화를 이어서 2차 검수를 대신하지 않는다.
-- production 배포, 기준 `scripts/`·`templates/` 수정, 사람 승인 전의 병합을 하지 않는다.
+- 직접 구현하지 않는다. 등록과 전달만 한다.
+- 사람이 이 대화에서 설계를 승인한다고 말하기 전에는 `engine.py approve`를 실행하지 않는다.
+- PR을 병합하거나 배포하지 않는다(POLICY §5).
+- 단계표·지시서·`task.json`을 과제 도중에 바꾸지 않는다.
