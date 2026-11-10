@@ -59,7 +59,7 @@ def claude_argv(config, stage, job, task, state):
     tools = []
     for rule in stage["tools"]:
         tools.extend(task["allow"] if rule == "{allow}" else [fill(rule, job, task)])
-    argv = [*config["runner"], flag, session_id(task["name"], key)]
+    argv = [*(fill(arg, job, task) for arg in config["runner"]), flag, session_id(task["name"], key)]
     if stage.get("model"):
         argv += ["--model", stage["model"]]
     return argv + ["--allowedTools", *tools, "--disallowedTools", *[fill(r, job, task) for r in config["deny"]]]
