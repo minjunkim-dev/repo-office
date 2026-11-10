@@ -83,7 +83,10 @@ def run_worker(name, cwd, argv, message):
     # hc resolves PATH on its own, so pin the binary whose version was checked.
     binary = shutil.which(argv[0])
     binary = binary and os.path.abspath(binary)  # which() keeps a relative PATH entry relative, and hc starts in cwd
-    version = subprocess.run([binary, "--version"], capture_output=True, text=True).stdout if binary else ""
+    try:
+        version = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=30).stdout if binary else ""
+    except (OSError, ValueError, subprocess.TimeoutExpired):  # hung, unrunnable or not UTF-8: block like an unreadable version
+        version = ""
     if error := claude_too_old(version):
         return error
     hc("run", "--bg", "--name", name, "--cwd", str(cwd), binary, *argv[1:])

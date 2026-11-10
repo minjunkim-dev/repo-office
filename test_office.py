@@ -281,8 +281,10 @@ class PipelineTests(unittest.TestCase):
     def test_worker_starts_only_the_binary_whose_version_passed(self):
         fake, calls = Path(self.tmp.name) / "claude", []
         self.engine.hc = lambda *args, check=True: calls.append(args) or ""
-        for version, started in (("2.1.256", False), ("2.1.257", True)):
-            fake.write_text(f"#!/bin/sh\necho '{version} (Claude Code)'\n", encoding="utf-8")
+        for script, started in (("#!/bin/sh\necho '2.1.256 (Claude Code)'\n", False), ("\0not a program", False),
+                                ("#!/bin/sh\nprintf '\\377'\n", False),
+                                ("#!/bin/sh\necho '2.1.257 (Claude Code)'\n", True)):
+            fake.write_text(script, encoding="utf-8")
             fake.chmod(0o755)
             with unittest.mock.patch.dict(os.environ, {"PATH": f"{self.tmp.name}{os.pathsep}{os.environ['PATH']}"}):
                 error = self.engine.run_worker("w", self.job, ["claude", "--flag"], "hi")
