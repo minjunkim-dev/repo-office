@@ -73,7 +73,7 @@ git show f31431f^:docs/archive/CHANGELOG-2026.md       # 재설계 전 변경 �
 
 | office 단계 | 후보 스킬 | 호출 | 지금 작업자에서 | 비고 |
 | --- | --- | --- | --- | --- |
-| 접수·방향(leader와 사람) | `ask-matt`, `grill-with-docs`, `triage`; 여러 티켓이면 `to-spec`→`to-tickets`; 어려움 설계는 pstack `interrogate` | 수동 | 해당 없음(leader 세션은 사람이 쓴다) | leader가 사람에게 실행을 권한다([leader/AGENTS.md](leader/AGENTS.md) 「사람에게 권할 스킬」) |
+| 접수·방향(leader와 사람) | `ask-matt`, `grill-with-docs`, `triage`; 여러 티켓이면 `to-spec`→`to-tickets`; 어려움 설계는 pstack `interrogate` | 수동 | 해당 없음(leader 세션은 사람이 쓴다) | leader가 사람에게 `grill-with-docs`·`ask-matt`·`interrogate` 실행을 권한다([leader/AGENTS.md](leader/AGENTS.md) 「사람에게 권할 스킬」). `triage`·`to-spec`·`to-tickets`는 leader 규칙에 없다 |
 | design(작업자) | `codebase-design`, `domain-modeling`, `research`, `prototype`, `grilling` | 자동 가능 | 못 씀(§7) | `INTENT.md`가 이미 스펙이면 생략 |
 | approve(사람) | pstack `blast-radius` | 수동 | 해당 없음 | 결과를 `design.md`의 Door 근거로 |
 | implement(작업자) | `tdd`, `diagnosing-bugs` | 자동 가능 | 못 씀(§7) | Matt `implement`는 같은 세션에서 `code-review`를 불러 POLICY §3(다른 컨텍스트 리뷰)과 부딪힌다. 파이프라인 안에서는 쓰지 않는 쪽이 맞다. pstack `tdd`는 Matt `tdd`와 겹쳐 쓰지 않는다 |
