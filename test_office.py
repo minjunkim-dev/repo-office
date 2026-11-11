@@ -300,6 +300,44 @@ class PipelineTests(unittest.TestCase):
                 error = self.engine.run_worker("w", self.job, ["claude", "--flag"], "hi")
             self.assertEqual(error is None, started)
             self.assertEqual([c[-2:] for c in calls if c[0] == "run"], [(str(fake), "--flag")] if started else [])
+        # A terminal left by an engine that died mid-stage is closed before the new one starts under the same name.
+        start = [c[0] for c in calls].index("run")
+        self.assertEqual([c[:2] for c in calls[start - 2:start]], [("kill", "w"), ("rm", "w")])
+
+    def test_failed_hc_run_blocks_instead_of_crashing(self):
+        fake = Path(self.tmp.name) / "claude"
+        fake.write_text("#!/bin/sh\necho '2.1.300 (Claude Code)'\n", encoding="utf-8")
+        fake.chmod(0o755)
+
+        def hc(*args, check=True):
+            if args[0] == "run":
+                raise subprocess.CalledProcessError(1, ["hc", *args], stderr="name in use\n")
+            return ""
+        self.engine.hc = hc
+        with unittest.mock.patch.dict(os.environ, {"PATH": f"{self.tmp.name}{os.pathsep}{os.environ['PATH']}"}):
+            self.assertEqual(self.engine.run_worker("w", self.job, ["claude"], "hi"), "hc run failed: name in use")
+
+    def test_a_worker_that_never_started_leaves_no_session_to_resume(self):
+        names = []
+
+        def runner(name, cwd, argv, message):
+            names.append(name)
+            return self.engine.NotStarted("hc run failed: x")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.engine.run("search", runner), self.engine.BLOCKED)
+        state = self.job / "state.json"
+        self.assertEqual(json.loads(state.read_text())["sessions"] if state.exists() else [], [])
+        # The jobs folder's tag keeps another checkout's engine from closing this terminal as a leftover.
+        self.assertEqual(names, [f"{self.engine.TAG}-search-design"])
+
+    def test_a_second_run_of_the_same_task_stops(self):
+        import fcntl
+        with open(self.job / "run.lock", "w") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(self.engine.run("search", FakeWorker(self.job)), 2)
+        self.assertIn("another engine.py run search", err.getvalue())
+        self.assertFalse((self.job / "state.json").exists())
 
     def test_test_runs_the_owner_command_in_repo(self):
         self.assertEqual(self.engine.test("search"), 0)
