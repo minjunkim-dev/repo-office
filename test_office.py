@@ -417,8 +417,10 @@ class PipelineTests(unittest.TestCase):
         task = json.loads((self.job / "task.json").read_text())
         task["test"] = f"{shutil.which('python3')} -c 'import mod'"
         (self.job / "task.json").write_text(json.dumps(task))
-        self.assertEqual(self.engine.test("search"), 0)
-        self.assertFalse((self.job / "repo/__pycache__").exists())
+        with unittest.mock.patch.dict(os.environ):
+            os.environ.pop("PYTHONDONTWRITEBYTECODE", None)  # an inherited value would pass this test without the engine
+            self.assertEqual(self.engine.test("search"), 0)
+            self.assertFalse((self.job / "repo/__pycache__").exists())
 
     def test_baseline_path_names_the_clone_else_commands_stop(self):
         office = Path(self.tmp.name) / "standalone"
