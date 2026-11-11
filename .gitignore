@@ -1,2 +1,12 @@
 jobs/
 baseline.path
+__pycache__/
+.serena/
+# repo-baseline 코어: 프로젝트 .gitignore에 더한다. 스택별 항목은 프로젝트가 정한다.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+.DS_Store
