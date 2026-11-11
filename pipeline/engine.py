@@ -28,13 +28,13 @@ from pathlib import Path
 PIPELINE = Path(__file__).resolve().parent
 OFFICE = PIPELINE.parent
 # The repo-baseline clone whose prompts/ and tools/ the stages use. A person writes its path in baseline.path
-# (git ignores it, workers cannot write it); without the file the office checkout sits inside that clone.
+# (git ignores it, workers cannot write it). Without the file, main() stops before any command but workers.
 _PATH = OFFICE / "baseline.path"
-BASELINE = Path(_PATH.read_text(encoding="utf-8").strip()).expanduser() if _PATH.exists() else OFFICE.parent
+BASELINE = Path(_PATH.read_text(encoding="utf-8").strip()).expanduser() if _PATH.exists() else None
 # A relative or empty path would follow the working folder; a worker runs preflight from its task folder, which it can write.
-if not BASELINE.is_absolute():
+if BASELINE is not None and not BASELINE.is_absolute():
     sys.exit(f"{_PATH} must hold the absolute path of the repo-baseline clone")
-BASELINE = BASELINE.resolve()
+BASELINE = BASELINE and BASELINE.resolve()
 JOBS = Path(os.environ.get("OFFICE_JOBS", OFFICE / "jobs"))
 STAGES = Path(os.environ.get("OFFICE_STAGES", PIPELINE / "stages.json"))
 DONE, WAIT, BLOCKED = 0, 3, 4
@@ -190,7 +190,7 @@ def unpinned(job, task):
     The review worker gets its prompt, permissions and preflight script from the office and repo-baseline checkouts,
     and REVIEW.md from repo-baseline. For a PR of the same repository as either one, that checkout must be
     origin/main's copy, or the PR could rewrite its own review. Only a PR that provably belongs to another
-    repository skips the comparison. An office checkout inside the repo-baseline clone is the same repository.
+    repository skips the comparison.
     """
     def git(cwd, *args):
         return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True)
@@ -198,7 +198,7 @@ def unpinned(job, task):
     pr_file = job / "pr.txt"  # a person wrote it; workers cannot edit it
     pr = slug(pr_file.read_text(encoding="utf-8")) if pr_file.exists() else None
     product = git(task["repo"], "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
-    for root in [BASELINE] + ([] if OFFICE.is_relative_to(BASELINE) else [OFFICE]):
+    for root in (BASELINE, OFFICE):  # the same repository twice gives the same answer twice
         own = slug(git(root, "remote", "get-url", "origin").stdout)
         common = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
         if pr and own and pr != own and common and product and common != product:
@@ -461,6 +461,9 @@ def main(argv=None):
         sub.add_parser(command).add_argument("task")
     sub.add_parser("workers")
     args = parser.parse_args(argv)
+    if BASELINE is None and args.command != "workers":
+        print(f"write the absolute path of the repo-baseline clone into {_PATH}", file=sys.stderr)
+        return 2
     if args.command == "new":
         return new(args.task, args.repo, args.test, args.allow, args.base)
     if args.command == "workers":

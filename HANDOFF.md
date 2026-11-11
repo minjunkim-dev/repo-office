@@ -2,6 +2,8 @@
 
 이 문서는 다른 사람·계정·에이전트가 claude-office 작업을 바로 이어받기 위한 기록이다. 2026-11-10에 PR #10과 함께 썼다. 남은 일은 GitHub 이슈에 있고, 이 문서는 그 배경과 함정을 적는다.
 
+> 2026-11-11: 이 저장소는 repo-baseline-office의 `claude-office/`를 git 기록째 옮긴 것이다. 아래의 `claude-office/`는 이 저장소 루트다. 원본과 다섯 곳을 맞추는 일(§1, §6)은 옛 배치의 일이라 이제 하지 않는다.
+
 ## 1. 지금 상태
 
 - PR #10은 2026-11-10에 `main`으로 병합됐다.
@@ -83,8 +85,7 @@ printf 'def add(a, b):\n    return a + b\n' > calc.py
 printf 'import unittest\nfrom calc import add\n\nclass T(unittest.TestCase):\n    def test_add(self):\n        self.assertEqual(add(1, 2), 3)\n' > test_calc.py
 printf '__pycache__/\n' > .gitignore && git add -A && git commit -qm init
 
-# office 체크아웃 루트에서(이 폴더는 Claude Code에서 한 번 신뢰해 둔다)
-cd claude-office
+# office 체크아웃 루트에서(이 폴더는 Claude Code에서 한 번 신뢰해 둔다. baseline.path를 먼저 적는다)
 python3 pipeline/engine.py new toy-subtract --repo /tmp/toy --test 'python3 -m unittest'
 # jobs/toy-subtract/INTENT.md에 목표를 쓴다. 예: calc.py에 subtract(a, b)와 테스트를 더한다
 OFFICE_STAGES=/tmp/stages-sonnet.json python3 pipeline/engine.py run toy-subtract   # exit 3: 설계 승인 대기
@@ -99,5 +100,5 @@ python3 pipeline/engine.py workers
 
 - 정본은 원본 `minjunkim-dev/repo-baseline`이다. 소비 레포 셋업과 `profiles/hash-copy/apply_baseline.py`는 원본에서 실행한다.
 - 원본을 다시 맞출 때는 원본 `main`으로 `claude-office/` 밖을 통째로 바꾼다. 그다음 README 머리말의 다섯 곳만 다시 더한다.
-- `gh`는 이 체크아웃에서 원본 저장소를 기본으로 잡을 수 있다. PR·이슈 명령에는 `--repo minjunkim-dev/repo-baseline-office`를 붙인다.
+- `gh`는 이 체크아웃에서 원본 저장소를 기본으로 잡을 수 있다. PR·이슈 명령에는 `--repo minjunkim-dev/repo-office`를 붙인다.
 - 원본 `tools/review_preflight.py`에 자동 보안 리뷰가 지적한 셸 인용 문제가 하나 있다. 이 저장소에서는 원본과 같게 두므로 원본에서 고친다. 보안 지적이므로 공개 이슈가 아니라 비공개 경로로 알린다(POLICY §7).

@@ -15,7 +15,6 @@ import unittest.mock
 
 
 OFFICE = Path(__file__).resolve().parent
-ROOT = OFFICE.parent
 
 
 def load_engine(jobs):
@@ -61,6 +60,9 @@ class PipelineTests(unittest.TestCase):
         (self.job / "INTENT.md").write_text("# search\n", encoding="utf-8")
         (repo / ".git/info/exclude").write_text("pass\n", encoding="utf-8")
         (repo / "pass").write_text("", encoding="utf-8")
+        self.baseline = Path(self.tmp.name) / "baseline"  # a repo-baseline clone outside the office checkout
+        (self.baseline / "tools").mkdir(parents=True)
+        self.engine.BASELINE = self.baseline
         if not shutil.which("sandbox-exec"):
             # Off macOS (CI), a stand-in drops `-p <profile>` and runs the command, so the flow tests still reach the
             # check stage. The real sandbox is tested only where sandbox-exec exists.
@@ -118,6 +120,11 @@ class PipelineTests(unittest.TestCase):
             for name in ("task.json", "state.json", "pr.txt", "repo/.git", "CLAUDE.md"):
                 self.assertIn(str(self.job / name), deny)
             self.assertIn(str(self.engine.OFFICE / "baseline.path"), deny)  # even before a person writes it
+            if argv is d_argv:  # design ran with setUp's clone, outside the office checkout: deny all of it
+                self.assertIn(str(self.baseline / "tools"), deny)
+            self.assertNotIn(str(self.engine.JOBS), deny)
+            self.assertIn(str(self.engine.OFFICE / "pipeline"), deny)
+            self.assertEqual(argv[argv.index("--add-dir", argv.index("--add-dir") + 1) + 1], str(self.engine.OFFICE))
             self.assertIn(f"python3 {self.engine.OFFICE}/pipeline/engine.py preflight search", box["excludedCommands"])
             self.assertNotIn("Read", argv)
             self.assertIn(f"Read(/{self.job}/**)", argv)
@@ -228,6 +235,11 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
         self.assertIn("커밋하지 않은 변경: 없음", (self.job / "check.md").read_text())
 
+    def test_check_stage_reads_the_clone_and_the_office_checkout(self):
+        profile = self.engine.check_profile(self.job)
+        for path in (self.baseline, self.engine.OFFICE):
+            self.assertIn(json.dumps(str(path.resolve())), profile)
+
     def test_check_stage_blocks_without_sandbox_exec(self):
         worker = FakeWorker(self.job)
         self.engine.run("search", worker)
@@ -304,8 +316,8 @@ class PipelineTests(unittest.TestCase):
         engine.BASELINE = other  # another git folder, but no origin to tell which repository it is
         (self.job / "pr.txt").write_text("https://github.com/o/r/pull/1\n")
         self.assertIn("origin/main", engine.unpinned(self.job, task))
-        engine.BASELINE = ROOT
-        own = engine.slug(subprocess.run(["git", "-C", str(ROOT), "remote", "get-url", "origin"], capture_output=True, text=True).stdout)
+        engine.BASELINE = OFFICE
+        own = engine.slug(subprocess.run(["git", "-C", str(OFFICE), "remote", "get-url", "origin"], capture_output=True, text=True).stdout)
         if own:  # a checkout with a GitHub origin
             self.assertIsNone(engine.unpinned(self.job, task))
         # An office checkout outside the repo-baseline clone is compared too: the PR could belong to either.
@@ -394,7 +406,7 @@ class PipelineTests(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(self.engine.test("nope"), 2)
 
-    def test_baseline_path_names_the_clone_else_the_parent_folder(self):
+    def test_baseline_path_names_the_clone_else_commands_stop(self):
         office = Path(self.tmp.name) / "standalone"
         shutil.copytree(OFFICE / "pipeline", office / "pipeline", ignore=shutil.ignore_patterns("__pycache__"))
 
@@ -404,9 +416,11 @@ class PipelineTests(unittest.TestCase):
             spec.loader.exec_module(engine)
             return engine.BASELINE
 
-        self.assertEqual(baseline(), office.resolve().parent)
-        (office / "baseline.path").write_text(f"{ROOT}\n", encoding="utf-8")
-        self.assertEqual(baseline(), ROOT)
+        self.assertIsNone(baseline())
+        with unittest.mock.patch.object(self.engine, "BASELINE", None), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(self.engine.main(["run", "search"]), 2)
+        (office / "baseline.path").write_text(f"{OFFICE}\n", encoding="utf-8")
+        self.assertEqual(baseline(), OFFICE)
         for text in ("clone\n", "\n"):  # would follow the working folder, which for a worker is its writable task folder
             (office / "baseline.path").write_text(text, encoding="utf-8")
             with self.assertRaises(SystemExit):
@@ -507,20 +521,11 @@ class PipelineTests(unittest.TestCase):
 
 
 class LayoutTests(unittest.TestCase):
-    def test_office_is_not_copied_to_products(self):
-        for manifest in (ROOT / "profiles/hash-copy").glob("repo-baseline*.json"):
-            self.assertNotIn("claude-office", manifest.read_text(encoding="utf-8"))
-
     def test_rules_live_in_agents_files_with_do_and_do_not(self):
         self.assertEqual(list(OFFICE.rglob("CLAUDE.md")), [])
         leader = (OFFICE / "leader/AGENTS.md").read_text(encoding="utf-8")
         self.assertIn("## 할 일", leader)
         self.assertIn("## 하지 않을 일", leader)
-
-    def test_ci_runs_the_office_tests(self):
-        command = "python3 -m unittest discover -s claude-office -p 'test_*.py'"
-        self.assertIn(command, (ROOT / ".github/workflows/check.yml").read_text(encoding="utf-8"))
-        self.assertIn(command, (ROOT / "AGENTS.md").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
