@@ -266,7 +266,9 @@ def advance(job, name, runner):
             git = lambda *a: subprocess.run(["git", *a], cwd=job / "repo", capture_output=True, text=True, env=SAFE_GIT).stdout.strip()  # noqa: E731
             # Read what the worker handed over before the test writes its own files (caches, reports).
             head, dirty = git("rev-parse", "HEAD"), git("status", "--porcelain", "--untracked-files=all")
-            result = run_test(job, task, capture_output=True, text=True)
+            if not shutil.which("sandbox-exec"):
+                return block(job, "sandbox-exec is missing: the check stage runs the worker's code only inside a sandbox")
+            result = run_test(job, task, sandboxed=True, capture_output=True, text=True)
             (job / stage["out"]).write_text(
                 f"# {stage['id']}\n\n- 명령: `{task['test']}`\n- 커밋: `{head}`\n- exit {result.returncode}\n"
                 f"- 커밋하지 않은 변경: {dirty or '없음'}\n\n```\n{(result.stdout + result.stderr)[-4000:]}\n```\n", encoding="utf-8")
@@ -303,9 +305,39 @@ def advance(job, name, runner):
         move(following)
 
 
-def run_test(job, task, **kwargs):
+# Words that, as a file or folder in the task folder, a later session or git reads as instructions or settings.
+CONTROL = ("task.json", "state.json", "pr.txt", "pr.diff", "run.lock", "repo/.git", ".git",
+           "CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".claude", ".mcp.json", ".envrc")
+
+
+def check_profile(job):
+    """Seatbelt rules for the check stage, the same writes the worker's sandbox allows: the task folder, minus its
+    control files. No network but localhost and unix sockets in the task folder. No reads in the home folder (credentials) but the task folder, this
+    checkout and the product's git data, like blockReadsOutsideWorkingDirectories for the worker. The worker's own `engine.py test` already runs in Claude Code's
+    sandbox, which refuses a sandbox inside it, so only the engine's check stage uses this."""
+    quote = json.dumps  # SBPL strings take the same escapes as JSON for quotes and backslashes
+    real = job.resolve()
+    deny = " ".join(f"(literal {quote(str(real / n))}) (subpath {quote(str(real / n))})" for n in CONTROL)
+    deny += f" (literal {quote(str(real / 'repo'))})"  # renaming repo/ away and back would rewrite repo/.git
+    common = subprocess.run(["git", "-C", str(job / "repo"), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                            capture_output=True, text=True, env=SAFE_GIT).stdout.strip()
+    readable = " ".join(f"(subpath {quote(str(Path(p).resolve()))})" for p in (job, BASELINE, *([common] if common else [])))
+    return ("(version 1) (allow default)\n"
+            # Unix sockets only in the task folder: one outside, such as /var/run/docker.sock, can start processes outside the sandbox.
+            f"(deny network-outbound) (allow network-outbound (remote ip \"localhost:*\") (remote unix-socket (subpath {quote(str(real))})))\n"
+            f"(deny file-write*) (allow file-write* (subpath {quote(str(real))}) (subpath \"/dev\"))\n"
+            f"(deny file-write* {deny})\n"
+            f"(deny file-read* (subpath {quote(str(Path.home().resolve()))})) (allow file-read* {readable})\n")
+
+
+def run_test(job, task, sandboxed=False, **kwargs):
     # The owner wrote this command (the product's AGENTS.md test cell) with `new`; workers cannot edit task.json.
-    return subprocess.run(task["test"], shell=True, cwd=job / "repo", **kwargs)
+    if not sandboxed:
+        return subprocess.run(task["test"], shell=True, cwd=job / "repo", **kwargs)
+    tmp = job / "tmp"  # temp files stay in the one folder the sandbox lets the test write
+    tmp.mkdir(exist_ok=True)
+    return subprocess.run(["sandbox-exec", "-p", check_profile(job), "/bin/sh", "-c", task["test"]], cwd=job / "repo",
+                          env={**os.environ, "TMPDIR": str(tmp)}, **kwargs)
 
 
 def test(name):

@@ -19,11 +19,8 @@
 
 ## 2. 남은 일(이슈)
 
-#11(PR #10 리뷰·병합), #12(리뷰 단계를 실제 PR로 검증), #13(leader 세션으로 실제 제품 과제 하나 끝까지), #14(동시 실행, 긴 단계, 엔진 재시작), #15(OS 샌드박스 채택)는 끝났다. #16(영상에서 뺀 기능: 알림, 다른 모델, 동시 상한, 시작 훅)은 2026-11-11에 지금 필요 없다고 보고 닫았다. 필요해지면 새 이슈로 연다.
+#11(PR #10 리뷰·병합), #12(리뷰 단계를 실제 PR로 검증), #13(leader 세션으로 실제 제품 과제 하나 끝까지), #14(동시 실행, 긴 단계, 엔진 재시작), #15(OS 샌드박스 채택), #29(검사 단계 sandbox)는 끝났다. 열린 이슈는 없다. #16(영상에서 뺀 기능: 알림, 다른 모델, 동시 상한, 시작 훅)은 2026-11-11에 지금 필요 없다고 보고 닫았다. 필요해지면 새 이슈로 연다.
 
-| 이슈 | 무엇 | 먼저 할 것 |
-| --- | --- | --- |
-| #29 | 검사 단계의 테스트도 sandbox에서 | 실제 제품에 쓰기 전에 |
 
 ## 3. 왜 이렇게 지었나
 
@@ -72,7 +69,8 @@
   - 네트워크: `allowedDomains: ["github.com"]`으로 `git -C repo fetch origin`이 됐다. `gh`는 sandbox 안에서 `~/.config/gh`를 읽지 못하고, 읽게 해도 macOS 인증서 확인(TLS)에서 실패하고, 그것을 풀어도(`enableWeakerNetworkIsolation`) 키체인의 토큰을 읽지 못해 401이었다. 키체인을 sandbox에 열면 작업자 코드도 키체인을 읽게 되므로 열지 않는다. 대신 `gh`·`preflight`·`push`를 `excludedCommands`로 뺐고, 그러자 `gh pr view`가 됐다.
   - 고친 엔진으로 장난감 과제를 설계·구현·검사까지 돌려 PR 대기(exit 3)까지 갔다. 리뷰 단계는 실제 PR로 돌리지 않았다. 리뷰 단계의 명령은 위 `gh`·`fetch` 시험으로만 확인했다.
   - PR #28 리뷰가 찾은 것: 과제 폴더 전체를 열면 sandbox 안의 테스트가 `task.json`·`state.json`·`pr.txt`를 고친다(Edit 거부 규칙은 도구에만 듣는다). 제품 저장소의 git 데이터를 열면 `repo/.git` 파일, `config`, `hooks`도 고친다. 그 설정은 sandbox 밖에서 도는 preflight·push의 git이 따른다(`core.fsmonitor`, `pre-push`). 그래서 이 경로들과 아직 없는 지시 파일(`CLAUDE.md` 등)을 하나씩 `denyWrite`에 넣었다. 같은 날 실제 작업자로 13곳에 쓰기를 시도해, 과제 폴더의 일반 파일만 되고 제어 파일·git 설정·hook·worktree 연결 파일·새 `CLAUDE.md`·`pr.txt` 생성은 모두 `Operation not permitted`인 것을 봤다. 그 뒤에도 `git commit`은 됐다. 리뷰 2라운드는 과제 코드가 `repo/` 안에 하위 저장소(gitlink)를 커밋하고 그 gitdir 설정에 `core.fsmonitor`를 넣으면 sandbox 밖의 `git status`가 그 명령을 실행하는 것을 찾았다(git 2.54.0, sandbox 없이 재현). 파일을 하나씩 막는 대신, 엔진이 돌리는 git에 환경 변수(`GIT_CONFIG_COUNT`)로 `core.fsmonitor=false` 등을 강제했다. 하위 저장소의 git에도 넘어간다. 단위 테스트가 이 공격을 재현하고 강제가 막는 것을 확인한다.
-  - 남은 구멍은 `claude-office/AGENTS.md` 규칙에 적었다(검사 단계는 sandbox 밖(#29), 단계 도중 새로 생긴 과제·worktree 폴더, `github.com`으로 내보내기, 리뷰 `push`에는 git 설정 강제가 없음). Linux는 bubblewrap과 socat이 있어야 하고 시험하지 않았다. Windows는 sandbox가 없으므로 작업자가 시작하지 않는다.
+  - 남은 구멍은 `claude-office/AGENTS.md` 규칙에 적었다(단계 도중 새로 생긴 과제·worktree 폴더, `github.com`으로 내보내기, 리뷰 `push`에는 git 설정 강제가 없음). Linux는 bubblewrap과 socat이 있어야 하고 시험하지 않았다. Windows는 sandbox가 없으므로 작업자가 시작하지 않는다.
+- #29(2026-11-11): 검사 단계는 엔진이 sandbox 없이 테스트를 돌려, 작업자가 쓴 코드가 사용자 권한으로 한 번 실행됐다. 그래서 엔진이 macOS `sandbox-exec`로 감싼다. Claude Code가 쓰는 sandbox runtime(`srt`)은 설치되어 있지 않아 의존성을 늘리지 않으려고 쓰지 않았다. 작업자의 `engine.py test`는 감싸지 않는다. Claude Code sandbox 안에서는 sandbox를 다시 걸 수 없다. 단위 테스트가 실제 `sandbox-exec`로 과제 폴더 쓰기와 `$TMPDIR` 쓰기는 되고, 밖의 파일·`task.json`·`pr.txt` 생성·`repo/.git`·새 `CLAUDE.md`·홈 폴더 읽기는 막히는 것을 확인한다. 같은 날 엔진으로 장난감 과제를 돌려 검사 단계가 sandbox 안에서 테스트 2개를 통과(exit 0)했고, 그 과제 폴더에서 `https://github.com` 연결, 홈 폴더 쓰기, `~/.zshrc` 읽기가 모두 `Operation not permitted`인 것을 봤다. 엔진의 `git rev-parse`·`git status`는 sandbox 밖이지만 `SAFE_GIT`을 쓴다.
 
 ## 5. 다시 재현하는 법
 

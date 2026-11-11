@@ -6,6 +6,8 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
+import socket
 import subprocess
 import tempfile
 import unittest
@@ -59,6 +61,16 @@ class PipelineTests(unittest.TestCase):
         (self.job / "INTENT.md").write_text("# search\n", encoding="utf-8")
         (repo / ".git/info/exclude").write_text("pass\n", encoding="utf-8")
         (repo / "pass").write_text("", encoding="utf-8")
+        if not shutil.which("sandbox-exec"):
+            # Off macOS (CI), a stand-in drops `-p <profile>` and runs the command, so the flow tests still reach the
+            # check stage. The real sandbox is tested only where sandbox-exec exists.
+            bin_dir = Path(self.tmp.name) / "bin"
+            bin_dir.mkdir()
+            (bin_dir / "sandbox-exec").write_text('#!/bin/sh\nshift 2\nexec "$@"\n', encoding="utf-8")
+            (bin_dir / "sandbox-exec").chmod(0o755)
+            patcher = unittest.mock.patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"})
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def state(self):
         return json.loads((self.job / "state.json").read_text())
@@ -214,6 +226,17 @@ class PipelineTests(unittest.TestCase):
         (self.job / "task.json").write_text(json.dumps(task))
         self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
         self.assertIn("커밋하지 않은 변경: 없음", (self.job / "check.md").read_text())
+
+    def test_check_stage_blocks_without_sandbox_exec(self):
+        worker = FakeWorker(self.job)
+        self.engine.run("search", worker)
+        self.engine.approve("search")
+        which = shutil.which
+        hide = lambda name, *a, **k: None if name == "sandbox-exec" else which(name, *a, **k)  # noqa: E731
+        with unittest.mock.patch.object(self.engine.shutil, "which", hide):
+            self.assertEqual(self.engine.run("search", worker), self.engine.BLOCKED)
+        self.assertIn("sandbox-exec is missing", (self.job / "BLOCKED.md").read_text())
+        self.assertFalse((self.job / "check.md").exists())
 
     def test_a_worker_that_writes_nothing_is_retried_once(self):
         worker = FakeWorker(self.job, skip=["design"])
@@ -411,6 +434,33 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse(marker.exists())
         subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True)
         self.assertTrue(marker.exists())  # the attack is real without the forced settings
+
+    @unittest.skipUnless(shutil.which("sandbox-exec"), "macOS sandbox-exec")
+    def test_check_stage_runs_the_test_where_it_writes_only_the_task_folder(self):
+        outside = Path(self.tmp.name) / "outside.txt"  # a sibling of the task folder, still in the temp folder
+        script = "; ".join(f"(echo x >> {p} && echo {name} ok || echo {name} denied)" for name, p in (
+            ("repo", "kept.txt"), ("outside", outside), ("task", self.job / "task.json"), ("pr", self.job / "pr.txt"),
+            ("gitfile", self.job / "repo/.git"), ("claude", self.job / "CLAUDE.md"))) + '; echo x > "$TMPDIR/t" && echo tmp ok; (ls ~ >/dev/null 2>&1 && echo home ok || echo home denied)'
+        script += f"; (mv {self.job / 'repo'} {self.job / 'moved'} 2>/dev/null && echo rename ok || echo rename denied)"
+        result = self.engine.run_test(self.job, {"test": script}, sandboxed=True, capture_output=True, text=True)
+        self.assertEqual(result.stdout.split("\n")[:-1], ["repo ok", "outside denied", "task denied", "pr denied",
+                                                         "gitfile denied", "claude denied", "tmp ok", "home denied",
+                                                         "rename denied"])
+        self.assertFalse(outside.exists() or (self.job / "pr.txt").exists() or (self.job / "CLAUDE.md").exists())
+
+    @unittest.skipUnless(shutil.which("sandbox-exec") and shutil.which("nc"), "macOS sandbox-exec")
+    def test_check_stage_reaches_only_unix_sockets_in_the_task_folder(self):
+        # A socket outside, such as /var/run/docker.sock, would let the test start a process outside the sandbox.
+        (self.job / "tmp").mkdir()
+        paths = {"inside": self.job.resolve() / "tmp/in.sock", "outside": Path(self.tmp.name).resolve() / "out.sock"}
+        for path in paths.values():
+            server = socket.socket(socket.AF_UNIX)
+            self.addCleanup(server.close)
+            server.bind(str(path))
+            server.listen()
+        script = "; ".join(f"(nc -U -w 1 {p} </dev/null 2>/dev/null && echo {n} ok || echo {n} denied)" for n, p in paths.items())
+        result = self.engine.run_test(self.job, {"test": script}, sandboxed=True, capture_output=True, text=True)
+        self.assertEqual(result.stdout.split("\n")[:-1], ["inside ok", "outside denied"])
 
     def test_workers_reads_files_only(self):
         self.engine.run("search", FakeWorker(self.job))
