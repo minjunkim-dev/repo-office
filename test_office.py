@@ -333,6 +333,12 @@ class PipelineTests(unittest.TestCase):
             self.assertIsNone(engine.unpinned(self.job, task))
             (other / "new.py").write_text("", encoding="utf-8")
             self.assertIn(str(other), engine.unpinned(self.job, task))
+        # An office checkout inside the clone folder is still its own repository, so it is compared too.
+        nested = baseline / "office"
+        subprocess.run(["git", "init", "-q", str(nested)], check=True)
+        (baseline / ".git/info/exclude").write_text("office/\n", encoding="utf-8")
+        with unittest.mock.patch.object(engine, "BASELINE", baseline), unittest.mock.patch.object(engine, "OFFICE", nested):
+            self.assertIn(str(nested), engine.unpinned(self.job, task))  # no origin/main
         self.assertEqual(engine.slug("git@github.com:O/R.git\n"), "o/r")
         self.assertEqual(engine.slug("https://github.com/o/r/pull/1\n"), "o/r")
         self.assertIsNone(engine.slug("/tmp/r"))
