@@ -6,7 +6,7 @@
   "expected": {
     "repository": {
       "default_branch": "main",
-      "visibility": "private",
+      "visibility": "public",
       "allow_merge_commit": false,
       "allow_rebase_merge": false,
       "allow_squash_merge": true,
@@ -83,18 +83,14 @@
     "immutable_releases": {
       "enabled": true
     },
+    "private_vulnerability_reporting": {
+      "enabled": true
+    },
     "dependabot_alerts": {
       "enabled": true
     },
     "codeql": {
       "state": "configured"
-    }
-  },
-  "exceptions": {
-    "private_vulnerability_reporting": {
-      "status": "unsupported",
-      "reason": "비공개 저장소",
-      "evidence": "GET private-vulnerability-reporting이 404"
     }
   }
 }

@@ -4,6 +4,8 @@ PR을 열기 전의 작업을 단계로 나눠 돌리는 실험 파이프라인�
 
 ## 명령
 
+모든 에이전트와 사람이 같은 명령을 쓴다. 없는 칸은 `N/A: <이유>`다.
+
 - setup: `N/A: 설치할 의존성이 없다(Python 3.9 이상). 엔진을 돌리려면 macOS, Claude Code 2.1.257 이상, hc, repo-baseline 클론의 절대 경로를 적은 baseline.path가 있어야 한다`
 - check: `N/A: 별도 린터가 없다`
 - test: `python3 -m unittest discover -p 'test_*.py'` (macOS가 아니면 진짜 sandbox 테스트는 건너뛴다)
@@ -24,8 +26,7 @@ PR을 열기 전의 작업을 단계로 나눠 돌리는 실험 파이프라인�
 
 ## office 규칙
 
-- 상주 세션은 leader 하나다. 작업자는 단계마다 띄우고, 결과 파일을 쓰면 엔진이 닫는다.
-- 한 과제는 세션 키마다 세션 ID 하나를 쓴다. 설계와 구현은 같은 세션을 `--resume`으로 이어 캐시를 쓴다. 리뷰는 다른 세션이다(POLICY §3).
+- 상주 세션은 leader 하나다. 작업자는 단계마다 띄우고, 결과 파일을 쓰면 엔진이 닫는다. 한 과제는 세션 키마다 세션 ID 하나를 쓴다. 설계와 구현은 같은 세션을 `--resume`으로 이어 캐시를 쓴다. 리뷰는 다른 세션이다(POLICY §3).
 - 단계마다 허용 도구만 준다(`--permission-mode dontAsk`). 사용자 전역 설정의 허용 규칙은 읽지 않는다(`--setting-sources project`). 이 설정은 office 체크아웃 기준이라 제품 저장소의 `.claude/settings.json`도 읽지 않는다.
 - 거부 목록은 Edit·Write 도구로 이 폴더의 규칙·단계표, 기준 파일(`tools/`, `prompts/` 등), `task.json`·`state.json`·`pr.txt`를 고치는 것과 `.env*` 읽기, `gh pr merge`·`gh api` 쓰기를 막는다. 거부 목록만으로는 막지 못한다. 허용한 테스트 명령은 작업자가 쓴 코드를 실행하기 때문이다.
 - 작업자의 Bash와 그것이 띄운 프로세스(테스트, git)는 Claude Code sandbox 안에서 돈다(단계표 `sandbox`, macOS Seatbelt). 쓰기는 과제 폴더와 제품 저장소의 git 데이터(커밋에 필요한 objects·refs와 이 worktree의 index)만 된다. office 체크아웃은 `jobs/` 말고 모두 쓰기를 막는다. 과제 폴더 안에서도 엔진의 제어 파일(`task.json`·`state.json`·`pr.txt`·`pr.diff`), `repo/.git` 파일, 제품 저장소의 `config`·`hooks`·`info`와 worktree 연결 파일, 아직 없는 지시·설정 파일(`CLAUDE.md`·`AGENTS.md`·`.claude`·`.mcp.json`·`.envrc`·`.git`)은 쓰기를 막는다. sandbox 밖에서 도는 명령의 git이 그 설정과 hook을 따르기 때문이다. 파일을 막는 것만으로는 다 막지 못한다(과제 코드가 커밋한 하위 저장소의 설정). 그래서 엔진이 sandbox 밖에서 돌리는 git(검사 단계, `engine.py preflight`)에는 환경 변수로 `core.fsmonitor=false`, `diff.ignoreSubmodules=all`, `core.hooksPath=/dev/null`, `fetch.recurseSubmodules=false`, `submodule.recurse=false`, `protocol.ext.allow=never`를 강제한다. 리뷰의 `push`는 작업자가 직접 돌리므로 이 강제가 없다. push는 기본으로 하위 저장소로 내려가지 않는다. 홈 폴더 읽기는 위 읽기 설정이 막는다. sandbox 밖으로 다시 시도하는 길은 닫는다(`allowUnsandboxedCommands: false`). sandbox를 띄우지 못하면 작업자가 시작하지 않는다(`failIfUnavailable`). 허용 목록은 그대로 듣는다(`autoAllowBashIfSandboxed: false`). 네트워크는 `github.com`만 된다. 키체인이 필요한 `gh` 읽기·`gh pr edit`, `engine.py preflight`, 리뷰의 `push`는 sandbox 밖에서 돈다(`excludedCommands`). 이 명령들은 과제 코드를 직접 실행하지 않지만 사용자의 `gh`·git 권한을 그대로 쓴다. `gh pr edit`은 허용 목록이 받는 어떤 PR이든 고친다. 남는 구멍: 다른 과제 폴더는 쓰기를 막는다. 단, 단계가 도는 동안 새로 생긴 과제 폴더와 worktree 연결 폴더는 막지 못한다(목록은 작업자를 띄울 때 만든다). sandbox 안의 코드도 `github.com`에는 닿으므로, 상속받은 환경 변수나 저장소 내용을 다른 GitHub 저장소로 보낼 수 있다. 세션 환경에 비밀값을 두지 않는다. 근거: [sandboxing](https://code.claude.com/docs/en/sandboxing)(2026-11-11 확인).
