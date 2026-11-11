@@ -1,6 +1,6 @@
 # 설계 단계
 
-이 단계 하나만 한다. 셸 명령은 허용된 것만, 한 번에 하나씩 쓴다. `&&`·`;`·`|`로 잇지 않는다. 이으면 통째로 거부된다. 먼저 `cd repo`만 따로 한 번 실행한다. 그 뒤 git 읽기와 테스트는 `repo/` 안에서 돌린다. git add·commit·push는 `git -C {job}/repo ...`로만 쓴다.
+이 단계 하나만 한다. 셸 명령은 허용된 것만, 한 번에 하나씩 쓴다. `&&`·`;`·`|`로 잇지 않는다. 이으면 통째로 거부된다. `cd`는 거부된다. git 읽기는 `git -C repo ...`로 쓴다. git add·commit·push는 `git -C {job}/repo ...`로만 쓴다.
 
 - 읽을 것: `{job}/INTENT.md`, `{job}/repo/`의 코드와 `AGENTS.md`.
 - 쓸 것: `{job}/design.md` 하나. 다 쓰면 끝낸다.

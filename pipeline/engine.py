@@ -5,6 +5,8 @@
   engine.py run <task>        advance until a person is needed, the task is blocked, or it is done
   engine.py approve <task>    a person approves the current design file (bound to its sha256)
   engine.py workers           show every task's stage from files only
+  engine.py test <task>       run the task's test command in its repo/ (workers cannot cd there)
+  engine.py preflight <task>  run repo-baseline's review preflight for pr.txt in its repo/, diff into pr.diff
 
 Exit codes for run: 0 done, 3 waiting for a person, 4 blocked.
 """
@@ -47,7 +49,8 @@ def session_id(task, key):
 
 
 def fill(text, job, task):
-    values = {"job": job, "office": OFFICE, "baseline": BASELINE, "branch": f"office/{task['name']}", "test": task["test"]}
+    values = {"job": job, "office": OFFICE, "baseline": BASELINE, "name": task["name"], "branch": f"office/{task['name']}",
+              "test": task["test"]}
     for key, value in values.items():
         text = text.replace("{" + key + "}", str(value))
     return text
@@ -195,8 +198,7 @@ def run(name, runner=run_worker):
             git = lambda *a: subprocess.run(["git", *a], cwd=job / "repo", capture_output=True, text=True).stdout.strip()  # noqa: E731
             # Read what the worker handed over before the test writes its own files (caches, reports).
             head, dirty = git("rev-parse", "HEAD"), git("status", "--porcelain", "--untracked-files=all")
-            # The owner wrote this command (the product's AGENTS.md test cell) with `new`; workers cannot edit task.json.
-            result = subprocess.run(task["test"], shell=True, cwd=job / "repo", capture_output=True, text=True)
+            result = run_test(job, task, capture_output=True, text=True)
             (job / stage["out"]).write_text(
                 f"# {stage['id']}\n\n- 명령: `{task['test']}`\n- 커밋: `{head}`\n- exit {result.returncode}\n"
                 f"- 커밋하지 않은 변경: {dirty or '없음'}\n\n```\n{(result.stdout + result.stderr)[-4000:]}\n```\n", encoding="utf-8")
@@ -231,6 +233,59 @@ def run(name, runner=run_worker):
             continue
         state["fails"].pop(stage["id"], None)
         move(following)
+
+
+def run_test(job, task, **kwargs):
+    # The owner wrote this command (the product's AGENTS.md test cell) with `new`; workers cannot edit task.json.
+    return subprocess.run(task["test"], shell=True, cwd=job / "repo", **kwargs)
+
+
+def test(name):
+    """A worker's Bash cd is refused while blockReadsOutsideWorkingDirectories is on, so the engine runs the test in repo/."""
+    job = JOBS / name
+    error = missing(job, name, "task.json")
+    if error:
+        print(error, file=sys.stderr)
+        return 2
+    return run_test(job, load(job / "task.json", None)).returncode
+
+
+def preflight(name):
+    """review_preflight.py reads the git repository of its working folder; a worker's folder is inside the office checkout."""
+    job = JOBS / name
+    error = missing(job, name, "task.json", "pr.txt")
+    if error:
+        print(error, file=sys.stderr)
+        return 2
+    pr = (job / "pr.txt").read_text(encoding="utf-8").split()  # a person wrote it; workers cannot edit it
+    script = BASELINE / "tools/review_preflight.py"
+    diff_file = job / "pr.diff"
+    diff_file.unlink(missing_ok=True)
+    result = subprocess.run([sys.executable, str(script), *pr[:1]], cwd=job / "repo", capture_output=True, text=True,
+                            errors="replace")
+    print(result.stdout, end="")
+    print(result.stderr, end="", file=sys.stderr)
+    if result.returncode:  # 1 means a secrets file changed: the review must not open the diff
+        return result.returncode
+    # The worker cannot run the printed diff command: its absolute -C path has no allow rule, and the quoted
+    # pathspecs that keep .env* out hit the quote deny rule. So the engine runs the same diff and hands over the text.
+    # Earlier lines carry PR file names, which may hold a forged "diff:" line: only the last line counts, it must match
+    # exactly, and the engine builds the command from its base and head instead of running what was printed.
+    lines = result.stdout.splitlines()
+    found = re.fullmatch(r"diff: git -C .+ diff (refs/remotes/[\w./-]+)\.\.\.([0-9a-f]{40}) -- \. ':!\.env\*' ':!\*\*/\.env\*'",
+                         lines[-1] if lines else "")
+    if not found:
+        print("no diff command on the last line of the preflight output", file=sys.stderr)
+        return 2
+    argv = ["git", "-C", str(job / "repo"), "diff", f"{found[1]}...{found[2]}", "--", ".", ":!.env*", ":!**/.env*"]
+    # Bytes, not text: a non-UTF-8 file in the PR would raise, and an uncaught error exits 1, the secrets-file code.
+    diff = subprocess.run(argv, capture_output=True)
+    if diff.returncode:
+        print(f"diff failed: {diff.stderr.decode(errors='replace').strip()}", file=sys.stderr)
+        return 2
+    diff_file.write_bytes(diff.stdout)
+    print(f"diff 본문: {diff_file}")
+    return 0
 
 
 def approve(name):
@@ -285,9 +340,9 @@ def main(argv=None):
     created.add_argument("task")
     created.add_argument("--repo", required=True)
     created.add_argument("--test", required=True, help="the product's AGENTS.md test command")
-    created.add_argument("--allow", action="append", default=[], help="extra tool rule, e.g. 'Bash(npm test)'")
+    created.add_argument("--allow", action="append", default=[], help="extra tool rule run from the task folder, e.g. 'Bash(make -C repo lint)'")
     created.add_argument("--base", default="main")
-    for command in ("run", "approve"):
+    for command in ("run", "approve", "test", "preflight"):
         sub.add_parser(command).add_argument("task")
     sub.add_parser("workers")
     args = parser.parse_args(argv)
@@ -295,7 +350,7 @@ def main(argv=None):
         return new(args.task, args.repo, args.test, args.allow, args.base)
     if args.command == "workers":
         return workers()
-    return {"run": run, "approve": approve}[args.command](args.task)
+    return {"run": run, "approve": approve, "test": test, "preflight": preflight}[args.command](args.task)
 
 
 if __name__ == "__main__":

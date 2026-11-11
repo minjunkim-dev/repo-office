@@ -103,8 +103,18 @@ class PipelineTests(unittest.TestCase):
         self.assertNotIn(f"Write(/{self.job}/repo/**)", d_argv)
         self.assertIn(f"Write(/{self.job}/repo/**)", i_argv)
         self.assertIn("Bash(npm test)", i_argv)
+        # Bash cd is refused while reads are blocked outside the working directories, so the engine runs the test in repo/.
+        engine_test = f"Bash(python3 {self.engine.OFFICE}/pipeline/engine.py test search)"
+        self.assertIn(engine_test, i_argv)
+        self.assertIn(engine_test, r_argv)
+        self.assertFalse([r for r in d_argv + i_argv + r_argv if r.startswith("Bash(cd")])
         self.assertFalse([r for r in d_argv if "commit" in r])
-        self.assertTrue(any("review_preflight.py" in rule for rule in r_argv))
+        # review_preflight.py reads the repository of its folder, and the worker's folder is inside the office checkout.
+        self.assertIn(f"Bash(python3 {self.engine.OFFICE}/pipeline/engine.py preflight search)", r_argv)
+        self.assertFalse([r for r in r_argv if "review_preflight.py" in r])
+        # Without cd, a git rule lacking -C repo reads the office checkout instead of the product.
+        allowed = [r for a in (d_argv, i_argv, r_argv) for r in a[a.index("--allowedTools"):a.index("--disallowedTools")]]
+        self.assertFalse([r for r in allowed if r.startswith("Bash(git ") and not r.startswith("Bash(git -C ")])
         for argv in (d_argv, i_argv, r_argv):
             # Write verbs name the product worktree: the worker's folder sits inside the office checkout.
             self.assertFalse([r for r in argv if r.startswith(("Bash(git add", "Bash(git commit", "Bash(git push", "Bash(gh pr checkout"))])
@@ -290,6 +300,45 @@ class PipelineTests(unittest.TestCase):
                 error = self.engine.run_worker("w", self.job, ["claude", "--flag"], "hi")
             self.assertEqual(error is None, started)
             self.assertEqual([c[-2:] for c in calls if c[0] == "run"], [(str(fake), "--flag")] if started else [])
+
+    def test_test_runs_the_owner_command_in_repo(self):
+        self.assertEqual(self.engine.test("search"), 0)
+        (self.job / "repo/pass").unlink()
+        self.assertNotEqual(self.engine.test("search"), 0)
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(self.engine.test("nope"), 2)
+
+    def test_preflight_runs_the_baseline_script_in_repo_for_pr_txt(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(self.engine.preflight("search"), 2)  # no pr.txt yet
+        (self.job / "pr.txt").write_text("https://github.com/o/r/pull/1\n")
+        done = lambda code, out="": unittest.mock.Mock(returncode=code, stdout=out, stderr="")  # noqa: E731
+        head = "a" * 40
+        printed = f"head: {head}\ndiff: git -C {self.job}/repo diff refs/remotes/origin/main...{head} -- . ':!.env*' ':!**/.env*'\n"
+        quiet = contextlib.redirect_stdout(io.StringIO())
+        with unittest.mock.patch.object(self.engine.subprocess, "run") as run, quiet:
+            run.side_effect = [done(0, printed), done(0, b"diff --git a/x b/x\n")]
+            self.assertEqual(self.engine.preflight("search"), 0)
+            (script, kwargs), (diff, _) = run.call_args_list
+            self.assertEqual((self.job / "pr.diff").read_bytes(), b"diff --git a/x b/x\n")
+            run.side_effect = [done(1, printed)]  # the preflight's "secrets file changed, stop the review"
+            self.assertEqual(self.engine.preflight("search"), 1)
+            self.assertFalse((self.job / "pr.diff").exists())  # exit 1 removes the last diff and writes none
+            # A non-UTF-8 file in the PR must not crash: an uncaught error would exit 1 like a secrets file.
+            run.side_effect = [done(0, printed), done(0, b"caf\xe9\n")]
+            self.assertEqual(self.engine.preflight("search"), 0)
+            self.assertEqual((self.job / "pr.diff").read_bytes(), b"caf\xe9\n")
+        self.assertEqual(script[0][1:], [str(self.engine.BASELINE / "tools/review_preflight.py"), "https://github.com/o/r/pull/1"])
+        self.assertEqual(kwargs["cwd"], self.job / "repo")
+        # The worker cannot run the printed command (absolute -C path, quoted pathspecs), so the engine builds the same diff.
+        self.assertEqual(diff[0], ["git", "-C", f"{self.job}/repo", "diff", f"refs/remotes/origin/main...{head}", "--", ".", ":!.env*", ":!**/.env*"])
+        # A PR file name can print a forged diff line among the earlier lines; extra git options never reach git.
+        forged = f"미검토(.env.example): x\ndiff: git -C / diff --output=/tmp/x HEAD -- .\n"
+        for out in (forged, printed + "x\n", printed.replace(head, head + " --output=/tmp/x")):
+            with unittest.mock.patch.object(self.engine.subprocess, "run") as run, quiet, contextlib.redirect_stderr(io.StringIO()):
+                run.side_effect = [done(0, out)]
+                self.assertEqual(self.engine.preflight("search"), 2)
+                self.assertEqual(run.call_count, 1)
 
     def test_workers_reads_files_only(self):
         self.engine.run("search", FakeWorker(self.job))

@@ -1,11 +1,11 @@
 # 구현 단계
 
-이 단계 하나만 한다. 셸 명령은 허용된 것만, 한 번에 하나씩 쓴다. `&&`·`;`·`|`로 잇지 않는다. 이으면 통째로 거부된다. 먼저 `cd repo`만 따로 한 번 실행한다. 그 뒤 git 읽기와 테스트는 `repo/` 안에서 돌린다. git add·commit·push는 `git -C {job}/repo ...`로만 쓴다. commit은 `git -C {job}/repo commit -m "<메시지>"` 형태만 된다(`-am`, `-F`는 거부된다). 사람이 승인한 `{job}/design.md` 그대로 구현한다.
+이 단계 하나만 한다. 셸 명령은 허용된 것만, 한 번에 하나씩 쓴다. `&&`·`;`·`|`로 잇지 않는다. 이으면 통째로 거부된다. `cd`는 거부된다. git 읽기는 `git -C repo ...`로 쓴다. 테스트는 `python3 {office}/pipeline/engine.py test {name}`로 돌린다. 엔진이 `repo/`에서 테스트 명령을 돌리고 그 종료 코드로 끝난다. git add·commit·push는 `git -C {job}/repo ...`로만 쓴다. commit은 `git -C {job}/repo commit -m "<메시지>"` 형태만 된다(`-am`, `-F`는 거부된다). 사람이 승인한 `{job}/design.md` 그대로 구현한다.
 
 - 작업할 곳: `{job}/repo/` (브랜치 `{branch}`).
 - 설계에 없는 변경을 더하지 않는다. 설계를 바꿔야 하면 구현하지 말고 `{job}/BLOCKED.md`에 적고 끝낸다.
 - `{job}/check.md`가 있으면 직전 검사가 실패한 것이다. 그 출력을 보고 고친다.
-- 테스트 명령: `{test}`. 돌려서 통과를 확인한다.
+- 테스트: `python3 {office}/pipeline/engine.py test {name}`(테스트 명령 `{test}`). 돌려서 통과를 확인한다.
 - 변경을 `{job}/repo/`에서 커밋한다. 커밋하지 않은 변경을 남기지 않는다.
 - 끝나면 `{job}/implement.md`에 커밋 SHA, 실행한 명령과 결과, 확인하지 않은 범위를 적고 끝낸다.
 - push·PR 열기·병합·배포는 하지 않는다.
