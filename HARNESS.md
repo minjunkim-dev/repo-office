@@ -51,6 +51,7 @@ git show f31431f^:docs/archive/CHANGELOG-2026.md       # 재설계 전 변경 �
 
 - 검증됨: 단계 순서, 설계 승인 해시, 검사 실패 재시도, `BLOCKED.md`, 작업자 권한(병합·`main` push·`.env` 읽기 불가), 두 sandbox, Claude Code 판 확인. 단위 테스트 31개와 장난감 저장소 실제 실행, PR #24 리뷰 실행(`gh pr edit`·push 제외). 세부는 [HANDOFF.md](HANDOFF.md) §4.
 - 검증 안 됨: 스킬이 끼는 모든 경로. office 지시서(`pipeline/prompts/*.md`)와 단계표에 스킬 이름이 없다.
+- 2026-11-12 실측(§9의 1): 단계표 인자 그대로의 작업자가 어떤 스킬을 보고 부르는지 확인했다. 결과는 [HANDOFF.md](HANDOFF.md) §4의 2026-11-12 항목이다.
 - 규칙은 반쯤 연결되어 있다. 지시서가 POLICY·`prompts/review.md`를 가리키고, 허용 목록이 병합·`main` push를 막는다. 스킬은 연결되어 있지 않다.
 
 ## 5. 스킬 호출의 사실
@@ -86,25 +87,25 @@ git show f31431f^:docs/archive/CHANGELOG-2026.md       # 재설계 전 변경 �
 | 막는 것 | 근거 | 확인 |
 | --- | --- | --- |
 | 지시서(`pipeline/prompts/*.md`)가 스킬을 부르라고 하지 않는다. 리뷰 지시서는 원본 `prompts/review.md`를 따르게 하므로 「스킬 위임」 한 줄로만 간접 연결된다 | 파일 내용 | 확인함 |
-| 리뷰 단계 `tools`에 `Skill`도 `check_skills.py` 실행 규칙도 없다. 작업자는 `--permission-mode dontAsk`라 목록 밖은 거부된다 | [pipeline/stages.json](pipeline/stages.json) | 설정 확인함. `Skill` 도구가 `dontAsk`에서 허용 규칙을 요구하는지는 실행해 보지 않았다 |
-| `--setting-sources project`라 사용자 설정의 `enabledPlugins`(pstack)와 개인 스킬(`~/.claude/skills`, Matt)이 작업자에 안 실릴 가능성이 크다 | 단계표 `runner`. 공식 [CLI reference](https://code.claude.com/docs/en/cli-reference)는 이 플래그가 설정 출처(user, project, local)를 고른다고만 적고, 스킬이 실리는지는 적지 않는다(2026-11-11 확인) | 실행해 보지 않았다 |
-| 작업자의 읽기는 과제 폴더와 이 체크아웃으로 막혀 `~/.claude/skills`의 `SKILL.md`를 Read로 읽지 못한다. `check_skills.py`도 홈의 스킬 폴더를 읽어야 하는데 sandbox가 홈 읽기를 막는다 | [AGENTS.md](AGENTS.md) 규칙 | 설정에서 추론. 실행해 보지 않았다 |
+| 리뷰 단계 `tools`에 `check_skills.py` 실행 규칙이 없다 | [pipeline/stages.json](pipeline/stages.json) | 설정 확인함. `Skill` 도구는 허용 규칙 없이 `dontAsk`에서 돌았다(2026-11-12 실측). 그래서 허용 목록으로 단계마다 스킬을 고르지 못한다. 보이는 자동 가능 스킬은 어느 단계에서든 부를 수 있다. 막으려면 `Skill(...)` 거부 규칙이 필요하다 |
+| `--setting-sources project`라 사용자 설정의 `enabledPlugins`(pstack)와 개인 스킬(`~/.claude/skills`, Matt)이 작업자에 실리지 않는다 | 단계표 `runner`. 공식 [CLI reference](https://code.claude.com/docs/en/cli-reference)는 이 플래그가 설정 출처(user, project, local)를 고른다고만 적고, 스킬이 실리는지는 적지 않는다(2026-11-11 확인) | 2026-11-12 실측으로 확인함. office 체크아웃의 `.claude/settings.json`에 `enabledPlugins`를 두면 두 플러그인이 실린다(§8의 4) |
+| 작업자의 읽기는 과제 폴더와 이 체크아웃으로 막혀 `~/.claude/skills`의 `SKILL.md`를 Read로 읽지 못한다. `check_skills.py`도 홈의 스킬 폴더를 읽어야 하는데 sandbox가 홈 읽기를 막는다 | [AGENTS.md](AGENTS.md) 규칙 | 설정에서 추론. `Skill` 도구가 플러그인 캐시의 스킬을 싣는 것은 이 제한에 막히지 않았다(2026-11-12). 스킬이 자기 폴더의 참고 파일을 Read로 읽는 경우와 `check_skills.py`는 실행해 보지 않았다 |
 | 사람만 부르는 스킬은 모델이 부를 수 없다 | §5 | 작성자 규칙 |
 
 ## 8. 소유자가 정할 것
 
 1. 목표(§1): 2026-11-11에 정했다.
-2. 연결을 어디에 둘까. office 안(단계표·지시서·leader 규칙)인가, 원본의 새 프로필인가. 원본 코어에 다시 넣으면 #73 재설계("어떤 하네스든 `cp`만으로")를 되돌리는 것이다.
+2. 연결을 어디에 둘까. 2026-11-12에 office 안(단계표·지시서·leader 규칙)으로 정했다. 원본의 새 프로필 안은 버린다. 원본 코어에 다시 넣으면 #73 재설계("어떤 하네스든 `cp`만으로")를 되돌리는 것이다. 원본 프로필에 이미 있는 규칙(리뷰의 「스킬 위임」)은 office가 그대로 가리킨다.
 3. 사람만 부르는 스킬을 어떻게 돌릴까. 2026-11-11에 (가)로 정했다(§1).
    - (가) leader가 알맞은 때에 사람에게 실행을 요청한다. 작성자 의도에 맞는다.
    - (나) 엔진이 `hc send`로 작업자 터미널에 `/스킬이름`을 입력한다. 기술적으로 사람 입력이라 돌지만, 작성자의 수동 표시를 우회한다.
    - (다) 작업자가 `SKILL.md`를 참고 문서로 읽는다. 역시 우회다.
-4. 작업자에 스킬을 어떻게 실을까.
+4. 작업자에 스킬을 어떻게 실을까. 2026-11-12에 첫 안(office 체크아웃의 프로젝트 설정으로 플러그인을 켠다)으로 정했다. 같은 날 실측에서 `enabledPlugins`만으로 두 플러그인(mattpocock-skills 1.3.2, pstack 0.15.36)이 실렸다. 이 설정은 플러그인을 켤 뿐 설치하거나 판을 고정하지 않는다. 사용자의 플러그인 캐시에 이미 있어서 됐다. 설정 파일을 더하는 일은 §9의 2·3에서 한다.
    - office 체크아웃의 프로젝트 설정(`.claude/settings.json`의 `extraKnownMarketplaces`·`enabledPlugins`, 원본 [templates/github/agents/README.md](https://github.com/minjunkim-dev/repo-baseline/blob/main/templates/github/agents/README.md)의 예)으로 플러그인을 켠다.
    - 쓰는 스킬만 office 체크아웃 `.claude/skills/`에 둔다. 하네스 폴더라 신뢰 경계 경로이고 Door는 어려움이다.
    - `--setting-sources`를 넓힌다. 사용자 전역 허용 규칙이 새므로 권하지 않는다(HANDOFF §4).
 5. 원본 프로필(matt-skills·pstack)의 규칙을 바꿔야 하면 원본에서 바꾼다. 이 저장소에는 원본 파일의 사본을 두지 않는다.
-6. PR 열기를 자동으로 할까. 지금은 사람이 연다. 제안: 검사 단계가 통과하면 엔진이 PR 브랜치를 push하고 초안(draft) PR을 연다. 사람은 초안을 보고 "Ready for review"로 바꾸거나 닫는다. 근거: 원본 재설계안의 원칙이 "PR은 열되 병합은 막는다"이고, 초안 PR은 닫으면 되돌아간다. 바꿀 곳은 단계표·leader 규칙·`AGENTS.md`이므로 소유자 승인이 필요하다. 원격에 처음 무언가를 올리는 단계라 Door는 어려움으로 본다.
+6. PR 열기를 자동으로 할까. 2026-11-12에 소유자가 아래 제안을 따르라고 했다. 채택하되 §9의 1~4를 끝낸 뒤 따로 PR 하나로 넣는다. 그때까지는 사람이 연다. 제안: 검사 단계가 통과하면 엔진이 PR 브랜치를 push하고 초안(draft) PR을 연다. 사람은 초안을 보고 "Ready for review"로 바꾸거나 닫는다. 근거: 원본 재설계안의 원칙이 "PR은 열되 병합은 막는다"이고, 초안 PR은 닫으면 되돌아간다. 바꿀 곳은 단계표·leader 규칙·`AGENTS.md`이므로 소유자 승인이 필요하다. 원격에 처음 무언가를 올리는 단계라 Door는 어려움으로 본다.
 7. office를 어디에 둘까. 2026-11-11에 별도 저장소 `minjunkim-dev/repo-office`(이 저장소)로 옮겼다. 아래는 그 경위다. 옮기기 전에는 원본 위에 `claude-office/`를 얹은 후보 저장소다(README). 원본을 정본으로 두는 것은 유지한다. office를 정본으로 삼으면 모든 소비 레포가 Claude Code·macOS·`hc`에 묶이고, #73의 "어떤 하네스든 `cp`만으로"가 깨진다.
    - 지금 구조의 비용: `claude-office/` 밖을 원본과 손으로 맞춘다. 이 저장소가 원본의 사본인 이유는 엔진이 상위 폴더를 repo-baseline 클론으로 쓰기 때문이다(`engine.py`의 `BASELINE = OFFICE.parent`). 리뷰 단계도 원본 판이 아니라 이 사본의 `prompts/review.md`·`tools/review_preflight.py`를 쓴다.
    - 원본의 선택 프로필(`profiles/office`)로 옮기는 안은 버린다. `profiles/`는 소비 레포가 복사해 가는 파일을 두는 곳인데, office는 소비 레포에 복사하지 않고 자기 체크아웃에서 돈다. 또 macOS·Claude Code에 묶인 코드와 테스트가 중립 정본에 들어온다.
@@ -118,7 +119,7 @@ git show f31431f^:docs/archive/CHANGELOG-2026.md       # 재설계 전 변경 �
 
 각 단계는 이슈 하나·PR 하나다. 앞 단계의 실행 결과를 보고 다음을 정한다.
 
-1. 실측: 단계표 인자 그대로 작업자를 띄워 스킬 목록에 무엇이 보이는지, `Skill` 도구가 허용 규칙 없이 도는지 본다. 완료 기준: 개인 스킬·플러그인 스킬·프로젝트 스킬 각각의 보임/호출 여부를 HANDOFF §4에 적는다. 코드 변경 없음.
+1. 실측: 단계표 인자 그대로 작업자를 띄워 스킬 목록에 무엇이 보이는지, `Skill` 도구가 허용 규칙 없이 도는지 본다. 완료 기준: 개인 스킬·플러그인 스킬·프로젝트 스킬 각각의 보임/호출 여부를 HANDOFF §4에 적는다. 코드 변경 없음. 2026-11-12에 끝냈다.
 2. 리뷰 위임 연결: 리뷰 단계에서 `check_skills.py` → `code-review` 위임이 실제로 돈다. 완료 기준: 「스킬 위임」 절이 있는 장난감 저장소의 실제 PR에서 리뷰 작업자가 `check_skills.py` 종료 코드 0을 받고 `code-review`를 부른다.
 3. 설계·구현 단계의 자동 가능 스킬 연결(`tdd`, `diagnosing-bugs`, `codebase-design` 등). 완료 기준: 장난감 과제에서 구현 작업자가 `tdd`를 부른 기록이 있다.
 4. leader의 수동 스킬 요청(§8의 3, 2026-11-11에 (가)로 정함): 접수 때 `ask-matt`·`grill-with-docs`, 어려움 설계 때 `interrogate`, 승인 전 `blast-radius`, 병합 뒤 `retro`를 사람에게 요청한다. 완료 기준: leader 규칙에 단계별 요청이 있고, 실제 과제 하나에서 그 요청이 나왔다.
