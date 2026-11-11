@@ -87,6 +87,9 @@
   - 작업자는 `mattpocock-skills:code-review`를 불렀고, 스킬이 두 축을 하위 에이전트로 띄웠다. `Agent` 도구도 허용 규칙 없이 `dontAsk`에서 돌았다. 하위 에이전트는 지시대로 `pr.diff`를 Read로 읽었고, `cd ... && python3 -m unittest`는 거부됐다(부모의 `engine.py test` 결과로 대신했다). 보고를 `review.md`와 PR 본문에 쓰고 엔진은 `done`으로 끝났다.
   - 함정: 작업자의 `engine.py test`가 `repo/`에 `__pycache__/`를 남겨, 보고 직전 preflight가 `worktree: different`를 냈다. 작업자는 원인을 확인하고 넘어갔다. 제품 저장소의 `.gitignore`에 없으면 매번 나온다.
   - 첫 실행은 작업자 CLI 계정의 5시간 한도에 걸려 첫 응답 전에 끝났고, 엔진은 「review.md 없음」 두 번으로 `BLOCKED.md`를 썼다. 한도 오류와 작업 실패를 구별하지 못한다.
+- 2026-11-12, leader 수동 스킬 요청 실측(HARNESS §9의 4, Claude Code 2.1.322, Opus 5.5 medium): `hc`로 `leader/`에 대화형 Claude Code를 띄우고, 장난감 저장소에 막연한 요청("계산 기능을 좀 더, 뭘 넣을지는 모르겠다")을 줬다.
+  - 처음 규칙("요청이 막연하면 `grill-with-docs`를 권한다")으로는 leader가 방향 세 가지를 묻고, 과제를 등록하고, 엔진을 돌린 뒤에야 "다음에는 `grill-with-docs`로" 권했다. 그래서 규칙에 "방향을 묻기 전에, 등록하기 전에 권한다"를 더했다. 고친 뒤 새 leader 세션은 방향 질문 안에 `grill-with-docs` 권유를 함께 넣었다.
+  - 설계 승인 대기(종료 코드 3): 작업자 설계의 Door가 되돌리기 쉬움이라 leader가 "`interrogate`·`blast-radius`는 권하지 않는다"고 밝히고 승인을 요청했다. Door가 어려움인 설계와 병합 뒤 `retro` 권유는 돌려 보지 않았다.
 
 ## 5. 다시 재현하는 법
 

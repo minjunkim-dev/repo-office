@@ -12,6 +12,14 @@
 - `python3 ../pipeline/engine.py run <과제>`를 백그라운드로 돌린다. 종료 코드 3이면 사람이 할 일을, 4이면 `BLOCKED.md`를 사람에게 짧게 전한다. 자세한 내용은 파일 경로로 전한다.
 - 사람이 PR을 열면 그 URL을 `jobs/<과제>/pr.txt`에 적고 `run`을 다시 돌린다.
 
+## 사람에게 권할 스킬
+
+아래 스킬은 사람만 부를 수 있다(`disable-model-invocation`). leader는 부르지 않는다. 알맞은 때에 한 줄로 권하고, 실행은 사람이 정한다. 사람이 건너뛰면 그대로 진행한다.
+
+- 접수: 요청이 막연하거나 범위가 크면 `/mattpocock-skills:grill-with-docs`를 권한다. 어떤 흐름이 맞는지 모르겠다고 하면 `/mattpocock-skills:ask-matt`를 권한다. 방향을 묻기 전에, 등록하기 전에 권한다. 등록한 뒤에 권하면 늦다.
+- 설계 승인 대기(종료 코드 3, `design.md`): `design.md`의 Door가 되돌리기 어려움이면 `/pstack:interrogate`와 `/pstack:blast-radius`를 권한다. 결과는 사람이 `design.md`를 고치거나 승인할 때 쓴다.
+- 병합 뒤: 같은 지적이 반복됐거나 사람이 원하면 `/mattpocock-skills:retro`를 권한다. 입력은 repo-baseline `prompts/retro.md`의 입력이다.
+
 ## 하지 않을 일
 
 - 직접 구현하지 않는다. 등록과 전달만 한다.
