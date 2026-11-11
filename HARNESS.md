@@ -105,7 +105,12 @@ git show f31431f^:docs/archive/CHANGELOG-2026.md       # 재설계 전 변경 �
    - `--setting-sources`를 넓힌다. 사용자 전역 허용 규칙이 새므로 권하지 않는다(HANDOFF §4).
 5. 원본 프로필(matt-skills·pstack)의 규칙을 바꿔야 하면 원본에서 바꾼다. 이 저장소의 `claude-office/` 밖은 원본과 같게 둔다.
 6. PR 열기를 자동으로 할까. 지금은 사람이 연다. 제안: 검사 단계가 통과하면 엔진이 PR 브랜치를 push하고 초안(draft) PR을 연다. 사람은 초안을 보고 "Ready for review"로 바꾸거나 닫는다. 근거: 원본 재설계안의 원칙이 "PR은 열되 병합은 막는다"이고, 초안 PR은 닫으면 되돌아간다. 바꿀 곳은 단계표·leader 규칙·`AGENTS.md`이므로 소유자 승인이 필요하다. 원격에 처음 무언가를 올리는 단계라 Door는 어려움으로 본다.
-7. office를 어디에 둘까. 지금은 원본 위에 `claude-office/`를 얹은 후보 저장소다(README). 제안: 원본을 정본으로 두는 지금 구조를 유지한다. office가 실제 과제로 검증되면 `claude-office/`를 원본의 선택 프로필로 옮기고 이 저장소는 보관한다. 반대로 office를 정본으로 삼으면 모든 소비 레포가 Claude Code·macOS·`hc`에 묶이고, #73의 "어떤 하네스든 `cp`만으로"가 깨진다.
+7. office를 어디에 둘까. 지금은 원본 위에 `claude-office/`를 얹은 후보 저장소다(README). 원본을 정본으로 두는 것은 유지한다. office를 정본으로 삼으면 모든 소비 레포가 Claude Code·macOS·`hc`에 묶이고, #73의 "어떤 하네스든 `cp`만으로"가 깨진다.
+   - 지금 구조의 비용: `claude-office/` 밖을 원본과 손으로 맞춘다. 이 저장소가 원본의 사본인 이유는 엔진이 상위 폴더를 repo-baseline 클론으로 쓰기 때문이다(`engine.py`의 `BASELINE = OFFICE.parent`). 리뷰 단계도 원본 판이 아니라 이 사본의 `prompts/review.md`·`tools/review_preflight.py`를 쓴다.
+   - 원본의 선택 프로필(`profiles/office`)로 옮기는 안은 버린다. `profiles/`는 소비 레포가 복사해 가는 파일을 두는 곳인데, office는 소비 레포에 복사하지 않고 자기 체크아웃에서 돈다. 또 macOS·Claude Code에 묶인 코드와 테스트가 중립 정본에 들어온다.
+   - 제안: office를 `claude-office/`만 담은 별도 저장소로 만들고, repo-baseline 클론의 경로를 설정으로 받는다. 그러면 맞추는 비용이 없어지고 리뷰는 원본 판을 쓴다. 지금 저장소는 보관한다. 정본을 건드리지 않으므로 office의 검증을 기다릴 필요는 없다.
+   - 고칠 곳은 한 줄이 아니다. `BASELINE`은 `engine.py`에서 12번 쓰이고, 그중 작업자 sandbox의 쓰기 금지 경로(지금은 `BASELINE` 아래에서 `OFFICE`를 뺀 나머지를 막는다), 검사 단계 sandbox의 읽기 경로, repo-baseline 자신의 PR을 리뷰할 때 클론이 `origin/main`과 같은지 보는 검사가 이 배치를 전제한다. 신뢰 경계를 바꾸므로 Door는 어려움이고, 새 저장소를 만드는 일이라 소유자가 정한다.
+   - 정할 것: 클론 경로를 받는 방법(환경 변수 또는 설정 파일), git 기록을 옮길지(`git filter-repo` 등), office를 계속 쓸지 판단하는 기준(예: 실제 과제 N개가 사람 개입 없이 PR 직전까지 감).
 
 ## 9. 제안하는 다음 순서
 
