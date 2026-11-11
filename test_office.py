@@ -412,6 +412,14 @@ class PipelineTests(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(self.engine.test("nope"), 2)
 
+    def test_a_worker_test_run_leaves_no_bytecode_for_the_check_to_count(self):
+        (self.job / "repo/mod.py").write_text("X = 1\n")
+        task = json.loads((self.job / "task.json").read_text())
+        task["test"] = f"{shutil.which('python3')} -c 'import mod'"
+        (self.job / "task.json").write_text(json.dumps(task))
+        self.assertEqual(self.engine.test("search"), 0)
+        self.assertFalse((self.job / "repo/__pycache__").exists())
+
     def test_baseline_path_names_the_clone_else_commands_stop(self):
         office = Path(self.tmp.name) / "standalone"
         shutil.copytree(OFFICE / "pipeline", office / "pipeline", ignore=shutil.ignore_patterns("__pycache__"))

@@ -4,6 +4,9 @@
 
 - 작업할 곳: `{job}/repo/` (브랜치 `{branch}`).
 - 설계에 없는 변경을 더하지 않는다. 설계를 바꿔야 하면 구현하지 말고 `{job}/BLOCKED.md`에 적고 끝낸다.
+- `mattpocock-skills:tdd` 스킬을 불러 빨강→초록으로 구현한다. 그 스킬이 seam을 사용자와 확인하라고 하면, 승인된 `{job}/design.md`의 「테스트할 seam」 목록으로 대신한다. 목록 밖 seam이 필요하면 구현하지 말고 `{job}/BLOCKED.md`에 적고 끝낸다. 리팩터링은 하지 않는다(리뷰 단계 몫).
+- 버그를 고치는 과제면 먼저 `mattpocock-skills:diagnosing-bugs` 스킬로 재현하고 원인을 찾는다.
+- 스킬 이름은 앞 이름까지 다 쓴다. 앞 이름 없는 이름은 다른 스킬로 갈 수 있다.
 - `{job}/check.md`가 있으면 직전 검사가 실패한 것이다. 그 출력을 보고 고친다.
 - 테스트: `python3 {office}/pipeline/engine.py test {name}`(테스트 명령 `{test}`). 돌려서 통과를 확인한다.
 - 변경을 `{job}/repo/`에서 커밋한다. 커밋하지 않은 변경을 남기지 않는다.
