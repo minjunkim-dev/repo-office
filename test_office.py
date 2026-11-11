@@ -95,6 +95,17 @@ class PipelineTests(unittest.TestCase):
             # Reads stay in the task folder and this checkout: a bare Read or cat reaches credentials in the home folder.
             self.assertIn("--add-dir", argv)
             self.assertTrue(json.loads(argv[argv.index("--settings") + 1])["permissions"]["blockReadsOutsideWorkingDirectories"])
+            # Bash and the tests it runs write the task folder and commits, not the engine's files or git settings.
+            box = json.loads(argv[argv.index("--settings") + 1])["sandbox"]
+            self.assertEqual([box[k] for k in ("enabled", "autoAllowBashIfSandboxed", "allowUnsandboxedCommands", "failIfUnavailable")],
+                             [True, False, False, True])
+            self.assertEqual(box["filesystem"]["allowWrite"][0], str(self.job))
+            self.assertIn(str(self.engine.PIPELINE), box["filesystem"]["denyWrite"])
+            deny = box["filesystem"]["denyWrite"]
+            self.assertFalse([d for d in deny if str(self.job).startswith(d)])
+            for name in ("task.json", "state.json", "pr.txt", "repo/.git", "CLAUDE.md"):
+                self.assertIn(str(self.job / name), deny)
+            self.assertIn(f"python3 {self.engine.OFFICE}/pipeline/engine.py preflight search", box["excludedCommands"])
             self.assertNotIn("Read", argv)
             self.assertIn(f"Read(/{self.job}/**)", argv)
             # A wildcard fetch takes --upload-pa=<command> (git accepts short forms of long options) and refspecs.
@@ -381,6 +392,25 @@ class PipelineTests(unittest.TestCase):
                 run.side_effect = [done(0, out)]
                 self.assertEqual(self.engine.preflight("search"), 2)
                 self.assertEqual(run.call_count, 1)
+
+    def test_engine_git_ignores_settings_planted_in_a_nested_repository(self):
+        # Task code can commit a gitlink whose gitdir config sets core.fsmonitor; `git status` would run it.
+        repo, evil = self.job / "repo", Path(self.tmp.name) / "evil"
+        git = lambda *a, cwd=repo: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *a],  # noqa: E731
+                                                  cwd=cwd, check=True, capture_output=True)
+        (repo / "sub").mkdir()
+        git("init", "-q", "--separate-git-dir", str(evil), cwd=repo / "sub")
+        (repo / "sub/f").write_text("x\n")
+        git("add", "f", cwd=repo / "sub")
+        git("commit", "-qm", "s", cwd=repo / "sub")
+        git("add", "sub")
+        git("commit", "-qm", "gitlink")
+        marker = Path(self.tmp.name) / "PWNED"
+        git("config", "core.fsmonitor", f"touch {marker}; false", cwd=repo / "sub")
+        subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, env=self.engine.SAFE_GIT)
+        self.assertFalse(marker.exists())
+        subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True)
+        self.assertTrue(marker.exists())  # the attack is real without the forced settings
 
     def test_workers_reads_files_only(self):
         self.engine.run("search", FakeWorker(self.job))

@@ -31,6 +31,12 @@ BASELINE = OFFICE.parent  # this checkout carries repo-baseline's prompts/ and t
 JOBS = Path(os.environ.get("OFFICE_JOBS", OFFICE / "jobs"))
 STAGES = Path(os.environ.get("OFFICE_STAGES", PIPELINE / "stages.json"))
 DONE, WAIT, BLOCKED = 0, 3, 4
+# git the engine runs outside the sandbox over a task's repo/ ignores settings task code could plant, such as a
+# committed nested repository whose config runs core.fsmonitor on `git status`. Env config wins over repository files.
+_SAFE = {"core.fsmonitor": "false", "diff.ignoreSubmodules": "all", "core.hooksPath": "/dev/null",
+         "fetch.recurseSubmodules": "false", "submodule.recurse": "false", "protocol.ext.allow": "never"}
+SAFE_GIT = {**os.environ, "GIT_CONFIG_COUNT": str(len(_SAFE)),
+            **{f"GIT_CONFIG_{kind}_{i}": v for i, kv in enumerate(_SAFE.items()) for kind, v in zip(("KEY", "VALUE"), kv)}}
 # hc terminal names are global to the hc core; this tag keeps another checkout's jobs folder from sharing them.
 TAG = hashlib.sha256(str(JOBS.resolve()).encode()).hexdigest()[:4]
 
@@ -71,9 +77,46 @@ def claude_argv(config, stage, job, task, state):
     for rule in stage["tools"]:
         tools.extend(task["allow"] if rule == "{allow}" else [fill(rule, job, task)])
     argv = [*(fill(arg, job, task) for arg in config["runner"]), flag, session_id(task["name"], key)]
+    if "sandbox" in config:
+        at = argv.index("--settings") + 1
+        argv[at] = json.dumps({**json.loads(argv[at]), "sandbox": sandbox(config["sandbox"], job, task)})
     if stage.get("model"):
         argv += ["--model", stage["model"]]
     return argv + ["--allowedTools", *tools, "--disallowedTools", *[fill(r, job, task) for r in config["deny"]]]
+
+
+def sandbox(base, job, task):
+    """Bash and what it starts (tests, git) may write the task folder and the commits of the product repository.
+
+    The office checkout is an --add-dir for reading, and the sandbox makes such folders writable: deny all of it but
+    jobs/. Excluded commands (gh, preflight, push) run outside the sandbox because they need the keychain; the git
+    they run follows this task's git settings and hooks, so the sandbox must not let task code change those.
+    """
+    def git(*args):
+        return subprocess.run(["git", "-C", str(job / "repo"), "rev-parse", "--path-format=absolute", *args],
+                              capture_output=True, text=True).stdout.strip()
+    common, own = git("--git-common-dir"), git("--git-dir")
+    deny = [str(p) for p in BASELINE.iterdir() if p != OFFICE] + [str(p) for p in OFFICE.iterdir() if p != JOBS]
+    deny += [str(p) for p in JOBS.iterdir() if p != job]  # other tasks' control files and repositories
+    # Files that do not exist yet but that a later session or git would read as instructions or settings.
+    for root in (BASELINE, OFFICE, job):
+        deny += [str(root / n) for n in ("CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".claude", ".mcp.json", ".envrc", ".git")]
+    # The engine's control files: the edit rules bind the Edit and Write tools only, not code a test runs.
+    deny += [str(job / n) for n in ("task.json", "state.json", "pr.txt", "pr.diff", "run.lock")]
+    # Where git takes settings and hooks: the worktree's gitdir pointer, the shared config and hooks, the worktree links.
+    deny += [str(job / "repo/.git")]
+    if common:
+        deny += [f"{common}/{n}" for n in ("config", "hooks", "info")]
+        # A denied folder also denies what an allow opens inside it (seen with Seatbelt), so list the other worktrees.
+        links = Path(common) / "worktrees"
+        deny += [str(p) for p in (links.iterdir() if links.is_dir() else ()) if str(p) != own]
+    if own and own != common:
+        deny += [f"{own}/{n}" for n in ("commondir", "gitdir", "config.worktree")]
+    allow = [str(job), *([common] if common else [])]
+    if own and own != common:
+        allow.append(own)  # index, HEAD and logs of this worktree
+    return {**base, "excludedCommands": [fill(c, job, task) for c in base.get("excludedCommands", [])],
+            "filesystem": {"denyWrite": deny, "allowWrite": allow}}
 
 
 def hc(*args, check=True):
@@ -220,7 +263,7 @@ def advance(job, name, runner):
                 print(f"waiting: a person writes {job / stage['wait']}")
                 return WAIT
         elif stage["by"] == "script":
-            git = lambda *a: subprocess.run(["git", *a], cwd=job / "repo", capture_output=True, text=True).stdout.strip()  # noqa: E731
+            git = lambda *a: subprocess.run(["git", *a], cwd=job / "repo", capture_output=True, text=True, env=SAFE_GIT).stdout.strip()  # noqa: E731
             # Read what the worker handed over before the test writes its own files (caches, reports).
             head, dirty = git("rev-parse", "HEAD"), git("status", "--porcelain", "--untracked-files=all")
             result = run_test(job, task, capture_output=True, text=True)
@@ -287,7 +330,7 @@ def preflight(name):
     diff_file = job / "pr.diff"
     diff_file.unlink(missing_ok=True)
     result = subprocess.run([sys.executable, str(script), *pr[:1], "--json"], cwd=job / "repo", capture_output=True,
-                            text=True, errors="replace")
+                            text=True, errors="replace", env=SAFE_GIT)
     print(result.stdout, end="")
     print(result.stderr, end="", file=sys.stderr)
     if result.returncode:  # 1 means a secrets file changed: the review must not open the diff
@@ -307,7 +350,7 @@ def preflight(name):
         return 2
     argv = ["git", "-C", str(job / "repo"), "diff", f"{base}...{head}", "--", ".", ":!.env*", ":!**/.env*"]
     # Bytes, not text: a non-UTF-8 file in the PR would raise, and an uncaught error exits 1, the secrets-file code.
-    diff = subprocess.run(argv, capture_output=True)
+    diff = subprocess.run(argv, capture_output=True, env=SAFE_GIT)
     if diff.returncode:
         print(f"diff failed: {diff.stderr.decode(errors='replace').strip()}", file=sys.stderr)
         return 2

@@ -10,6 +10,21 @@
   "--settings",
   "{\"permissions\":{\"blockReadsOutsideWorkingDirectories\":true}}"
  ],
+ "sandbox": {
+  "enabled": true,
+  "autoAllowBashIfSandboxed": false,
+  "allowUnsandboxedCommands": false,
+  "failIfUnavailable": true,
+  "excludedCommands": [
+   "python3 {office}/pipeline/engine.py preflight {name}",
+   "git -C {job}/repo push origin HEAD",
+   "gh pr view*",
+   "gh pr checks*",
+   "gh pr edit*",
+   "gh api --paginate repos/*"
+  ],
+  "network": {"allowedDomains": ["github.com"]}
+ },
  "deny": [
   "Read(**/.env*)",
   "Edit(/{baseline}/*.md)",
