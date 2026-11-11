@@ -261,23 +261,26 @@ def preflight(name):
     script = BASELINE / "tools/review_preflight.py"
     diff_file = job / "pr.diff"
     diff_file.unlink(missing_ok=True)
-    result = subprocess.run([sys.executable, str(script), *pr[:1]], cwd=job / "repo", capture_output=True, text=True,
-                            errors="replace")
+    result = subprocess.run([sys.executable, str(script), *pr[:1], "--json"], cwd=job / "repo", capture_output=True,
+                            text=True, errors="replace")
     print(result.stdout, end="")
     print(result.stderr, end="", file=sys.stderr)
     if result.returncode:  # 1 means a secrets file changed: the review must not open the diff
         return result.returncode
-    # The worker cannot run the printed diff command: its absolute -C path has no allow rule, and the quoted
-    # pathspecs that keep .env* out hit the quote deny rule. So the engine runs the same diff and hands over the text.
-    # Earlier lines carry PR file names, which may hold a forged "diff:" line: only the last line counts, it must match
-    # exactly, and the engine builds the command from its base and head instead of running what was printed.
-    lines = result.stdout.splitlines()
-    found = re.fullmatch(r"diff: git -C .+ diff (refs/remotes/[\w./-]+)\.\.\.([0-9a-f]{40}) -- \. ':!\.env\*' ':!\*\*/\.env\*'",
-                         lines[-1] if lines else "")
-    if not found:
-        print("no diff command on the last line of the preflight output", file=sys.stderr)
+    # The worker cannot run diff_argv: its absolute -C path has no allow rule, and the quoted pathspecs that keep
+    # .env* out hit the quote deny rule. So the engine runs the same diff and hands over the text. It builds the
+    # command from base and head, checked here, instead of running the printed list.
+    try:
+        found = json.loads(result.stdout)
+        base, head = found["base"], found["head"]
+        ok = (not found["secret_hits"] and isinstance(found["diff_argv"], list) and isinstance(base, str)
+              and isinstance(head, str) and re.fullmatch(r"refs/remotes/[\w./-]+", base) and re.fullmatch(r"[0-9a-f]{40}", head))
+    except (ValueError, KeyError, TypeError):
+        ok = False
+    if not ok:
+        print("the preflight output is not the expected JSON", file=sys.stderr)
         return 2
-    argv = ["git", "-C", str(job / "repo"), "diff", f"{found[1]}...{found[2]}", "--", ".", ":!.env*", ":!**/.env*"]
+    argv = ["git", "-C", str(job / "repo"), "diff", f"{base}...{head}", "--", ".", ":!.env*", ":!**/.env*"]
     # Bytes, not text: a non-UTF-8 file in the PR would raise, and an uncaught error exits 1, the secrets-file code.
     diff = subprocess.run(argv, capture_output=True)
     if diff.returncode:
