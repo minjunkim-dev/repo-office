@@ -120,7 +120,7 @@ git show f31431f^:docs/archive/CHANGELOG-2026.md       # 재설계 전 변경 �
 각 단계는 이슈 하나·PR 하나다. 앞 단계의 실행 결과를 보고 다음을 정한다.
 
 1. 실측: 단계표 인자 그대로 작업자를 띄워 스킬 목록에 무엇이 보이는지, `Skill` 도구가 허용 규칙 없이 도는지 본다. 완료 기준: 개인 스킬·플러그인 스킬·프로젝트 스킬 각각의 보임/호출 여부를 HANDOFF §4에 적는다. 코드 변경 없음. 2026-11-12에 끝냈다.
-2. 리뷰 위임 연결: 리뷰 단계에서 `check_skills.py` → `code-review` 위임이 실제로 돈다. 완료 기준: 「스킬 위임」 절이 있는 장난감 저장소의 실제 PR에서 리뷰 작업자가 `check_skills.py` 종료 코드 0을 받고 `code-review`를 부른다.
+2. 리뷰 위임 연결: 리뷰 단계에서 `check_skills.py` → `code-review` 위임이 실제로 돈다. 완료 기준: 「스킬 위임」 절이 있는 장난감 저장소의 실제 PR에서 리뷰 작업자가 `check_skills.py` 종료 코드 0을 받고 `code-review`를 부른다. 2026-11-12에 끝냈다(`minjunkim-dev/office-toy` PR #1, HANDOFF §4).
 3. 설계·구현 단계의 자동 가능 스킬 연결(`tdd`, `diagnosing-bugs`, `codebase-design` 등). 완료 기준: 장난감 과제에서 구현 작업자가 `tdd`를 부른 기록이 있다.
 4. leader의 수동 스킬 요청(§8의 3, 2026-11-11에 (가)로 정함): 접수 때 `ask-matt`·`grill-with-docs`, 어려움 설계 때 `interrogate`, 승인 전 `blast-radius`, 병합 뒤 `retro`를 사람에게 요청한다. 완료 기준: leader 규칙에 단계별 요청이 있고, 실제 과제 하나에서 그 요청이 나왔다.
 

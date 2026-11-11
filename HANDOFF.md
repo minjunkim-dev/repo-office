@@ -81,6 +81,11 @@
   - 제품 저장소(`repo/.claude/skills`)에 커밋한 스킬은 작업자가 `repo/` 안 파일을 Read한 뒤에도 목록에 없고 `Unknown skill`이었다. PR이 스킬로 리뷰 작업자에게 지시를 넣는 길은 이 시험에서는 열리지 않았다.
   - 확인한 것: mattpocock-skills 1.3.2에는 `hooks/`와 `.mcp.json`이 없고, 두 플러그인의 `SKILL.md`에 `allowed-tools`가 없다. pstack 0.15.36에는 `hooks/`가 없고 `agents/`가 있다. 확인하지 않은 것: 스킬이 자기 폴더의 참고 파일을 Read로 읽을 수 있는지, 스킬 본문의 절차가 단계 허용 목록 안에서 끝까지 도는지, `check_skills.py`.
   - 곁가지: 2.1.322는 단계표의 `Write(<과제>/state.json)` 같은 거부 규칙이 「never matches」라며 `Edit(...)`를 쓰라고 경고한다. 같은 경로의 `Edit(...)` 거부가 함께 있어 빈틈은 아니다. 단계표는 소유자 승인 없이 고치지 않으므로 그대로 둔다.
+- 2026-11-12, 리뷰 위임 실측(HARNESS §9의 2, Claude Code 2.1.322): 공개 장난감 저장소 `minjunkim-dev/office-toy`(시험 뒤 지울 것)의 PR #1(REVIEW.md에 「스킬 위임」 절)을 엔진 리뷰 단계로 돌렸다. 단계표 인자 그대로, 과제를 `review` 단계에 두고 `engine.py run`.
+  - 작업자 폴더는 git 저장소가 아니라 `check_skills.py`를 직접 돌리면 git이 실패한다. 그래서 `engine.py skills <과제> <base>`가 `repo/`에서 `--harness claude`로 돌린다. 작업자 sandbox 안에서도 플러그인 캐시를 읽어 종료 코드 0과 `code-review` 경로·sha256(1.3.2, `9c921a8d8813`)을 출력했다.
+  - 작업자는 `mattpocock-skills:code-review`를 불렀고, 스킬이 두 축을 하위 에이전트로 띄웠다. `Agent` 도구도 허용 규칙 없이 `dontAsk`에서 돌았다. 하위 에이전트는 지시대로 `pr.diff`를 Read로 읽었고, `cd ... && python3 -m unittest`는 거부됐다(부모의 `engine.py test` 결과로 대신했다). 보고를 `review.md`와 PR 본문에 쓰고 엔진은 `done`으로 끝났다.
+  - 함정: 작업자의 `engine.py test`가 `repo/`에 `__pycache__/`를 남겨, 보고 직전 preflight가 `worktree: different`를 냈다. 작업자는 원인을 확인하고 넘어갔다. 제품 저장소의 `.gitignore`에 없으면 매번 나온다.
+  - 첫 실행은 작업자 CLI 계정의 5시간 한도에 걸려 첫 응답 전에 끝났고, 엔진은 「review.md 없음」 두 번으로 `BLOCKED.md`를 썼다. 한도 오류와 작업 실패를 구별하지 못한다.
 
 ## 5. 다시 재현하는 법
 
