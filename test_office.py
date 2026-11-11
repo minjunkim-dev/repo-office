@@ -468,6 +468,22 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual(self.engine.preflight("search"), 2)
                 self.assertEqual(run.call_count, 1)
 
+    def test_skills_runs_check_skills_in_repo_with_the_preflight_base_only(self):
+        with unittest.mock.patch.object(self.engine.subprocess, "run") as run:
+            run.return_value = unittest.mock.Mock(returncode=2)
+            self.assertEqual(self.engine.skills("search", "refs/remotes/origin/main"), 2)
+            (argv, kwargs), = run.call_args_list
+            with contextlib.redirect_stderr(io.StringIO()):
+                for base in ("--output=/tmp/x", "main", "refs/remotes/origin/main --x"):
+                    self.assertEqual(self.engine.skills("search", base), 2)
+        self.assertEqual(run.call_count, 1)  # a bad base never runs the script
+        script = str(self.engine.BASELINE / "profiles/matt-skills/check_skills.py")
+        self.assertEqual(argv[0][1:], ["-I", script, "refs/remotes/origin/main", "--harness", "claude"])
+        self.assertEqual(kwargs["cwd"], self.job / "repo")
+        self.assertEqual(kwargs["env"], self.engine.SAFE_GIT)  # its git reads the task's repository
+        review = next(s for s in json.loads((OFFICE / "pipeline/stages.json").read_text())["flow"] if s["id"] == "review")
+        self.assertIn("Bash(python3 {office}/pipeline/engine.py skills {name} *)", review["tools"])
+
     def test_engine_git_ignores_settings_planted_in_a_nested_repository(self):
         # Task code can commit a gitlink whose gitdir config sets core.fsmonitor; `git status` would run it.
         repo, evil = self.job / "repo", Path(self.tmp.name) / "evil"

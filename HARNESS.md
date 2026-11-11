@@ -17,7 +17,7 @@
 | --- | --- | --- | --- |
 | repo-baseline(원본) | `minjunkim-dev/repo-baseline`, 로컬 `~/Workspace/01_Projects/03_SideApp/repo-baseline` | PR이 `main`에 들어가는 조건: 완료 증거, 다른 컨텍스트 리뷰, Door, 사람 병합, GitHub 설정, 회고 | 코어 4파일 + 선택 프로필. 2026-11-11 `main` = `49214f2` |
 | repo-office(이 저장소) | `minjunkim-dev/repo-office`(비공개). 2026-11-11에 repo-baseline-office의 `claude-office/`에서 옮겼다 | PR 전 작업을 단계로 돌린다: 설계 → 사람 승인 → 구현 → 검사 → (사람이 PR) → 리뷰 | 엔진·권한·sandbox 검증 끝. 스킬 연결 없음(§4) |
-| Matt Pocock 스킬 | 개인 스킬 `~/.config/mattpocock-skills/<sha>/skills` → `~/.agents/skills`·`~/.claude/skills` symlink. 플러그인 `mattpocock-skills@*`는 사용자 설정에서 꺼져 있다 | 개발 절차의 뼈대(재설계 전), 지금은 리뷰 두 축·회고·PR 본문([matt-skills 프로필](https://github.com/minjunkim-dev/repo-baseline/blob/main/profiles/matt-skills/README.md)) | 설치됨. office 작업자에서 쓰는지 미확인(§5) |
+| Matt Pocock 스킬 | 개인 스킬 `~/.config/mattpocock-skills/<sha>/skills` → `~/.agents/skills`·`~/.claude/skills` symlink. 플러그인 `mattpocock-skills@*`는 사용자 설정에서 꺼져 있다 | 개발 절차의 뼈대(재설계 전), 지금은 리뷰 두 축·회고·PR 본문([matt-skills 프로필](https://github.com/minjunkim-dev/repo-baseline/blob/main/profiles/matt-skills/README.md)) | 설치됨. office 작업자에는 개인 스킬이 실리지 않고, office `.claude/settings.json`의 `enabledPlugins`로 켠 플러그인만 실린다(2026-11-12 실측, [HANDOFF.md](HANDOFF.md) §4) |
 | pstack | 플러그인 `pstack@cursor-plugins` 0.15.36(켜짐). 원본 `~/.local/share/pstack-plugin` | 설계 질문(`interrogate`), 영향 범위(`blast-radius`), 검증 스킬 만들기, 교정(`correct`) | 설치됨. [pstack 프로필](https://github.com/minjunkim-dev/repo-baseline/blob/main/profiles/pstack/README.md)은 "사람이 부를 때만" |
 | 강연 원칙(Readray 노트 10개) | 원본 재설계안(`f31431f^:docs/archive/redesign-2026-11.md`) | 브레이크 3겹, `REVIEW.md`, 증거, Door, 리뷰 3라운드, 반복 지적은 환경으로 | 원본 POLICY·템플릿에 반영됨 |
 | office 참고 영상 2편 | [HANDOFF.md](HANDOFF.md) §3 | 대장 하나 + 단계표 + 설계 승인 해시 + 단계별 권한 | `pipeline/`로 구현됨 |
@@ -138,7 +138,7 @@ repo-office의 개발 하네스 작업을 이어받아 줘.
    원본 repo-baseline 로컬 클론은 ~/Workspace/01_Projects/03_SideApp/repo-baseline.
 2. HARNESS.md §1의 목표는 2026-11-11에 정했다. 설계하거나 고치기 전에
    §8의 결정 중 아직 정하지 않은 것을 하나씩 물어봐.
-3. 내가 정하면 §9 순서대로 이슈 하나·PR 하나씩 진행해. 첫 단계는 코드 변경 없는 실측이다.
+3. 내가 정하면 §9 순서대로 이슈 하나·PR 하나씩 진행해. §9의 1(실측)은 끝났다. 끝나지 않은 단계부터 이어 간다.
 4. 지킬 것:
    - 저장소 규칙(루트 AGENTS.md, POLICY.md)이 먼저다. PR마다 CHANGELOG.md 1~3줄, PR 본문 Summary에 완료 기준.
    - 프로필(profiles/)이나 리뷰 프롬프트 규칙을 바꿔야 하면 원본 repo-baseline에서 한다.

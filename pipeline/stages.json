@@ -186,6 +186,7 @@
     "Edit(/{job}/repo/**)",
     "Bash(python3 {office}/pipeline/engine.py test {name})",
     "Bash(python3 {office}/pipeline/engine.py preflight {name})",
+    "Bash(python3 {office}/pipeline/engine.py skills {name} *)",
     "Bash(git -C repo status*)",
     "Bash(git -C {job}/repo status*)",
     "Bash(git -C repo rev-parse*)",
