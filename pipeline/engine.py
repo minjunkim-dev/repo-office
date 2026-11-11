@@ -335,9 +335,10 @@ def run_test(job, task, sandboxed=False, **kwargs):
     if not sandboxed:
         return subprocess.run(task["test"], shell=True, cwd=job / "repo", **kwargs)
     tmp = job / "tmp"  # temp files stay in the one folder the sandbox lets the test write
-    tmp.mkdir(exist_ok=True)
+    home = tmp / "home"  # the profile hides the real home; tools that cache or read config there (Godot, git) need a writable one
+    home.mkdir(parents=True, exist_ok=True)
     return subprocess.run(["sandbox-exec", "-p", check_profile(job), "/bin/sh", "-c", task["test"]], cwd=job / "repo",
-                          env={**os.environ, "TMPDIR": str(tmp)}, **kwargs)
+                          env={**os.environ, "TMPDIR": str(tmp), "HOME": str(home), "GIT_CONFIG_GLOBAL": "/dev/null"}, **kwargs)
 
 
 def test(name):

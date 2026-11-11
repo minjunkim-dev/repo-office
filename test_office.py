@@ -440,13 +440,20 @@ class PipelineTests(unittest.TestCase):
         outside = Path(self.tmp.name) / "outside.txt"  # a sibling of the task folder, still in the temp folder
         script = "; ".join(f"(echo x >> {p} && echo {name} ok || echo {name} denied)" for name, p in (
             ("repo", "kept.txt"), ("outside", outside), ("task", self.job / "task.json"), ("pr", self.job / "pr.txt"),
-            ("gitfile", self.job / "repo/.git"), ("claude", self.job / "CLAUDE.md"))) + '; echo x > "$TMPDIR/t" && echo tmp ok; (ls ~ >/dev/null 2>&1 && echo home ok || echo home denied)'
+            ("gitfile", self.job / "repo/.git"), ("claude", self.job / "CLAUDE.md"))) + f'; echo x > "$TMPDIR/t" && echo tmp ok; (ls {Path.home()} >/dev/null 2>&1 && echo home ok || echo home denied)'
         script += f"; (mv {self.job / 'repo'} {self.job / 'moved'} 2>/dev/null && echo rename ok || echo rename denied)"
         result = self.engine.run_test(self.job, {"test": script}, sandboxed=True, capture_output=True, text=True)
         self.assertEqual(result.stdout.split("\n")[:-1], ["repo ok", "outside denied", "task denied", "pr denied",
                                                          "gitfile denied", "claude denied", "tmp ok", "home denied",
                                                          "rename denied"])
         self.assertFalse(outside.exists() or (self.job / "pr.txt").exists() or (self.job / "CLAUDE.md").exists())
+
+    @unittest.skipUnless(shutil.which("sandbox-exec"), "macOS sandbox-exec")
+    def test_check_stage_gives_a_home_inside_the_task_folder(self):
+        # The real home is unreadable there; without this HOME, git fails on ~/.gitconfig and tools fail writing their caches.
+        script = 'git rev-parse HEAD >/dev/null && echo git ok; echo "$HOME"; echo x > "$HOME/c" && echo cache ok'
+        result = self.engine.run_test(self.job, {"test": script}, sandboxed=True, capture_output=True, text=True)
+        self.assertEqual(result.stdout.split("\n")[:-1], ["git ok", str(self.job / "tmp/home"), "cache ok"], result.stderr)
 
     @unittest.skipUnless(shutil.which("sandbox-exec") and shutil.which("nc"), "macOS sandbox-exec")
     def test_check_stage_reaches_only_unix_sockets_in_the_task_folder(self):
