@@ -408,7 +408,9 @@ def skills(name, base):
     """matt-skills check_skills.py, like preflight, reads the git repository of its working folder."""
     job = JOBS / name
     error = missing(job, name, "task.json")
-    if error or not re.fullmatch(r"refs/remotes/[\w./-]+", base):  # the base ref preflight printed, nothing else
+    # The base ref preflight printed, nothing else: no options, no `..` revision ranges. The worker runs this inside
+    # its sandbox; moving it to excludedCommands needs this script reviewed like preflight.
+    if error or not re.fullmatch(r"refs/remotes/[\w/-]+(\.[\w-]+)*", base) or "//" in base:
         print(error or f"base must be the preflight's base ref, got {base!r}", file=sys.stderr)
         return 2
     script = BASELINE / "profiles/matt-skills/check_skills.py"

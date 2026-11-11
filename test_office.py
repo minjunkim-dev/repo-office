@@ -474,7 +474,8 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(self.engine.skills("search", "refs/remotes/origin/main"), 2)
             (argv, kwargs), = run.call_args_list
             with contextlib.redirect_stderr(io.StringIO()):
-                for base in ("--output=/tmp/x", "main", "refs/remotes/origin/main --x"):
+                for base in ("--output=/tmp/x", "main", "refs/remotes/origin/main --x", "refs/remotes/origin/main..HEAD",
+                             "refs/remotes/origin/main...x", "refs/remotes/../../x"):
                     self.assertEqual(self.engine.skills("search", base), 2)
         self.assertEqual(run.call_count, 1)  # a bad base never runs the script
         script = str(self.engine.BASELINE / "profiles/matt-skills/check_skills.py")
