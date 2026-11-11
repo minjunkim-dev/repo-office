@@ -7,6 +7,7 @@
   engine.py workers           show every task's stage from files only
   engine.py test <task>       run the task's test command in its repo/ (workers cannot cd there)
   engine.py preflight <task>  run repo-baseline's review preflight for pr.txt in its repo/, diff into pr.diff
+  engine.py skills <task> <base>  run matt-skills check_skills.py in its repo/ (exit 0 delegate, 1 missing, 2 do not)
 
 Exit codes for run: 0 done, 2 no such task or another run of it is going, 3 waiting for a person, 4 blocked.
 """
@@ -403,6 +404,20 @@ def preflight(name):
     return 0
 
 
+def skills(name, base):
+    """matt-skills check_skills.py, like preflight, reads the git repository of its working folder."""
+    job = JOBS / name
+    error = missing(job, name, "task.json")
+    # The base ref preflight printed, nothing else: no options, no `..` revision ranges. The worker runs this inside
+    # its sandbox; moving it to excludedCommands needs this script reviewed like preflight.
+    if error or not re.fullmatch(r"refs/remotes/[\w/-]+(\.[\w-]+)*", base) or "//" in base:
+        print(error or f"base must be the preflight's base ref, got {base!r}", file=sys.stderr)
+        return 2
+    script = BASELINE / "profiles/matt-skills/check_skills.py"
+    return subprocess.run([sys.executable, "-I", str(script), base, "--harness", "claude"], cwd=job / "repo",
+                          env=SAFE_GIT).returncode
+
+
 def approve(name):
     job = JOBS / name
     error = missing(job, name, "task.json", "state.json")
@@ -459,6 +474,9 @@ def main(argv=None):
     created.add_argument("--base", default="main")
     for command in ("run", "approve", "test", "preflight"):
         sub.add_parser(command).add_argument("task")
+    checked = sub.add_parser("skills")
+    checked.add_argument("task")
+    checked.add_argument("base")
     sub.add_parser("workers")
     args = parser.parse_args(argv)
     if BASELINE is None and args.command != "workers":
@@ -468,6 +486,8 @@ def main(argv=None):
         return new(args.task, args.repo, args.test, args.allow, args.base)
     if args.command == "workers":
         return workers()
+    if args.command == "skills":
+        return skills(args.task, args.base)
     return {"run": run, "approve": approve, "test": test, "preflight": preflight}[args.command](args.task)
 
 
