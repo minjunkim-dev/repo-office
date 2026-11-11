@@ -16,9 +16,9 @@
 | 구성 요소 | 어디 | 맡는 층 | 지금 상태 |
 | --- | --- | --- | --- |
 | repo-baseline(원본) | `minjunkim-dev/repo-baseline`, 로컬 `~/Workspace/01_Projects/03_SideApp/repo-baseline` | PR이 `main`에 들어가는 조건: 완료 증거, 다른 컨텍스트 리뷰, Door, 사람 병합, GitHub 설정, 회고 | 코어 4파일 + 선택 프로필. 2026-11-11 `main` = `49214f2` |
-| repo-baseline-office(이 저장소) | `minjunkim-dev/repo-baseline-office` | PR 전 작업을 단계로 돌린다: 설계 → 사람 승인 → 구현 → 검사 → (사람이 PR) → 리뷰 | 엔진·권한·sandbox 검증 끝. 스킬 연결 없음(§4) |
-| Matt Pocock 스킬 | 개인 스킬 `~/.config/mattpocock-skills/<sha>/skills` → `~/.agents/skills`·`~/.claude/skills` symlink. 플러그인 `mattpocock-skills@*`는 사용자 설정에서 꺼져 있다 | 개발 절차의 뼈대(재설계 전), 지금은 리뷰 두 축·회고·PR 본문([matt-skills 프로필](../profiles/matt-skills/README.md)) | 설치됨. office 작업자에서 쓰는지 미확인(§5) |
-| pstack | 플러그인 `pstack@cursor-plugins` 0.15.36(켜짐). 원본 `~/.local/share/pstack-plugin` | 설계 질문(`interrogate`), 영향 범위(`blast-radius`), 검증 스킬 만들기, 교정(`correct`) | 설치됨. [pstack 프로필](../profiles/pstack/README.md)은 "사람이 부를 때만" |
+| repo-office(이 저장소) | `minjunkim-dev/repo-office`(비공개). 2026-11-11에 repo-baseline-office의 `claude-office/`에서 옮겼다 | PR 전 작업을 단계로 돌린다: 설계 → 사람 승인 → 구현 → 검사 → (사람이 PR) → 리뷰 | 엔진·권한·sandbox 검증 끝. 스킬 연결 없음(§4) |
+| Matt Pocock 스킬 | 개인 스킬 `~/.config/mattpocock-skills/<sha>/skills` → `~/.agents/skills`·`~/.claude/skills` symlink. 플러그인 `mattpocock-skills@*`는 사용자 설정에서 꺼져 있다 | 개발 절차의 뼈대(재설계 전), 지금은 리뷰 두 축·회고·PR 본문([matt-skills 프로필](https://github.com/minjunkim-dev/repo-baseline/blob/main/profiles/matt-skills/README.md)) | 설치됨. office 작업자에서 쓰는지 미확인(§5) |
+| pstack | 플러그인 `pstack@cursor-plugins` 0.15.36(켜짐). 원본 `~/.local/share/pstack-plugin` | 설계 질문(`interrogate`), 영향 범위(`blast-radius`), 검증 스킬 만들기, 교정(`correct`) | 설치됨. [pstack 프로필](https://github.com/minjunkim-dev/repo-baseline/blob/main/profiles/pstack/README.md)은 "사람이 부를 때만" |
 | 강연 원칙(Readray 노트 10개) | 원본 재설계안(`f31431f^:docs/archive/redesign-2026-11.md`) | 브레이크 3겹, `REVIEW.md`, 증거, Door, 리뷰 3라운드, 반복 지적은 환경으로 | 원본 POLICY·템플릿에 반영됨 |
 | office 참고 영상 2편 | [HANDOFF.md](HANDOFF.md) §3 | 대장 하나 + 단계표 + 설계 승인 해시 + 단계별 권한 | `pipeline/`로 구현됨 |
 | 개인 도구 | `hc`(herdr-core), ai-memory, trail, Semgrep CLI 등 | 작업자 띄우기, 세션 간 기억 | 엔진이 `hc`를 쓴다 |
@@ -100,18 +100,19 @@ git show f31431f^:docs/archive/CHANGELOG-2026.md       # 재설계 전 변경 �
    - (나) 엔진이 `hc send`로 작업자 터미널에 `/스킬이름`을 입력한다. 기술적으로 사람 입력이라 돌지만, 작성자의 수동 표시를 우회한다.
    - (다) 작업자가 `SKILL.md`를 참고 문서로 읽는다. 역시 우회다.
 4. 작업자에 스킬을 어떻게 실을까.
-   - office 체크아웃의 프로젝트 설정(`.claude/settings.json`의 `extraKnownMarketplaces`·`enabledPlugins`, 원본 [templates/github/agents/README.md](../templates/github/agents/README.md)의 예)으로 플러그인을 켠다.
+   - office 체크아웃의 프로젝트 설정(`.claude/settings.json`의 `extraKnownMarketplaces`·`enabledPlugins`, 원본 [templates/github/agents/README.md](https://github.com/minjunkim-dev/repo-baseline/blob/main/templates/github/agents/README.md)의 예)으로 플러그인을 켠다.
    - 쓰는 스킬만 office 체크아웃 `.claude/skills/`에 둔다. 하네스 폴더라 신뢰 경계 경로이고 Door는 어려움이다.
    - `--setting-sources`를 넓힌다. 사용자 전역 허용 규칙이 새므로 권하지 않는다(HANDOFF §4).
-5. 원본 프로필(matt-skills·pstack)의 규칙을 바꿔야 하면 원본에서 바꾼다. 이 저장소의 `claude-office/` 밖은 원본과 같게 둔다.
+5. 원본 프로필(matt-skills·pstack)의 규칙을 바꿔야 하면 원본에서 바꾼다. 이 저장소에는 원본 파일의 사본을 두지 않는다.
 6. PR 열기를 자동으로 할까. 지금은 사람이 연다. 제안: 검사 단계가 통과하면 엔진이 PR 브랜치를 push하고 초안(draft) PR을 연다. 사람은 초안을 보고 "Ready for review"로 바꾸거나 닫는다. 근거: 원본 재설계안의 원칙이 "PR은 열되 병합은 막는다"이고, 초안 PR은 닫으면 되돌아간다. 바꿀 곳은 단계표·leader 규칙·`AGENTS.md`이므로 소유자 승인이 필요하다. 원격에 처음 무언가를 올리는 단계라 Door는 어려움으로 본다.
-7. office를 어디에 둘까. 지금은 원본 위에 `claude-office/`를 얹은 후보 저장소다(README). 원본을 정본으로 두는 것은 유지한다. office를 정본으로 삼으면 모든 소비 레포가 Claude Code·macOS·`hc`에 묶이고, #73의 "어떤 하네스든 `cp`만으로"가 깨진다.
+7. office를 어디에 둘까. 2026-11-11에 별도 저장소 `minjunkim-dev/repo-office`(이 저장소)로 옮겼다. 아래는 그 경위다. 옮기기 전에는 원본 위에 `claude-office/`를 얹은 후보 저장소다(README). 원본을 정본으로 두는 것은 유지한다. office를 정본으로 삼으면 모든 소비 레포가 Claude Code·macOS·`hc`에 묶이고, #73의 "어떤 하네스든 `cp`만으로"가 깨진다.
    - 지금 구조의 비용: `claude-office/` 밖을 원본과 손으로 맞춘다. 이 저장소가 원본의 사본인 이유는 엔진이 상위 폴더를 repo-baseline 클론으로 쓰기 때문이다(`engine.py`의 `BASELINE = OFFICE.parent`). 리뷰 단계도 원본 판이 아니라 이 사본의 `prompts/review.md`·`tools/review_preflight.py`를 쓴다.
    - 원본의 선택 프로필(`profiles/office`)로 옮기는 안은 버린다. `profiles/`는 소비 레포가 복사해 가는 파일을 두는 곳인데, office는 소비 레포에 복사하지 않고 자기 체크아웃에서 돈다. 또 macOS·Claude Code에 묶인 코드와 테스트가 중립 정본에 들어온다.
    - 제안: office를 `claude-office/`만 담은 별도 저장소로 만들고, repo-baseline 클론의 경로를 설정으로 받는다. 그러면 맞추는 비용이 없어지고 리뷰는 원본 판을 쓴다. 지금 저장소는 보관한다. 정본을 건드리지 않으므로 office의 검증을 기다릴 필요는 없다.
    - 고칠 곳은 한 줄이 아니다. `BASELINE`은 `engine.py`에서 12번 쓰이고, 그중 작업자 sandbox의 쓰기 금지 경로(지금은 `BASELINE` 아래에서 `OFFICE`를 뺀 나머지를 막는다), 검사 단계 sandbox의 읽기 경로, repo-baseline 자신의 PR을 리뷰할 때 클론이 `origin/main`과 같은지 보는 검사가 이 배치를 전제한다. 신뢰 경계를 바꾸므로 Door는 어려움이고, 새 저장소를 만드는 일이라 소유자가 정한다.
-   - 클론 경로는 2026-11-11에 `claude-office/baseline.path`(git이 무시하는 한 줄 파일)로 정했다. 환경 변수는 `hc`로 띄운 작업자에게 전해지는지 확인하지 않아 쓰지 않았다. 없으면 지금처럼 상위 폴더를 쓴다. 리뷰 고정 검사는 클론 밖의 office 체크아웃도 `origin/main`과 비교한다.
-   - 정할 것: git 기록을 옮길지(`git filter-repo` 등), office를 계속 쓸지 판단하는 기준(예: 실제 과제 N개가 사람 개입 없이 PR 직전까지 감).
+   - 클론 경로는 2026-11-11에 `claude-office/baseline.path`(git이 무시하는 한 줄 파일)로 정했다. 환경 변수는 `hc`로 띄운 작업자에게 전해지는지 확인하지 않아 쓰지 않았다. repo-baseline-office에서는 없으면 상위 폴더를 썼고, 이 저장소에서는 없으면 엔진이 멈춘다. 리뷰 고정 검사는 office 체크아웃도 `origin/main`과 비교한다.
+   - git 기록은 `git filter-repo --subdirectory-filter claude-office`로 옮겼다(22커밋).
+   - 정할 것: office를 계속 쓸지 판단하는 기준(예: 실제 과제 N개가 사람 개입 없이 PR 직전까지 감).
 
 ## 9. 제안하는 다음 순서
 
@@ -124,24 +125,24 @@ git show f31431f^:docs/archive/CHANGELOG-2026.md       # 재설계 전 변경 �
 
 ## 10. 이어받는 세션에 줄 프롬프트
 
-아래를 그대로 붙여 넣는다. 이 문서가 `main`에 병합되기 전이면 원격 브랜치에서 읽는다.
+아래를 그대로 붙여 넣는다.
 
 ```text
-repo-baseline-office의 개발 하네스 작업을 이어받아 줘.
+repo-office의 개발 하네스 작업을 이어받아 줘.
 
 1. 먼저 읽을 것(이 순서):
-   - claude-office/HARNESS.md  (목표, 구성 요소, 스킬 연결의 빈틈, 다음 순서)
-   - claude-office/HANDOFF.md  (엔진 상태와 함정)
-   - claude-office/AGENTS.md, 루트 AGENTS.md, POLICY.md
-   위치: main에 없으면 git fetch origin 뒤 원격 브랜치 claude/dev-harness-operation-67729c의 head. 원본 repo-baseline 로컬 클론은 ~/Workspace/01_Projects/03_SideApp/repo-baseline.
+   - HARNESS.md  (목표, 구성 요소, 스킬 연결의 빈틈, 다음 순서)
+   - HANDOFF.md  (엔진 상태와 함정)
+   - AGENTS.md, 원본 repo-baseline의 POLICY.md
+   원본 repo-baseline 로컬 클론은 ~/Workspace/01_Projects/03_SideApp/repo-baseline.
 2. HARNESS.md §1의 목표는 2026-11-11에 정했다. 설계하거나 고치기 전에
    §8의 결정 중 아직 정하지 않은 것을 하나씩 물어봐.
 3. 내가 정하면 §9 순서대로 이슈 하나·PR 하나씩 진행해. 첫 단계는 코드 변경 없는 실측이다.
 4. 지킬 것:
    - 저장소 규칙(루트 AGENTS.md, POLICY.md)이 먼저다. PR마다 CHANGELOG.md 1~3줄, PR 본문 Summary에 완료 기준.
-   - claude-office/ 밖은 원본과 같게 둔다. 프로필(profiles/) 규칙을 바꿔야 하면 원본 repo-baseline에서 한다.
+   - 프로필(profiles/)이나 리뷰 프롬프트 규칙을 바꿔야 하면 원본 repo-baseline에서 한다.
    - 단계표(stages.json)·지시서·leader 규칙은 내 승인 없이 바꾸지 않는다.
    - 병합하지 않는다. main에 push하지 않는다.
-   - gh 명령에는 --repo minjunkim-dev/repo-baseline-office를 붙인다.
+   - gh 명령에는 --repo minjunkim-dev/repo-office를 붙인다.
    - 확인하지 않은 것은 확인하지 않았다고 적는다.
 ```
