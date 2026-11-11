@@ -27,7 +27,14 @@ from pathlib import Path
 
 PIPELINE = Path(__file__).resolve().parent
 OFFICE = PIPELINE.parent
-BASELINE = OFFICE.parent  # this checkout carries repo-baseline's prompts/ and tools/
+# The repo-baseline clone whose prompts/ and tools/ the stages use. A person writes its path in baseline.path
+# (git ignores it, workers cannot write it); without the file the office checkout sits inside that clone.
+_PATH = OFFICE / "baseline.path"
+BASELINE = Path(_PATH.read_text(encoding="utf-8").strip()).expanduser() if _PATH.exists() else OFFICE.parent
+# A relative or empty path would follow the working folder; a worker runs preflight from its task folder, which it can write.
+if not BASELINE.is_absolute():
+    sys.exit(f"{_PATH} must hold the absolute path of the repo-baseline clone")
+BASELINE = BASELINE.resolve()
 JOBS = Path(os.environ.get("OFFICE_JOBS", OFFICE / "jobs"))
 STAGES = Path(os.environ.get("OFFICE_STAGES", PIPELINE / "stages.json"))
 DONE, WAIT, BLOCKED = 0, 3, 4
@@ -101,6 +108,7 @@ def sandbox(base, job, task):
     # Files that do not exist yet but that a later session or git would read as instructions or settings.
     for root in (BASELINE, OFFICE, job):
         deny += [str(root / n) for n in ("CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".claude", ".mcp.json", ".envrc", ".git")]
+    deny.append(str(_PATH))  # names the clone whose prompts and preflight the review stage runs
     # The engine's control files: the edit rules bind the Edit and Write tools only, not code a test runs.
     deny += [str(job / n) for n in ("task.json", "state.json", "pr.txt", "pr.diff", "run.lock")]
     # Where git takes settings and hooks: the worktree's gitdir pointer, the shared config and hooks, the worktree links.
@@ -177,27 +185,30 @@ def slug(url):
 
 
 def unpinned(job, task):
-    """Why this checkout may not review the task's PR, else None.
+    """Why these checkouts may not review the task's PR, else None.
 
-    The review worker gets its prompt, permissions, preflight script and REVIEW.md from this checkout. For a
-    PR of this same repository they must be origin/main's copies, or the PR could rewrite its own review.
-    Only a PR that provably belongs to another repository skips the comparison.
+    The review worker gets its prompt, permissions and preflight script from the office and repo-baseline checkouts,
+    and REVIEW.md from repo-baseline. For a PR of the same repository as either one, that checkout must be
+    origin/main's copy, or the PR could rewrite its own review. Only a PR that provably belongs to another
+    repository skips the comparison. An office checkout inside the repo-baseline clone is the same repository.
     """
     def git(cwd, *args):
         return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True)
 
     pr_file = job / "pr.txt"  # a person wrote it; workers cannot edit it
     pr = slug(pr_file.read_text(encoding="utf-8")) if pr_file.exists() else None
-    own = slug(git(BASELINE, "remote", "get-url", "origin").stdout)
-    common = [git(d, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip() for d in (BASELINE, task["repo"])]
-    if pr and own and pr != own and common[0] and common[1] and common[0] != common[1]:
-        return None
-    git(BASELINE, "fetch", "-q", "origin", "main")  # offline: the comparison below uses the last fetched main
-    # A missing origin/main makes diff fail, which also blocks. Ignored files (jobs/) are not compared.
-    if git(BASELINE, "diff", "--quiet", "origin/main").returncode or git(
-            BASELINE, "status", "--porcelain", "--untracked-files=all").stdout.strip():
-        return (f"the PR under review is not known to belong to another repository, and {BASELINE} differs from "
-                "origin/main: run the task from a clean checkout at origin/main")
+    product = git(task["repo"], "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
+    for root in [BASELINE] + ([] if OFFICE.is_relative_to(BASELINE) else [OFFICE]):
+        own = slug(git(root, "remote", "get-url", "origin").stdout)
+        common = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
+        if pr and own and pr != own and common and product and common != product:
+            continue
+        git(root, "fetch", "-q", "origin", "main")  # offline: the comparison below uses the last fetched main
+        # A missing origin/main makes diff fail, which also blocks. Ignored files (jobs/) are not compared.
+        if git(root, "diff", "--quiet", "origin/main").returncode or git(
+                root, "status", "--porcelain", "--untracked-files=all").stdout.strip():
+            return (f"the PR under review is not known to belong to another repository, and {root} differs from "
+                    "origin/main: run the task from a clean checkout at origin/main")
     return None
 
 
@@ -321,7 +332,7 @@ def check_profile(job):
     deny += f" (literal {quote(str(real / 'repo'))})"  # renaming repo/ away and back would rewrite repo/.git
     common = subprocess.run(["git", "-C", str(job / "repo"), "rev-parse", "--path-format=absolute", "--git-common-dir"],
                             capture_output=True, text=True, env=SAFE_GIT).stdout.strip()
-    readable = " ".join(f"(subpath {quote(str(Path(p).resolve()))})" for p in (job, BASELINE, *([common] if common else [])))
+    readable = " ".join(f"(subpath {quote(str(Path(p).resolve()))})" for p in (job, BASELINE, OFFICE, *([common] if common else [])))
     return ("(version 1) (allow default)\n"
             # Unix sockets only in the task folder: one outside, such as /var/run/docker.sock, can start processes outside the sandbox.
             f"(deny network-outbound) (allow network-outbound (remote ip \"localhost:*\") (remote unix-socket (subpath {quote(str(real))})))\n"

@@ -110,7 +110,8 @@ git show f31431f^:docs/archive/CHANGELOG-2026.md       # 재설계 전 변경 �
    - 원본의 선택 프로필(`profiles/office`)로 옮기는 안은 버린다. `profiles/`는 소비 레포가 복사해 가는 파일을 두는 곳인데, office는 소비 레포에 복사하지 않고 자기 체크아웃에서 돈다. 또 macOS·Claude Code에 묶인 코드와 테스트가 중립 정본에 들어온다.
    - 제안: office를 `claude-office/`만 담은 별도 저장소로 만들고, repo-baseline 클론의 경로를 설정으로 받는다. 그러면 맞추는 비용이 없어지고 리뷰는 원본 판을 쓴다. 지금 저장소는 보관한다. 정본을 건드리지 않으므로 office의 검증을 기다릴 필요는 없다.
    - 고칠 곳은 한 줄이 아니다. `BASELINE`은 `engine.py`에서 12번 쓰이고, 그중 작업자 sandbox의 쓰기 금지 경로(지금은 `BASELINE` 아래에서 `OFFICE`를 뺀 나머지를 막는다), 검사 단계 sandbox의 읽기 경로, repo-baseline 자신의 PR을 리뷰할 때 클론이 `origin/main`과 같은지 보는 검사가 이 배치를 전제한다. 신뢰 경계를 바꾸므로 Door는 어려움이고, 새 저장소를 만드는 일이라 소유자가 정한다.
-   - 정할 것: 클론 경로를 받는 방법(환경 변수 또는 설정 파일), git 기록을 옮길지(`git filter-repo` 등), office를 계속 쓸지 판단하는 기준(예: 실제 과제 N개가 사람 개입 없이 PR 직전까지 감).
+   - 클론 경로는 2026-11-11에 `claude-office/baseline.path`(git이 무시하는 한 줄 파일)로 정했다. 환경 변수는 `hc`로 띄운 작업자에게 전해지는지 확인하지 않아 쓰지 않았다. 없으면 지금처럼 상위 폴더를 쓴다. 리뷰 고정 검사는 클론 밖의 office 체크아웃도 `origin/main`과 비교한다.
+   - 정할 것: git 기록을 옮길지(`git filter-repo` 등), office를 계속 쓸지 판단하는 기준(예: 실제 과제 N개가 사람 개입 없이 PR 직전까지 감).
 
 ## 9. 제안하는 다음 순서
 

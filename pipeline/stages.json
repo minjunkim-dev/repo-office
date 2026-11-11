@@ -7,6 +7,8 @@
   "dontAsk",
   "--add-dir",
   "{baseline}",
+  "--add-dir",
+  "{office}",
   "--settings",
   "{\"permissions\":{\"blockReadsOutsideWorkingDirectories\":true}}"
  ],

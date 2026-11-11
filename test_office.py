@@ -117,6 +117,7 @@ class PipelineTests(unittest.TestCase):
             self.assertFalse([d for d in deny if str(self.job).startswith(d)])
             for name in ("task.json", "state.json", "pr.txt", "repo/.git", "CLAUDE.md"):
                 self.assertIn(str(self.job / name), deny)
+            self.assertIn(str(self.engine.OFFICE / "baseline.path"), deny)  # even before a person writes it
             self.assertIn(f"python3 {self.engine.OFFICE}/pipeline/engine.py preflight search", box["excludedCommands"])
             self.assertNotIn("Read", argv)
             self.assertIn(f"Read(/{self.job}/**)", argv)
@@ -271,7 +272,7 @@ class PipelineTests(unittest.TestCase):
         (repo / "tools/review_preflight.py").write_text("main\n", encoding="utf-8")
         for args in (["add", "tools"], ["commit", "-q", "-m", "tools"]):
             subprocess.run(["git", "-C", str(repo), *args], check=True)
-        self.engine.BASELINE = repo  # the office checkout and the product are the same repository
+        self.engine.BASELINE = self.engine.OFFICE = repo  # office, repo-baseline and the product are one repository
         (self.job / "design.md").write_text("d\n", encoding="utf-8")
 
         def review():
@@ -307,6 +308,19 @@ class PipelineTests(unittest.TestCase):
         own = engine.slug(subprocess.run(["git", "-C", str(ROOT), "remote", "get-url", "origin"], capture_output=True, text=True).stdout)
         if own:  # a checkout with a GitHub origin
             self.assertIsNone(engine.unpinned(self.job, task))
+        # An office checkout outside the repo-baseline clone is compared too: the PR could belong to either.
+        baseline = Path(self.tmp.name) / "baseline"
+        for path in (baseline, other):
+            subprocess.run(["git", "init", "-q", str(path)], check=True)
+            subprocess.run(["git", "-C", str(path), "-c", "user.name=t", "-c", "user.email=t@example.com",
+                            "commit", "-q", "--allow-empty", "-m", "main"], check=True)
+        subprocess.run(["git", "-C", str(baseline), "update-ref", "refs/remotes/origin/main", "HEAD"], check=True)
+        with unittest.mock.patch.object(engine, "BASELINE", baseline), unittest.mock.patch.object(engine, "OFFICE", other):
+            self.assertIn(str(other), engine.unpinned(self.job, task))  # the office checkout has no origin/main
+            subprocess.run(["git", "-C", str(other), "update-ref", "refs/remotes/origin/main", "HEAD"], check=True)
+            self.assertIsNone(engine.unpinned(self.job, task))
+            (other / "new.py").write_text("", encoding="utf-8")
+            self.assertIn(str(other), engine.unpinned(self.job, task))
         self.assertEqual(engine.slug("git@github.com:O/R.git\n"), "o/r")
         self.assertEqual(engine.slug("https://github.com/o/r/pull/1\n"), "o/r")
         self.assertIsNone(engine.slug("/tmp/r"))
@@ -379,6 +393,24 @@ class PipelineTests(unittest.TestCase):
         self.assertNotEqual(self.engine.test("search"), 0)
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(self.engine.test("nope"), 2)
+
+    def test_baseline_path_names_the_clone_else_the_parent_folder(self):
+        office = Path(self.tmp.name) / "standalone"
+        shutil.copytree(OFFICE / "pipeline", office / "pipeline", ignore=shutil.ignore_patterns("__pycache__"))
+
+        def baseline():
+            spec = importlib.util.spec_from_file_location("standalone", office / "pipeline/engine.py")
+            engine = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(engine)
+            return engine.BASELINE
+
+        self.assertEqual(baseline(), office.resolve().parent)
+        (office / "baseline.path").write_text(f"{ROOT}\n", encoding="utf-8")
+        self.assertEqual(baseline(), ROOT)
+        for text in ("clone\n", "\n"):  # would follow the working folder, which for a worker is its writable task folder
+            (office / "baseline.path").write_text(text, encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                baseline()
 
     def test_preflight_runs_the_baseline_script_in_repo_for_pr_txt(self):
         with contextlib.redirect_stderr(io.StringIO()):
