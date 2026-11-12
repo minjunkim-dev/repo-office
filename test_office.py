@@ -40,6 +40,7 @@ class FakeWorker:
         (self.job / f"{stage}.md").write_text(f"{stage} {len(self.calls)}\n", encoding="utf-8")
         if stage == "implement":
             subprocess.run(["git", "-C", str(self.job / "repo"), "commit", "-q", "--allow-empty", "-m", "x"], check=True)
+            (self.job / "pr-body.md").write_text("# fix: x\n\n## Summary\n", encoding="utf-8")
         return None
 
 
@@ -77,7 +78,30 @@ class PipelineTests(unittest.TestCase):
     def state(self):
         return json.loads((self.job / "state.json").read_text())
 
+    def fake_github(self):
+        """origin is a GitHub URL whose pushes land in a local bare repository; gh records its calls."""
+        bare, bin_dir = Path(self.tmp.name) / "origin.git", Path(self.tmp.name) / "ghbin"
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        repo = ["git", "-C", str(self.job / "repo")]
+        subprocess.run([*repo, "remote", "add", "origin", "https://github.com/o/r.git"], check=True)
+        subprocess.run([*repo, "config", f"url.{bare}.pushInsteadOf", "https://github.com/o/r.git"], check=True)
+        bin_dir.mkdir()
+        log, draft = Path(self.tmp.name) / "gh.log", Path(self.tmp.name) / "draft"
+        draft.write_text("true\n", encoding="utf-8")
+        (bin_dir / "gh").write_text(
+            "#!/usr/bin/env python3\nimport json, sys\n"
+            f"open({str(log)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
+            "if sys.argv[1:3] == ['pr', 'create']: print('https://github.com/O/R/pull/7')\n"
+            f"if sys.argv[1:3] == ['pr', 'view']: print(open({str(draft)!r}).read().strip())\n", encoding="utf-8")
+        (bin_dir / "gh").chmod(0o755)
+        patcher = unittest.mock.patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        calls = lambda: [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []  # noqa: E731
+        return bare, draft, calls
+
     def test_full_flow_waits_for_people_and_keeps_contexts_apart(self):
+        bare, draft, gh = self.fake_github()
         worker = FakeWorker(self.job)
         self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
         self.assertEqual(self.state()["stage"], "approve")
@@ -85,13 +109,27 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
         self.assertEqual(self.state()["stage"], "pr")
         self.assertIn("exit 0", (self.job / "check.md").read_text())
+        # The engine pushed the task branch and opened a draft from the worker's body; the review waits for a person.
+        head = subprocess.run(["git", "-C", str(self.job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout
+        self.assertEqual(subprocess.run(["git", "-C", str(bare), "rev-parse", "office/search"], capture_output=True, text=True).stdout, head)
+        create = gh()[0]
+        self.assertEqual(create[:3], ["pr", "create", "--repo"])
+        self.assertEqual([create[create.index(f) + 1] for f in ("--repo", "--head", "--base", "--title", "--body")],
+                         ["o/r", "office/search", "main", "fix: x", "## Summary\n"])
+        self.assertIn("--draft", create)
+        self.assertEqual((self.job / "pr.txt").read_text(), "https://github.com/O/R/pull/7\n")
+        self.assertNotIn("branch.office/search.remote", subprocess.run(
+            ["git", "-C", str(self.job / "repo"), "config", "--list"], capture_output=True, text=True).stdout)  # no -u
+        self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)  # still a draft
+        self.assertEqual([c[:2] for c in gh()], [["pr", "create"], ["pr", "view"], ["pr", "view"]])
+        draft.write_text("false\n", encoding="utf-8")
         # An office checkout whose origin differs from the PR's repository, whatever this checkout's origin is.
         office = Path(self.tmp.name) / "office"
         subprocess.run(["git", "init", "-q", str(office)], check=True)
         subprocess.run(["git", "-C", str(office), "remote", "add", "origin", "https://github.com/me/office.git"], check=True)
         self.engine.BASELINE = office
-        (self.job / "pr.txt").write_text("https://github.com/o/r/pull/1\n")
         self.assertEqual(self.engine.run("search", worker), self.engine.DONE)
+        self.assertEqual([c[:2] for c in gh()].count(["pr", "create"]), 1)
 
         (design, d_argv, message), (implement, i_argv, _), (review, r_argv, _) = worker.calls
         self.assertEqual((design, implement, review), ("design", "implement", "review"))
@@ -226,6 +264,7 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("left.txt", (self.job / "check.md").read_text())
 
     def test_files_the_test_writes_do_not_fail_the_check(self):
+        self.fake_github()
         worker = FakeWorker(self.job)
         self.engine.run("search", worker)
         self.engine.approve("search")
@@ -234,6 +273,30 @@ class PipelineTests(unittest.TestCase):
         (self.job / "task.json").write_text(json.dumps(task))
         self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
         self.assertIn("커밋하지 않은 변경: 없음", (self.job / "check.md").read_text())
+
+    def test_draft_stage_opens_one_pr_and_blocks_instead_of_forcing(self):
+        bare, _, gh = self.fake_github()
+        stage = {"id": "draft", "body": "pr-body.md", "out": "pr.txt"}
+        task = json.loads((self.job / "task.json").read_text())
+        body = self.job / "pr-body.md"
+        for text in (None, "no title line\n", "# \n"):
+            if text:
+                body.write_text(text, encoding="utf-8")
+            self.assertIn("# <PR title>", self.engine.open_draft(self.job, task, stage))
+        self.assertEqual(gh(), [])
+        # A branch of that name with other history on the remote: no force push, no PR.
+        other = Path(self.tmp.name) / "other"
+        subprocess.run(["git", "clone", "-q", str(bare), str(other)], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(other), "-c", "user.name=t", "-c", "user.email=t@example.com",
+                        "commit", "-q", "--allow-empty", "-m", "theirs"], check=True)
+        subprocess.run(["git", "-C", str(other), "push", "-q", "origin", "HEAD:refs/heads/office/search"], check=True, capture_output=True)
+        body.write_text("# fix: x\n", encoding="utf-8")
+        self.assertIn("git push failed", self.engine.open_draft(self.job, task, stage))
+        self.assertEqual(gh(), [])
+        # A URL already in pr.txt (an earlier run, or a person) is kept: nothing is pushed or opened.
+        (self.job / "pr.txt").write_text("https://github.com/o/r/pull/1\n", encoding="utf-8")
+        self.assertIsNone(self.engine.open_draft(self.job, task, stage))
+        self.assertEqual(gh(), [])
 
     def test_check_stage_reads_the_clone_and_the_office_checkout(self):
         profile = self.engine.check_profile(self.job)

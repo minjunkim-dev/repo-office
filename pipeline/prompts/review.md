@@ -11,7 +11,7 @@
   - 4번에서 스킬은 `mattpocock-skills:code-review`라고 이름을 다 써서 부른다. 앞 이름 없는 `code-review`는 Claude Code 내장 스킬로 간다. 스킬에 넘길 때 diff는 `git diff`로 만들지 말고 `{job}/pr.diff`를 Read로 읽으라고 덧붙인다. 커밋 목록이 필요하면 `git -C repo log <base>..HEAD --oneline`이다. 이 단계의 작업 폴더는 git 저장소가 아니다.
 - 리뷰할 PR: `{job}/pr.txt`에 적힌 URL. 작업 트리 `{job}/repo/`는 이미 그 PR의 브랜치다. `gh pr checkout`은 하지 않는다.
 - 고친 커밋은 `git -C {job}/repo push origin HEAD`로만 push한다.
-- 보고는 그 프롬프트의 「보고」 형식으로 `{job}/review.md`에 쓴다. 같은 내용을 PR 본문 Review 칸에도 적는다. 고친 본문 전체를 `{job}/pr-body.md`에 쓰고 `gh pr edit <PR URL> --body-file {job}/pr-body.md`로 올린다. 그다음 끝낸다.
+- 보고는 그 프롬프트의 「보고」 형식으로 `{job}/review.md`에 쓴다. 같은 내용을 PR 본문 Review 칸에도 적는다. `gh pr view`로 받은 지금 본문을 고쳐, 그 본문 전체를 `{job}/pr-body.md`에 덮어쓰고 `gh pr edit <PR URL> --body-file {job}/pr-body.md`로 올린다. 그다음 끝낸다.
 - 병합·`main` push·배포는 하지 않는다. 병합은 소유자가 한다(POLICY §5).
 - 막히면 지어내지 말고 `{job}/BLOCKED.md`에 이유를 적고 끝낸다.
 - 끝낼 때는 `{job}/review.md`나 `{job}/BLOCKED.md` 중 하나를 반드시 쓴다. 앞 라운드에서 이미 끝난 일이어도 이번 결과를 새로 쓴다. 둘 다 없으면 엔진은 실패로 센다.

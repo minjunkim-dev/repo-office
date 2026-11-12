@@ -111,7 +111,7 @@ python3 pipeline/engine.py new toy-subtract --repo /tmp/toy --test 'python3 -m u
 # jobs/toy-subtract/INTENT.md에 목표를 쓴다. 예: calc.py에 subtract(a, b)와 테스트를 더한다
 OFFICE_STAGES=/tmp/stages-sonnet.json python3 pipeline/engine.py run toy-subtract   # exit 3: 설계 승인 대기
 python3 pipeline/engine.py approve toy-subtract                                       # 사람이 design.md를 읽은 뒤
-OFFICE_STAGES=/tmp/stages-sonnet.json python3 pipeline/engine.py run toy-subtract   # exit 3: pr.txt 대기
+OFFICE_STAGES=/tmp/stages-sonnet.json python3 pipeline/engine.py run toy-subtract   # exit 4: origin이 GitHub이 아니라 초안 PR을 못 연다. GitHub 저장소면 exit 3: 초안 PR 대기
 python3 pipeline/engine.py workers
 ```
 

@@ -9,6 +9,8 @@
   engine.py preflight <task>  run repo-baseline's review preflight for pr.txt in its repo/, diff into pr.diff
   engine.py skills <task> <base>  run matt-skills check_skills.py in its repo/ (exit 0 delegate, 1 missing, 2 do not)
 
+After the check passes, run pushes the task branch and opens a draft PR from pr-body.md; a person marks it ready.
+
 Exit codes for run: 0 done, 2 no such task or another run of it is going, 3 waiting for a person, 4 blocked.
 """
 
@@ -196,7 +198,7 @@ def unpinned(job, task):
     def git(cwd, *args):
         return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True)
 
-    pr_file = job / "pr.txt"  # a person wrote it; workers cannot edit it
+    pr_file = job / "pr.txt"  # the draft stage or a person wrote it; workers cannot edit it
     pr = slug(pr_file.read_text(encoding="utf-8")) if pr_file.exists() else None
     product = git(task["repo"], "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
     for root in (BASELINE, OFFICE):  # the same repository twice gives the same answer twice
@@ -210,6 +212,48 @@ def unpinned(job, task):
                 root, "status", "--porcelain", "--untracked-files=all").stdout.strip():
             return (f"the PR under review is not known to belong to another repository, and {root} differs from "
                     "origin/main: run the task from a clean checkout at origin/main")
+    return None
+
+
+def open_draft(job, task, stage):
+    """Push the task branch and open a draft PR with the body the implement worker wrote, else why not."""
+    pr_file = job / stage["out"]
+    if pr_file.exists():  # an earlier run opened it, or a person did and wrote the URL
+        return None
+    body = job / stage["body"]
+    title, _, text = (body.read_text(encoding="utf-8") if body.exists() else "").partition("\n")
+    if not title.startswith("# ") or not title[2:].strip():
+        return f"{body} must exist and start with a `# <PR title>` line"
+    git = lambda *a: subprocess.run(["git", "-C", str(job / "repo"), *a], capture_output=True, text=True, env=SAFE_GIT)  # noqa: E731
+    repo = slug(git("remote", "get-url", "origin").stdout)
+    if not repo:
+        return "the product repository's origin is not on GitHub: open the PR and write its URL into pr.txt"
+    branch = f"office/{task['name']}"
+    # No -u: it writes the product repository's shared config. No force: a diverged branch of that name stops here.
+    push = git("push", "origin", f"HEAD:refs/heads/{branch}")
+    if push.returncode:
+        return f"git push failed: {push.stderr.strip()}"
+    made = subprocess.run(["gh", "pr", "create", "--repo", repo, "--draft", "--head", branch,
+                           "--base", task["base"].removeprefix("origin/"), "--title", title[2:].strip(),
+                           "--body", text.lstrip("\n")], cwd=job, capture_output=True, text=True)
+    url = (made.stdout.strip().splitlines() or [""])[-1]
+    if made.returncode or not re.fullmatch(rf"https://github\.com/{re.escape(repo)}/pull/\d+", url, re.I):
+        return f"gh pr create failed: {(made.stderr or made.stdout).strip()}"
+    pr_file.write_text(url + "\n", encoding="utf-8")
+    return None
+
+
+def not_ready(pr_file):
+    """What a person still has to do with the PR in pr_file before the review, else None."""
+    if not pr_file.exists():
+        return f"waiting: a person opens the PR and writes its URL into {pr_file}"
+    url = pr_file.read_text(encoding="utf-8").split()[:1]
+    view = subprocess.run(["gh", "pr", "view", *url, "--json", "isDraft", "--jq", ".isDraft"], cwd=pr_file.parent,
+                          capture_output=True, text=True)
+    if view.returncode:
+        return f"waiting: gh pr view {' '.join(url)} failed: {view.stderr.strip()}"
+    if view.stdout.strip() != "false":
+        return f"waiting: a person reads the draft PR {' '.join(url)} and marks it Ready for review, or closes it"
     return None
 
 
@@ -256,7 +300,7 @@ def advance(job, name, runner):
             print(f"blocked: see {job / 'BLOCKED.md'}")
             return BLOCKED
         if state["stage"] == "done":
-            print("done: the owner opens or merges the PR (POLICY §5)")
+            print("done: the owner merges the PR (POLICY §5)")
             return DONE
         index = ids.index(state["stage"])
         # An approval binds the file's content: any later change sends the task back to that approval.
@@ -271,9 +315,12 @@ def advance(job, name, runner):
             if stage.get("approve") and sha(job / stage["approve"]) != state.get("approved", {}).get(stage["id"]):
                 print(f"waiting: a person reads {job / stage['approve']} and runs engine.py approve {name}")
                 return WAIT
-            if stage.get("wait") and not (job / stage["wait"]).exists():
-                print(f"waiting: a person writes {job / stage['wait']}")
+            if stage.get("ready") and (waiting := not_ready(job / stage["ready"])):
+                print(waiting)
                 return WAIT
+        elif stage["by"] == "script" and stage.get("body"):
+            if error := open_draft(job, task, stage):
+                return block(job, error)
         elif stage["by"] == "script":
             git = lambda *a: subprocess.run(["git", *a], cwd=job / "repo", capture_output=True, text=True, env=SAFE_GIT).stdout.strip()  # noqa: E731
             # Read what the worker handed over before the test writes its own files (caches, reports).
@@ -373,7 +420,7 @@ def preflight(name):
     if error:
         print(error, file=sys.stderr)
         return 2
-    pr = (job / "pr.txt").read_text(encoding="utf-8").split()  # a person wrote it; workers cannot edit it
+    pr = (job / "pr.txt").read_text(encoding="utf-8").split()  # the draft stage or a person wrote it; workers cannot edit it
     script = BASELINE / "tools/review_preflight.py"
     diff_file = job / "pr.diff"
     diff_file.unlink(missing_ok=True)

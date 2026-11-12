@@ -167,9 +167,15 @@
    "retry": "implement"
   },
   {
+   "id": "draft",
+   "by": "script",
+   "body": "pr-body.md",
+   "out": "pr.txt"
+  },
+  {
    "id": "pr",
    "by": "human",
-   "wait": "pr.txt"
+   "ready": "pr.txt"
   },
   {
    "id": "review",
