@@ -109,7 +109,8 @@ class PipelineTests(unittest.TestCase):
             "stdin = [sys.stdin.read()] if sys.argv[1:3] == ['pr', 'edit'] else []\n"
             f"open({str(log)!r}, 'a').write(json.dumps(sys.argv[1:] + stdin) + '\\n')\n"
             "if sys.argv[1:3] == ['pr', 'create']: print('https://github.com/O/R/pull/7')\n"
-            f"if sys.argv[1:3] == ['pr', 'view']: print(open({str(draft)!r}).read().strip())\n", encoding="utf-8")
+            f"if sys.argv[1:3] == ['pr', 'view']: print(open({str(draft)!r}).read().strip())\n"
+            f"if sys.argv[1:3] == ['pr', 'ready']: open({str(draft)!r}, 'w').write('false')\n", encoding="utf-8")
         (bin_dir / "gh").chmod(0o755)
         patcher = unittest.mock.patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"})
         patcher.start()
@@ -297,6 +298,41 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
         self.assertIn("커밋하지 않은 변경: 없음", (self.job / "check.md").read_text())
 
+    def test_draft_stage_marks_only_an_easy_pr_ready(self):
+        # Through run(): the Ready call depends on the approved design and the body the engine read.
+        cases = [("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", True),
+                 ("Door: 되돌리기 어려움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", False),
+                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 어려움\n신뢰 경계: 없음", False),
+                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: .claude/", False),
+                 ("Door: 되돌리기 쉬움\nDoor: 되돌리기 어려움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", False),
+                 ("되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", False),
+                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움", False)]
+        for design, body, ready in cases:
+            with self.subTest(design=design, body=body):
+                self.setUp()
+                _, draft, gh = self.fake_github()
+
+                class Worker(FakeWorker):
+                    def __call__(w, name, cwd, argv, message):
+                        super().__call__(name, cwd, argv, message)
+                        stage = name.rsplit("-", 1)[1]
+                        if stage == "design":
+                            (self.job / "design.md").write_text(f"# d\n\n{design}\n", encoding="utf-8")
+                        if stage == "implement":
+                            (self.job / "pr-body.md").write_text(f"# fix: x\n\n{body}\n", encoding="utf-8")
+
+                worker = Worker(self.job)
+                self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
+                self.assertEqual(self.engine.approve("search"), 0)
+                self.engine.run("search", worker)
+                calls = [c[:2] for c in gh()]
+                self.assertEqual(calls.count(["pr", "ready"]), int(ready))
+                if ready:
+                    self.assertIn(["pr", "ready", "https://github.com/O/R/pull/7"], gh())
+                    self.assertEqual(self.state()["stage"], "review")  # past the person's Ready
+                else:
+                    self.assertEqual(self.state()["stage"], "pr")
+
     def test_draft_stage_opens_one_pr_and_blocks_instead_of_forcing(self):
         bare, _, gh = self.fake_github()
         stage = {"id": "draft", "body": "pr-body.md", "out": "pr.txt"}
@@ -440,6 +476,8 @@ class PipelineTests(unittest.TestCase):
         repo, real, reads = self.job / "repo", self.engine.read_body, []
 
         def commit_after_the_comparison(path):
+            if Path(path).name != "pr-body.md":  # the draft stage also reads design.md for its Ready
+                return real(path)
             reads.append(path)
             if len(reads) == 2:  # the check stage read the body, then the draft stage, after its HEAD comparison
                 subprocess.run(["git", "-C", str(repo), "commit", "-q", "--allow-empty", "-m", "late"], check=True)

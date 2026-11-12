@@ -271,7 +271,20 @@ def open_draft(job, task, stage, raw, head):
     if made.returncode or not re.fullmatch(rf"https://github\.com/{re.escape(repo)}/pull/\d+", url, re.I):
         return f"gh pr create failed: {(made.stderr or made.stdout).strip()}"
     pr_file.write_text(url + "\n", encoding="utf-8")
+    # An easy PR skips the person's Ready: they already approved the design that says so. A hard one waits for them,
+    # and Ready is when they ask a skipping review bot for a review (POLICY §3). A failed gh leaves the draft to them.
+    if stage.get("easy") and easy(read_body(job / stage["easy"]), raw):
+        subprocess.run(["gh", "pr", "ready", url], cwd=job, capture_output=True)
     return None
+
+
+def easy(design, body):
+    """True only when the approved design and the PR body both say Door: 되돌리기 쉬움 on every Door line and the body
+    names no trust boundary. Anything else, a missing line included, leaves the PR a draft."""
+    lines = lambda raw, key: [l.strip() for l in raw.decode("utf-8", "replace").splitlines() if l.strip().startswith(key)]  # noqa: E731
+    doors = lines(design, "Door:"), lines(body, "Door:")
+    return (all(d and set(d) == {"Door: 되돌리기 쉬움"} for d in doors)
+            and lines(body, "신뢰 경계:") == ["신뢰 경계: 없음"])
 
 
 def post_body(job, stage):
