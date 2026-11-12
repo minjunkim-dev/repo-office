@@ -3,6 +3,7 @@
 import contextlib
 import importlib.util
 import io
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -109,7 +110,8 @@ class PipelineTests(unittest.TestCase):
             "stdin = [sys.stdin.read()] if sys.argv[1:3] == ['pr', 'edit'] else []\n"
             f"open({str(log)!r}, 'a').write(json.dumps(sys.argv[1:] + stdin) + '\\n')\n"
             "if sys.argv[1:3] == ['pr', 'create']: print('https://github.com/O/R/pull/7')\n"
-            f"if sys.argv[1:3] == ['pr', 'view']: print(open({str(draft)!r}).read().strip())\n", encoding="utf-8")
+            f"if sys.argv[1:3] == ['pr', 'view']: print(open({str(draft)!r}).read().strip())\n"
+            f"if sys.argv[1:3] == ['pr', 'ready']: open({str(draft)!r}, 'w').write('false')\n", encoding="utf-8")
         (bin_dir / "gh").chmod(0o755)
         patcher = unittest.mock.patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"})
         patcher.start()
@@ -297,6 +299,110 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
         self.assertIn("커밋하지 않은 변경: 없음", (self.job / "check.md").read_text())
 
+    def test_draft_stage_marks_only_an_easy_pr_ready(self):
+        # Through run(): the Ready call depends on the approved design and the body the engine read.
+        cases = [("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", True),
+                 ("Door: 되돌리기 어려움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", False),
+                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 어려움\n신뢰 경계: 없음", False),
+                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: .claude/", False),
+                 ("Door: 되돌리기 쉬움\nDoor: 되돌리기 어려움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", False),
+                 ("되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", False),
+                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움", False),
+                 ("## Door\n\nDoor: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", True),  # a heading is no claim
+                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n- **Door**: 되돌리기 어려움\n신뢰 경계: 없음", False),
+                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음\n> 신뢰 경계: 없음", False),
+                 ("Door: 되돌리기 쉬움", "**Door:** 되돌리기 쉬움\n신뢰 경계: 없음", False),
+                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", ".claude/settings.json"),
+                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", "docs/AGENTS.md"),
+                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", "CLAUDE.local.md"),
+                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", ".claude/설정.json"),  # git quotes it by default
+                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", "a\nb/.claude/x.json"),  # . in a regex skips \n
+                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", "AGENTS.md->notes.md")]  # a rename out
+        for design, body, *rest in cases:
+            ready, guarded = (rest[0], None) if isinstance(rest[0], bool) else (False, rest[0])
+            with self.subTest(design=design, body=body):
+                self.setUp()
+                git = ["git", "-C", str(self.job / "repo")]
+                subprocess.run([*git, "config", "core.quotePath", "true"], check=True)  # git's default, whatever ~/.gitconfig says
+                source, _, target = (guarded or "").partition("->")
+                if target:  # the base has the trust file; the branch renames it away
+                    (self.job / "repo" / source).write_text("x\n", encoding="utf-8")
+                    subprocess.run([*git, "add", source], check=True)
+                    subprocess.run([*git, "commit", "-q", "-m", "base"], check=True)
+                _, draft, gh = self.fake_github()
+
+                class Worker(FakeWorker):
+                    def __call__(w, name, cwd, argv, message):
+                        super().__call__(name, cwd, argv, message)
+                        stage = name.rsplit("-", 1)[1]
+                        if stage == "design":
+                            (self.job / "design.md").write_text(f"# d\n\n{design}\n", encoding="utf-8")
+                        if stage == "implement":
+                            (self.job / "pr-body.md").write_text(f"# fix: x\n\n{body}\n", encoding="utf-8")
+                            if target:
+                                subprocess.run([*git, "mv", source, target], check=True)
+                                subprocess.run([*git, "commit", "-q", "-m", "g"], check=True)
+                            elif guarded:  # the body says no trust boundary; the commit touches one
+                                path = self.job / "repo" / guarded
+                                path.parent.mkdir(parents=True, exist_ok=True)
+                                path.write_text("x\n", encoding="utf-8")
+                                subprocess.run([*git, "add", "-f", guarded], check=True)  # -f: ignored names commit too
+                                subprocess.run([*git, "commit", "-q", "-m", "g"], check=True)
+
+                worker = Worker(self.job)
+                self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
+                self.assertEqual(self.engine.approve("search"), 0)
+                self.engine.run("search", worker)
+                calls = [c[:2] for c in gh()]
+                self.assertEqual(calls.count(["pr", "ready"]), int(ready))
+                if ready:
+                    self.assertIn(["pr", "ready", "https://github.com/O/R/pull/7"], gh())
+                    self.assertEqual(self.state()["stage"], "review")  # past the person's Ready
+                else:
+                    self.assertEqual(self.state()["stage"], "pr")
+
+    def test_draft_stage_marks_ready_only_the_approved_design(self):
+        # The same easy text, but not the bytes a person approved: the PR stays a draft.
+        _, _, gh = self.fake_github()
+        (self.job / "design.md").write_text("Door: 되돌리기 쉬움\n", encoding="utf-8")
+        body = "# fix: x\n\nDoor: 되돌리기 쉬움\n신뢰 경계: 없음\n".encode()
+        task = json.loads((self.job / "task.json").read_text())
+        head = subprocess.run(["git", "-C", str(self.job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        stage = {"id": "draft", "body": "pr-body.md", "out": "pr.txt", "easy": "design.md"}
+        self.assertIsNone(self.engine.open_draft(self.job, task, stage, body, head, "0" * 64))
+        self.assertEqual([c[:2] for c in gh()], [["pr", "create"]])
+        (self.job / "pr.txt").unlink()
+        approved = hashlib.sha256((self.job / "design.md").read_bytes()).hexdigest()
+        self.assertIsNone(self.engine.open_draft(self.job, task, stage, body, head, approved))
+        self.assertEqual([c[:2] for c in gh()], [["pr", "create"], ["pr", "create"], ["pr", "ready"]])
+
+    def test_draft_stage_reads_easy_only_from_the_approved_design(self):
+        # A process the tested code left behind rewrites design.md after the engine's approval check: no Ready.
+        _, _, gh = self.fake_github()
+
+        class Worker(FakeWorker):
+            def __call__(w, name, cwd, argv, message):
+                super().__call__(name, cwd, argv, message)
+                if name.endswith("-design"):
+                    (self.job / "design.md").write_text("# d\n\nDoor: 되돌리기 어려움\n", encoding="utf-8")
+                if name.endswith("-implement"):
+                    (self.job / "pr-body.md").write_text("# fix: x\n\nDoor: 되돌리기 쉬움\n신뢰 경계: 없음\n", encoding="utf-8")
+
+        real = self.engine.read_body
+
+        def rewrite_before_the_read(path):
+            if Path(path).name == "design.md":
+                Path(path).write_text("# d\n\nDoor: 되돌리기 쉬움\n", encoding="utf-8")
+            return real(path)
+
+        worker = Worker(self.job)
+        self.engine.run("search", worker)
+        self.engine.approve("search")
+        with unittest.mock.patch.object(self.engine, "read_body", rewrite_before_the_read):
+            self.engine.run("search", worker)
+        self.assertEqual([c[:2] for c in gh()].count(["pr", "create"]), 1)  # the draft stage got to the read
+        self.assertNotIn(["pr", "ready"], [c[:2] for c in gh()])
+
     def test_draft_stage_opens_one_pr_and_blocks_instead_of_forcing(self):
         bare, _, gh = self.fake_github()
         stage = {"id": "draft", "body": "pr-body.md", "out": "pr.txt"}
@@ -391,11 +497,13 @@ class PipelineTests(unittest.TestCase):
         self.engine.run("search", worker)
         self.engine.approve("search")
         task = json.loads((self.job / "task.json").read_text())
-        task["test"] = f"{task['test']} && ! (echo leaked >> ../pr-body.md) 2>/dev/null && ! ln ../pr-body.md ../tmp/x 2>/dev/null"
+        task["test"] = (f"{task['test']} && ! (echo leaked >> ../pr-body.md) 2>/dev/null && ! ln ../pr-body.md ../tmp/x 2>/dev/null"
+                        " && ! (echo leaked >> ../design.md) 2>/dev/null")  # nor the approved design the draft stage reads
         (self.job / "task.json").write_text(json.dumps(task))
         self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
         self.assertEqual(self.state()["stage"], "pr")
         self.assertNotIn("leaked", (self.job / "pr-body.md").read_text())
+        self.assertNotIn("leaked", (self.job / "design.md").read_text())
 
     def test_draft_stage_posts_only_the_body_the_check_stage_read(self):
         # The tested code cannot write pr-body.md by name; a hard link it makes, writes and removes again would.
@@ -446,6 +554,8 @@ class PipelineTests(unittest.TestCase):
         repo, real, reads = self.job / "repo", self.engine.read_body, []
 
         def commit_after_the_comparison(path):
+            if Path(path).name != "pr-body.md":  # the draft stage also reads design.md for its Ready
+                return real(path)
             reads.append(path)
             if len(reads) == 2:  # the check stage read the body, then the draft stage, after its HEAD comparison
                 subprocess.run(["git", "-C", str(repo), "commit", "-q", "--allow-empty", "-m", "late"], check=True)
