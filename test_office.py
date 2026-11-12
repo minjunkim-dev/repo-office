@@ -352,6 +352,19 @@ class PipelineTests(unittest.TestCase):
                                         capture_output=True, text=True).stdout.strip(), head)
         self.assertEqual([c[:2] for c in gh()].count(["pr", "create"]), 2)
 
+    @unittest.skipUnless(shutil.which("sandbox-exec"), "macOS sandbox-exec")
+    def test_the_check_stage_cannot_write_the_pr_body(self):
+        self.fake_github()
+        worker = FakeWorker(self.job)
+        self.engine.run("search", worker)
+        self.engine.approve("search")
+        task = json.loads((self.job / "task.json").read_text())
+        task["test"] = f"{task['test']} && ! (echo leaked >> ../pr-body.md) 2>/dev/null"
+        (self.job / "task.json").write_text(json.dumps(task))
+        self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
+        self.assertEqual(self.state()["stage"], "pr")
+        self.assertNotIn("leaked", (self.job / "pr-body.md").read_text())
+
     def test_check_stage_reads_the_clone_and_the_office_checkout(self):
         profile = self.engine.check_profile(self.job)
         for path in (self.baseline, self.engine.OFFICE):
