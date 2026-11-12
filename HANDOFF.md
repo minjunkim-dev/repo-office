@@ -94,6 +94,13 @@
   - 설계 작업자는 지시대로 `design.md`에 「테스트할 seam」 목록(공개 인터페이스 하나, 경우 다섯)을 적었다. `codebase-design`은 부르지 않았다(인터페이스가 정해진 과제라 지시서상 부를 때가 아니다).
   - 구현 작업자는 `mattpocock-skills:tdd`를 불렀고, 테스트를 먼저 쓰고 `engine.py test`로 실패를 본 뒤 구현해 통과시켰다(빨강 → 초록). seam을 사용자에게 묻지 않고 승인된 목록을 따랐다. 커밋 하나, 테스트 5개 통과.
   - 함정: 작업자의 `engine.py test`가 남긴 `__pycache__/`를 검사 단계가 커밋하지 않은 변경으로 보아 두 번 실패했다. 작업자의 `rm`은 거부되어 `BLOCKED.md`를 썼다. 그래서 엔진이 돌리는 테스트에 `PYTHONDONTWRITEBYTECODE=1`을 준다. Python 말고 다른 도구의 산출물은 제품 저장소의 `.gitignore`에 있어야 한다. 고친 뒤 캐시를 지우고 검사 단계만 다시 돌려 통과(`pr.txt` 대기)를 봤다. 구현 단계부터 다시 돌리지는 않았다.
+- 2026-11-12, 초안 PR 단계 실측(HARNESS §8의 6, Claude Code 2.1.322, sonnet): `minjunkim-dev/office-toy`에 버그 과제 `toy-mean`(`mean([1, 2])`가 1을 낸다)을 등록하고 설계 → 승인 → 구현 → 검사 → 초안 PR → Ready → 리뷰를 엔진으로 끝까지 돌렸다(PR #3, 종료 코드 0).
+  - 엔진이 `office/toy-mean`을 push하고 draft PR을 열고 `pr.txt`를 썼다. draft인 동안 `run`은 종료 코드 3으로 기다렸고, Ready로 바꾼 뒤 리뷰 단계가 돌았다.
+  - 구현 작업자는 `mattpocock-skills:diagnosing-bugs`를 먼저, 이어서 `:tdd`를 불렀다(빨강 `1 != 1.5` → 초록). 설계 작업자는 `codebase-design`을 부르지 않았다(정할 인터페이스가 없다). 리뷰 작업자는 `engine.py skills` 종료 코드 0을 받고 `:code-review`를 두 축으로 불렀고, 보고에 플러그인 판과 `SKILL.md` sha256을 적었다.
+  - `check_skills.py` 종료 코드 2: `AGENTS.md`를 바꾸는 PR #2를 리뷰 단계만 돌렸다. 작업자는 종료 코드 2를 받고 위임하지 않고 두 축을 직접 리뷰했다. 곁가지: 작업자가 `gh pr view 2`처럼 번호만 넘기자 office 저장소의 PR로 해석됐다. 작업자는 `pr.txt`의 URL로 바꿨다.
+  - 측정하지 않은 것: 검사 실패 뒤 구현 재시도(검사가 한 번에 통과했다. 단위 테스트는 있다), `check_skills.py` 종료 코드 1(사용자 홈의 스킬을 지워야 한다).
+  - 함정: hc 터미널은 holder 프로세스(`hc hold`)가 띄운다. holder가 Claude Code 세션 안에서 시작되면 모든 작업자가 그 세션의 환경 변수(`CLAUDE_CODE_CHILD_SESSION` 등)를 물려받는다. 그러면 작업자가 대화 기록을 저장하지 않아 hc가 턴 끝을 알아채지 못하고 엔진이 멈춘다. `hc server restart`는 holder를 남긴다. 깨끗한 셸에서 `hc server stop` 뒤 `hc server start`로 띄우고, 엔진도 깨끗한 셸에서 돌린다. 엔진을 띄운 셸의 환경도 넘어가는지는 확인하지 않았다.
+  - 곁가지: 작업자의 git은 사용자 전역 git 설정을 읽는다. `core.hooksPath`가 홈을 가리켜 커밋 때 `post-commit: Operation not permitted`가 나왔다. sandbox가 막았고 커밋은 됐다.
 
 ## 5. 다시 재현하는 법
 
