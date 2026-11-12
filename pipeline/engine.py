@@ -132,14 +132,14 @@ def sandbox(base, job, task):
             "filesystem": {"denyWrite": deny, "allowWrite": allow}}
 
 
-# A worker that inherits a Claude Code session's child marker saves no transcript, so hc never sees the turn end and
-# the next stage cannot --resume (Claude Code 2.1.322). hc starts terminals from its core's environment, which holds the
-# marker when the core began inside a Claude Code session, so the worker command itself drops them.
+# A leader is itself a Claude Code session. A worker that inherits its child marker saves no transcript, so hc never
+# sees the turn end and the next stage cannot --resume (Claude Code 2.1.322).
 PARENT_MARKERS = ("CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_ENTRYPOINT")
 
 
 def hc(*args, check=True):
-    return subprocess.run(["hc", *args], capture_output=True, text=True, check=check).stdout
+    env = {k: v for k, v in os.environ.items() if k not in PARENT_MARKERS}
+    return subprocess.run(["hc", *args], capture_output=True, text=True, check=check, env=env).stdout
 
 
 def claude_too_old(version):
@@ -166,7 +166,7 @@ def run_worker(name, cwd, argv, message):
     hc("kill", name, check=False)
     hc("rm", name, check=False)
     try:
-        hc("run", "--bg", "--name", name, "--cwd", str(cwd), "/usr/bin/env", *(f"-u{m}" for m in PARENT_MARKERS), binary, *argv[1:])
+        hc("run", "--bg", "--name", name, "--cwd", str(cwd), binary, *argv[1:])
     except subprocess.CalledProcessError as error:
         return NotStarted(f"hc run failed: {(error.stderr or error.stdout or '').strip()}")
     try:
