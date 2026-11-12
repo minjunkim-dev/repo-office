@@ -491,11 +491,13 @@ class PipelineTests(unittest.TestCase):
         self.engine.run("search", worker)
         self.engine.approve("search")
         task = json.loads((self.job / "task.json").read_text())
-        task["test"] = f"{task['test']} && ! (echo leaked >> ../pr-body.md) 2>/dev/null && ! ln ../pr-body.md ../tmp/x 2>/dev/null"
+        task["test"] = (f"{task['test']} && ! (echo leaked >> ../pr-body.md) 2>/dev/null && ! ln ../pr-body.md ../tmp/x 2>/dev/null"
+                        " && ! (echo leaked >> ../design.md) 2>/dev/null")  # nor the approved design the draft stage reads
         (self.job / "task.json").write_text(json.dumps(task))
         self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
         self.assertEqual(self.state()["stage"], "pr")
         self.assertNotIn("leaked", (self.job / "pr-body.md").read_text())
+        self.assertNotIn("leaked", (self.job / "design.md").read_text())
 
     def test_draft_stage_posts_only_the_body_the_check_stage_read(self):
         # The tested code cannot write pr-body.md by name; a hard link it makes, writes and removes again would.
