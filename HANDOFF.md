@@ -51,6 +51,7 @@
 
 - 작업자는 이름을 앞 이름까지 다 써서 부른다(`mattpocock-skills:code-review`). 앞 이름 없는 `code-review`는 Claude Code 내장 스킬로 간다.
 - `Skill` 도구는 허용 목록과 관계없이 돈다. 그래서 단계마다 스킬을 막지는 못한다. 막으려면 `Skill(...)` 거부 규칙이 필요하다.
+- 배치하지 않은 후보: 설계의 `domain-modeling`·`research`·`prototype`·`grilling`, 접수의 `triage`·`to-spec`·`to-tickets`, PR의 Matt `pr`(PR 양식이 먼저다), 검사의 pstack `create-verification-skill`, 회고의 pstack `correct`. 필요해지면 위 표에 넣는다.
 - Matt `implement`는 같은 세션에서 `code-review`를 불러 POLICY §3(다른 컨텍스트 리뷰)과 부딪히므로 파이프라인에서 쓰지 않는다. pstack `tdd`는 Matt `tdd`와 겹쳐 쓰지 않는다.
 
 ## 4. 정한 것과 남은 결정
@@ -67,7 +68,7 @@
 
 - office를 계속 쓸지 판단하는 기준(예: 실제 과제 N개가 사람 개입 없이 PR까지 감).
 - repo-baseline #130의 두 규칙에 office의 주인이 없다. office에서는 엔진이 PR을 연다.
-  - 되돌리기 어려움이거나 신뢰 경계를 건드린 PR에서 리뷰 봇이 건너뛰면, PR을 연 쪽이 봇에 리뷰를 한 번 요청한다. 엔진은 지금 요청하지 않는다. 사람이 Ready로 바꿀 때 직접 요청해야 한다.
+  - 되돌리기 어려움이거나 신뢰 경계를 건드린 PR에서 리뷰 봇이 건너뛰면, PR을 연 쪽이 봇에 리뷰를 한 번 요청한다. 리뷰어가 Door를 어려움으로 올렸으면 리뷰어가 요청한다. 엔진도 리뷰 지시서도 지금 요청하지 않는다. 사람이 Ready로 바꿀 때 직접 요청해야 한다.
   - 같은 PR에 다른 모델 패밀리 리뷰(Codex, Cursor agent)를 권장한다. 엔진의 리뷰 단계는 Claude 하나다. 리뷰 작업자는 원본 `prompts/review.md`대로 받지 못한 사실을 「남은 지적」에 적는다.
   - 둘 다 엔진·단계표·leader 규칙을 바꾸는 일이라 소유자 승인과 사람 병합이 필요하다.
 
