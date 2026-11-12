@@ -217,24 +217,27 @@ def unpinned(job, task):
     return None
 
 
-def open_draft(job, task, stage):
+def read_body(body):
+    """The PR body's bytes, or b"" unless it is a regular file with one name of at most 60000 bytes.
+    The worker wrote it inside its sandbox, and the engine reads it outside and posts it: a link could point at
+    a file the sandbox hides (credentials). So it is opened without following links. O_NONBLOCK: a FIFO would wait for a writer."""
+    try:
+        fd = os.open(body, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return b""
+    with os.fdopen(fd, "rb") as file:
+        info = os.fstat(file.fileno())
+        ok = stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_size <= 60000
+        return file.read() if ok else b""
+
+
+def open_draft(job, task, stage, raw=None):
     """Push the task branch and open a draft PR with the body the implement worker wrote, else why not."""
     pr_file = job / stage["out"]
     if pr_file.exists():  # an earlier run opened it, or a person did and wrote the URL
         return None
     body = job / stage["body"]
-    # The worker wrote it inside its sandbox, and this process reads outside it and posts it: a link could point at
-    # a file the sandbox hides (credentials). So only a regular file with one name, opened without following links.
-    # O_NONBLOCK: opening a FIFO would wait for a writer.
-    try:
-        fd = os.open(body, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    except OSError:
-        raw = b""
-    else:
-        with os.fdopen(fd, "rb") as file:
-            info = os.fstat(file.fileno())
-            ok = stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_size <= 60000
-            raw = file.read() if ok else b""
+    raw = read_body(body) if raw is None else raw  # the bytes the caller already checked, so it posts exactly those
     title, _, text = raw.decode("utf-8", "replace").partition("\n")
     if not title.startswith("# ") or not title[2:].strip():
         return f"{body} must be a regular file of at most 60000 bytes that starts with a `# <PR title>` line"
@@ -355,16 +358,31 @@ def advance(job, name, runner):
                     return block(job, "no check stage before the draft stage: push only a tested commit")
                 move(check)
                 continue
-            if error := open_draft(job, task, stage):
+            # The tested code cannot write the body by name, but a hard link it makes and removes again would change it.
+            # A changed body blocks, and its new hash becomes the one to match: a person reads that file, clears
+            # BLOCKED.md, and the engine posts it only if it is still what they read. No hash at all fails closed.
+            raw = read_body(job / stage["body"])
+            expected = state.get("bodies", {}).get(stage["body"])
+            if not (job / stage["out"]).exists() and hashlib.sha256(raw).hexdigest() != expected:
+                if expected is None:
+                    check = next(s["id"] for s in reversed(flow[:index]) if s["by"] == "script" and not s.get("body"))
+                    move(check)
+                    continue
+                state.setdefault("bodies", {})[stage["body"]] = hashlib.sha256(raw).hexdigest()
+                save(state_path, state)
+                return block(job, f"{stage['body']} changed after the check stage read it: a person reads it before the engine posts it")
+            if error := open_draft(job, task, stage, raw):
                 return block(job, error)
         elif stage["by"] == "script":
             git = lambda *a: subprocess.run(["git", *a], cwd=job / "repo", capture_output=True, text=True, env=SAFE_GIT).stdout.strip()  # noqa: E731
             # Read what the worker handed over before the test writes its own files (caches, reports).
             head, dirty = git("rev-parse", "HEAD"), git("status", "--porcelain", "--untracked-files=all")
+            bodies = [s["body"] for s in flow if s.get("body")]
+            # What the draft stage may post: the bodies as they are before the tested code runs.
+            body_shas = {b: hashlib.sha256(read_body(job / b)).hexdigest() for b in bodies}
             if not shutil.which("sandbox-exec"):
                 return block(job, "sandbox-exec is missing: the check stage runs the worker's code only inside a sandbox")
             # The engine posts the PR body right after this stage, outside any sandbox: the tested code must not write it.
-            bodies = [s["body"] for s in flow if s.get("body")]
             result = run_test(job, task, sandboxed=True, protect=bodies, capture_output=True, text=True)
             (job / stage["out"]).write_text(
                 f"# {stage['id']}\n\n- 명령: `{task['test']}`\n- 커밋: `{head}`\n- exit {result.returncode}\n"
@@ -372,7 +390,7 @@ def advance(job, name, runner):
             if result.returncode or dirty:
                 failed = f"`{task['test']}` exit {result.returncode}" + (", uncommitted changes" if dirty else "")
             else:
-                state["checked"] = head  # saved by move() below
+                state.update(checked=head, bodies=body_shas)  # saved by move() below
         else:
             if stage["id"] == "review" and (reason := unpinned(job, task)):
                 return block(job, reason)

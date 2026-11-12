@@ -365,6 +365,50 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.state()["stage"], "pr")
         self.assertNotIn("leaked", (self.job / "pr-body.md").read_text())
 
+    def test_draft_stage_posts_only_the_body_the_check_stage_read(self):
+        # The tested code cannot write pr-body.md by name; a hard link it makes, writes and removes again would.
+        _, _, gh = self.fake_github()
+        task = json.loads((self.job / "task.json").read_text())
+        task["test"] = f"ln ../pr-body.md ../tmp/x 2>/dev/null && echo leaked >> ../tmp/x; rm -f ../tmp/x; {self.test_cmd}"
+        (self.job / "task.json").write_text(json.dumps(task))
+        worker = FakeWorker(self.job)
+        self.engine.run("search", worker)
+        self.engine.approve("search")
+        result = self.engine.run("search", worker)
+        if "leaked" in (self.job / "pr-body.md").read_text():  # the sandbox let the link through
+            self.assertEqual(result, self.engine.BLOCKED)
+            self.assertIn("changed after the check stage", (self.job / "BLOCKED.md").read_text())
+            self.assertEqual(gh(), [])
+            # A person read the body and cleared BLOCKED.md: the engine posts it without checking again.
+            (self.job / "BLOCKED.md").unlink()
+            self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
+        self.assertEqual([c[:2] for c in gh()].count(["pr", "create"]), 1)
+
+    def test_draft_stage_posts_a_changed_body_only_after_a_person_read_it(self):
+        _, _, gh = self.fake_github()
+        worker = FakeWorker(self.job)
+        self.engine.run("search", worker)
+        self.engine.approve("search")
+        self.engine.run("search", worker)
+        body = self.job / "pr-body.md"
+        restart = lambda **extra: ((self.job / "pr.txt").unlink(), self.engine.save(  # noqa: E731
+            self.job / "state.json", {**self.state(), "stage": "draft", **extra}))
+        # No hash recorded (a state from before this check): fail closed and check again.
+        restart(bodies={})
+        self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
+        self.assertIn("pr-body.md", self.state()["bodies"])
+        # Changed after the check: block. Changed again after the block: block again. Unchanged: post what was read.
+        restart()
+        body.write_text("# fix: y\n", encoding="utf-8")
+        self.assertEqual(self.engine.run("search", worker), self.engine.BLOCKED)
+        (self.job / "BLOCKED.md").unlink()
+        body.write_text("# fix: z\n", encoding="utf-8")
+        self.assertEqual(self.engine.run("search", worker), self.engine.BLOCKED)
+        (self.job / "BLOCKED.md").unlink()
+        self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
+        titles = [c[c.index("--title") + 1] for c in gh() if c[:2] == ["pr", "create"]]
+        self.assertEqual(titles, ["fix: x", "fix: x", "fix: z"])
+
     def test_check_stage_reads_the_clone_and_the_office_checkout(self):
         profile = self.engine.check_profile(self.job)
         for path in (self.baseline, self.engine.OFFICE):
