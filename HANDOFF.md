@@ -155,6 +155,10 @@
   - 승인 대기: leader가 `blast-radius`를 실행 폴더·금지 폴더와 함께 권했다. 설계 작업자는 Door를 쉬움으로 봤다(외부 호출자 없음). 그래서 `interrogate` 권유와 어려운 PR의 봇 리뷰 요청(§4 남은 결정)은 이번에 돌지 않았다.
   - 구현 작업자는 `mattpocock-skills:tdd`로 빨강(`ImportError`) → 초록. 검사 통과, 엔진이 초안 PR을 열고 Ready를 기다렸다. 사람이 Ready로 바꾼 뒤 리뷰 작업자가 `engine.py skills` 종료 코드 0을 받고 `mattpocock-skills:code-review`를 불렀다. diff가 작아 축별 하위 에이전트는 띄우지 않고 두 축을 직접 봤다. CodeRabbit 건너뜀은 「없음(건너뜀)」으로 판정했다(repo-baseline #129 규칙대로).
   - 함정: 구현·리뷰 작업자 모두 `git grep`이 허용 목록에 없어 거부됐다. 둘 다 파일을 Read로 읽어 대신했다. 옛 이름이 남았는지 같은 확인이 필요한 과제가 잦으면 단계표에 `git -C repo grep *`를 더할지 소유자가 정한다.
+- 2026-11-12, 실제 제품 저장소 실측(Claude Code 2.1.322): 엔진의 `claude_argv`·`run_worker`로 리뷰 단계 작업자를 띄우고, BGLike(`/Volumes/...`의 클론, `origin/main`)를 과제로 등록해 허용된 명령만 돌렸다.
+  - 고치기 전: `git -C repo log`, `git -C <과제>/repo rev-parse`·`status`가 모두 `fatal: not a git repository: (null)`(종료 코드 128)였다. `engine.py skills`는 플러그인 캐시에서 스킬을 찾았지만 git 실패로 종료 코드 2(위임하지 않음)였다. 같은 명령은 sandbox 밖에서 종료 코드 0이다. 위 실측이 모두 통과한 것은 장난감 저장소가 `/private/tmp`(sandbox가 읽게 둔다)에 있었기 때문이다. `blockReadsOutsideWorkingDirectories`가 sandbox 안 Bash 읽기도 작업 폴더로 좁힌다.
+  - 고친 뒤(엔진이 제품 저장소의 `--git-common-dir`를 sandbox `allowRead`에 넣음): 위 git 명령이 모두 종료 코드 0, `engine.py skills` 종료 코드 0, `git -C <과제>/repo commit -m ... --allow-empty`도 성공했다. BGLike의 `commit-msg` 훅(`core.hooksPath=.githooks`)이 작업자 sandbox 안에서 돌아 형식이 틀린 메시지를 막았다.
+  - 측정하지 않은 것: 구현·검사·초안 PR·리뷰를 BGLike 과제로 끝까지 돌리는 것, 작업자의 `engine.py test`로 Godot를 돌리는 것.
 
 ## 7. 다시 재현하는 법
 

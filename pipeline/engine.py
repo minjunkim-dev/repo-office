@@ -130,8 +130,10 @@ def sandbox(base, job, task):
     allow = [str(job), *([common] if common else [])]
     if own and own != common:
         allow.append(own)  # index, HEAD and logs of this worktree
+    # blockReadsOutsideWorkingDirectories also closes reads for sandboxed Bash, and a product repository outside
+    # /tmp keeps repo/'s git data out of reach: every git command then fails with "not a git repository".
     return {**base, "excludedCommands": [fill(c, job, task) for c in base.get("excludedCommands", [])],
-            "filesystem": {"denyWrite": deny, "allowWrite": allow}}
+            "filesystem": {"denyWrite": deny, "allowWrite": allow, "allowRead": allow[1:]}}
 
 
 def hc(*args, check=True):
