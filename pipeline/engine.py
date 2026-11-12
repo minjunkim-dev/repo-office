@@ -232,9 +232,10 @@ def read_body(body):
         return file.read() if ok else b""
 
 
-def open_draft(job, task, stage, raw, head):
+def open_draft(job, task, stage, raw, head, approved=None):
     """Push the task branch and open a draft PR with the body the implement worker wrote, else why not.
-    raw and head are what the caller already checked (the body's bytes, the tested commit): nothing here reads them again."""
+    raw and head are what the caller already checked (the body's bytes, the tested commit): nothing here reads them again.
+    approved is the sha256 a person approved for the stage's easy file."""
     pr_file = job / stage["out"]
     if pr_file.exists():  # an earlier run opened it, or a person did and wrote the URL
         return None
@@ -273,7 +274,9 @@ def open_draft(job, task, stage, raw, head):
     pr_file.write_text(url + "\n", encoding="utf-8")
     # An easy PR skips the person's Ready: they already approved the design that says so. A hard one waits for them,
     # and Ready is when they ask a skipping review bot for a review (POLICY §3). A failed gh leaves the draft to them.
-    if stage.get("easy") and easy(read_body(job / stage["easy"]), raw):
+    # The bytes read here must be the approved ones: a process the tested code left could rewrite the file since run() checked.
+    design = read_body(job / stage["easy"]) if stage.get("easy") else b""
+    if approved and hashlib.sha256(design).hexdigest() == approved and easy(design, raw):
         subprocess.run(["gh", "pr", "ready", url], cwd=job, capture_output=True)
     return None
 
@@ -402,7 +405,8 @@ def advance(job, name, runner):
                 save(state_path, state)
                 return block(job, f"{stage['body']} changed after the check stage read it: a person reads it before the engine posts it")
             # The commit compared above, not HEAD again: HEAD can move between here and the push.
-            if error := open_draft(job, task, stage, raw, state["checked"]):
+            approved = next((state.get("approved", {}).get(s["id"]) for s in flow if stage.get("easy") and s.get("approve") == stage["easy"]), None)
+            if error := open_draft(job, task, stage, raw, state["checked"], approved):
                 return block(job, error)
         elif stage["by"] == "script" and stage.get("edit"):
             if error := post_body(job, stage):

@@ -333,6 +333,33 @@ class PipelineTests(unittest.TestCase):
                 else:
                     self.assertEqual(self.state()["stage"], "pr")
 
+    def test_draft_stage_reads_easy_only_from_the_approved_design(self):
+        # A process the tested code left behind rewrites design.md after the engine's approval check: no Ready.
+        _, _, gh = self.fake_github()
+
+        class Worker(FakeWorker):
+            def __call__(w, name, cwd, argv, message):
+                super().__call__(name, cwd, argv, message)
+                if name.endswith("-design"):
+                    (self.job / "design.md").write_text("# d\n\nDoor: 되돌리기 어려움\n", encoding="utf-8")
+                if name.endswith("-implement"):
+                    (self.job / "pr-body.md").write_text("# fix: x\n\nDoor: 되돌리기 쉬움\n신뢰 경계: 없음\n", encoding="utf-8")
+
+        real = self.engine.read_body
+
+        def rewrite_before_the_read(path):
+            if Path(path).name == "design.md":
+                Path(path).write_text("# d\n\nDoor: 되돌리기 쉬움\n", encoding="utf-8")
+            return real(path)
+
+        worker = Worker(self.job)
+        self.engine.run("search", worker)
+        self.engine.approve("search")
+        with unittest.mock.patch.object(self.engine, "read_body", rewrite_before_the_read):
+            self.engine.run("search", worker)
+        self.assertEqual([c[:2] for c in gh()].count(["pr", "create"]), 1)  # the draft stage got to the read
+        self.assertNotIn(["pr", "ready"], [c[:2] for c in gh()])
+
     def test_draft_stage_opens_one_pr_and_blocks_instead_of_forcing(self):
         bare, _, gh = self.fake_github()
         stage = {"id": "draft", "body": "pr-body.md", "out": "pr.txt"}
