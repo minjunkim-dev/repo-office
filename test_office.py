@@ -864,7 +864,8 @@ class PipelineTests(unittest.TestCase):
     def test_a_worker_test_run_gets_the_same_home_as_the_check(self):
         # The worker's Claude Code sandbox blocks writes to the real home; Godot failed writing its caches there.
         task = {"test": 'echo "$HOME"; echo "$TMPDIR"; echo "$GIT_CONFIG_GLOBAL"; echo x > "$HOME/c" && echo cache ok'}
-        result = self.engine.run_test(self.job, task, capture_output=True, text=True)
+        with unittest.mock.patch.dict(os.environ, {"HOME": self.tmp.name}):  # without the fix, write here, not the real home
+            result = self.engine.run_test(self.job, task, capture_output=True, text=True)
         self.assertEqual(result.stdout.split("\n")[:-1],
                          [str(self.job / "tmp/home"), str(self.job / "tmp"), "/dev/null", "cache ok"], result.stderr)
 
