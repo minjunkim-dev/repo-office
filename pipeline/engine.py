@@ -510,14 +510,16 @@ def run_test(job, task, sandboxed=False, protect=(), **kwargs):
     # The owner wrote this command (the product's AGENTS.md test cell) with `new`; workers cannot edit task.json.
     # The check stage fails on untracked files, and a worker's earlier test run would leave __pycache__ in repo/.
     # shortcut: Python bytecode only; other tools' artifacts must be in the product's .gitignore.
-    quiet = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
-    if not sandboxed:
-        return subprocess.run(task["test"], shell=True, cwd=job / "repo", env=quiet, **kwargs)
-    tmp = job / "tmp"  # temp files stay in the one folder the sandbox lets the test write
-    home = tmp / "home"  # the profile hides the real home; tools that cache or read config there (Godot, git) need a writable one
+    tmp = job / "tmp"  # temp files stay in the one folder both sandboxes let the test write
+    # Both sandboxes (the worker's Claude Code one and the check stage's) block the real home;
+    # tools that cache or read config there (Godot, git) need a writable one.
+    home = tmp / "home"
     home.mkdir(parents=True, exist_ok=True)
+    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "TMPDIR": str(tmp), "HOME": str(home), "GIT_CONFIG_GLOBAL": "/dev/null"}
+    if not sandboxed:
+        return subprocess.run(task["test"], shell=True, cwd=job / "repo", env=env, **kwargs)
     return subprocess.run(["sandbox-exec", "-p", check_profile(job, protect), "/bin/sh", "-c", task["test"]], cwd=job / "repo",
-                          env={**quiet, "TMPDIR": str(tmp), "HOME": str(home), "GIT_CONFIG_GLOBAL": "/dev/null"}, **kwargs)
+                          env=env, **kwargs)
 
 
 def test(name):
