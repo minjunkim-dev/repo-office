@@ -354,6 +354,10 @@ class PipelineTests(unittest.TestCase):
         for entries in ([{"gitCommitSha": "0" * 40}], [{"gitCommitSha": pin}, {"gitCommitSha": "0" * 40}], [{}], []):
             self.engine.PLUGINS.write_text(json.dumps({"plugins": {name: entries}}))
             self.assertIn(pin, self.engine.plugin_drift({name: pin}))
+        for broken in ("{", "[]", '{"plugins": {"%s": [1]}}' % name):
+            self.engine.PLUGINS.write_text(broken)
+            self.assertIn("expected JSON", self.engine.plugin_drift({name: pin}))
+        self.assertIsNone(self.engine.plugin_drift({}))  # emptying the pins turns the check off
         self.engine.PLUGINS.unlink()
         self.assertIn("nothing", self.engine.plugin_drift({name: pin}))
         worker = FakeWorker(self.job)

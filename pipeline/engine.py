@@ -218,9 +218,15 @@ def unpinned(job, task):
 
 def plugin_drift(pins):
     """Why the installed plugins are not the commits stages.json pins, else None."""
-    installed = load(PLUGINS, {}).get("plugins", {})
+    if not pins:
+        return None
+    try:
+        installed = load(PLUGINS, {}).get("plugins", {})
+        records = {name: sorted({str(entry.get("gitCommitSha")) for entry in installed.get(name, [])}) for name in pins}
+    except (ValueError, AttributeError, TypeError) as error:
+        return f"{PLUGINS} is not the expected JSON ({error}): the pinned plugin commits cannot be checked"
     for name, want in pins.items():
-        got = sorted({str(entry.get("gitCommitSha")) for entry in installed.get(name, [])})
+        got = records[name]
         if got != [want]:
             return (f"plugin {name} is installed at {', '.join(got) or 'nothing'} but stages.json pins {want}: "
                     "install that commit, or check the skills against the new one and change the pin")
