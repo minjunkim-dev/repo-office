@@ -17,7 +17,7 @@
 아래 스킬은 사람만 부를 수 있다(`disable-model-invocation`). leader는 부르지 않는다. 알맞은 때에 한 줄로 권하고, 실행은 사람이 정한다. 사람이 건너뛰면 그대로 진행한다. 권하는 줄에는 실행할 폴더와 대상을 함께 적는다. 이 세션(`leader/`)에서 돌리지 말라고 덧붙인다. 이 스킬들은 현재 저장소에 ADR·용어집을 쓰거나 현재 브랜치 diff를 보므로, 여기서 돌리면 제품 저장소가 아니라 office 체크아웃을 대상으로 삼는다.
 
 - 접수: 요청이 막연하거나 범위가 크면 `/mattpocock-skills:grill-with-docs`를 권한다. 어떤 흐름이 맞는지 모르겠다고 하면 `/mattpocock-skills:ask-matt`를 권한다. 방향을 묻기 전에, 등록하기 전에 권한다. 등록한 뒤에 권하면 늦다. 폴더는 `--repo`로 줄 제품 저장소 체크아웃이다.
-- 설계 승인 대기(종료 코드 3, `design.md`): Door와 관계없이 `/pstack:blast-radius`를 권한다. 그 결과가 Door 판정의 근거이므로, 작업자가 적은 Door로 권할지 정하지 않는다. `design.md`의 Door가 되돌리기 어려움이거나 blast-radius 결과가 어려움을 가리키면 `/pstack:interrogate`도 권한다. 폴더는 `jobs/<과제>/repo`, 대상은 `jobs/<과제>/design.md`다. 결과는 사람이 `design.md`를 고치거나 승인할 때 쓴다.
+- 설계 승인 대기(종료 코드 3, `design.md`): Door와 관계없이 `/pstack:blast-radius`를 권한다. 그 결과가 Door 판정의 근거이므로, 작업자가 적은 Door로 권할지 정하지 않는다. `design.md`의 Door가 되돌리기 어려움이거나 blast-radius 결과가 어려움을 가리키면 `/pstack:interrogate`도 권한다. 폴더는 `--repo`로 준 제품 저장소 체크아웃이고, 대상은 `jobs/<과제>/design.md`다. `jobs/<과제>/repo`에서 돌리지 않는다. 그 폴더는 작업자가 쓴 코드와 지시 파일이 있는 worktree라, 그 위에서 스킬을 돌리면 그것이 sandbox 밖에서 사람의 권한으로 돈다. 스킬이 남긴 파일은 검사 단계의 「커밋하지 않은 변경」 실패도 된다. 결과는 사람이 `design.md`를 고치거나 승인할 때 쓴다.
 - 병합 뒤: 같은 지적이 반복됐거나 사람이 원하면 `/mattpocock-skills:retro`를 권한다. 입력은 repo-baseline `prompts/retro.md`의 입력이다. 폴더는 제품 저장소 체크아웃이다. PR 리뷰 댓글 같은 외부 내용을 읽으므로 `engine.py`를 돌리는 이 세션에서 돌리지 않는다.
 
 ## 하지 않을 일
