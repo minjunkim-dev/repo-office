@@ -510,6 +510,22 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("review-body.md", (self.job / "BLOCKED.md").read_text())  # the post blocked, not the review
         self.assertEqual([c for c in gh() if c[:2] == ["pr", "edit"]], [])
 
+    def test_the_review_body_is_posted_only_to_a_github_pr_url(self):
+        # gh runs outside the sandbox with the owner's login: pr.txt must name a GitHub PR, not an option or another host.
+        # Starts at the post stage: the review stage already refuses a pr.txt it cannot pin to a repository.
+        _, _, gh = self.fake_github()
+        (self.job / "design.md").write_text("d\n", encoding="utf-8")
+        (self.job / "review-body.md").write_text("## Review\nok\n", encoding="utf-8")
+        for url in ("--repo=o/r\n", "https://example.com/o/r/pull/7\n", ""):
+            (self.job / "pr.txt").write_text(url, encoding="utf-8")
+            (self.job / "BLOCKED.md").unlink(missing_ok=True)
+            self.engine.save(self.job / "state.json", {"stage": "post", "since": 0, "fails": {}, "sessions": [],
+                                                       "approved": {"approve": self.engine.sha(self.job / "design.md")}})
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(self.engine.run("search", FakeWorker(self.job)), self.engine.BLOCKED)
+            self.assertIn("pr.txt", (self.job / "BLOCKED.md").read_text())
+            self.assertEqual([c for c in gh() if c[:2] == ["pr", "edit"]], [])
+
     def test_draft_stage_posts_a_changed_body_only_after_a_person_read_it(self):
         _, _, gh = self.fake_github()
         worker = FakeWorker(self.job)
