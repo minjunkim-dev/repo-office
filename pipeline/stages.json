@@ -22,7 +22,6 @@
    "git -C {job}/repo push origin HEAD",
    "gh pr view*",
    "gh pr checks*",
-   "gh pr edit*",
    "gh api --paginate repos/*"
   ],
   "network": {"allowedDomains": ["github.com"]}
@@ -64,6 +63,7 @@
   "Bash(gh api *--input*)",
   "Bash(gh api *merge*)",
   "Bash(gh pr merge*)",
+  "Bash(gh pr edit*)",
   "Edit(**/.git/**)",
   "Write(**/.git/**)",
   "Edit(**/.claude/**)",
@@ -206,10 +206,14 @@
     "Bash(git -C {job}/repo push origin HEAD)",
     "Bash(gh pr view*)",
     "Bash(gh pr checks*)",
-    "Bash(gh pr edit*)",
     "Bash(gh api --paginate repos/*)",
     "{allow}"
    ]
+  },
+  {
+   "id": "post",
+   "by": "script",
+   "edit": "review-body.md"
   }
  ]
 }
