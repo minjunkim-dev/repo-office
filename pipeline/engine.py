@@ -347,6 +347,14 @@ def advance(job, name, runner):
                 print(waiting)
                 return WAIT
         elif stage["by"] == "script" and stage.get("body"):
+            # Push only the commit the check stage passed: a commit made since (a rerun after a block) goes through it again.
+            head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=job / "repo", capture_output=True, text=True, env=SAFE_GIT).stdout.strip()
+            if not (job / stage["out"]).exists() and head != state.get("checked"):
+                check = next((s["id"] for s in reversed(flow[:index]) if s["by"] == "script" and not s.get("body")), None)
+                if not check:
+                    return block(job, "no check stage before the draft stage: push only a tested commit")
+                move(check)
+                continue
             if error := open_draft(job, task, stage):
                 return block(job, error)
         elif stage["by"] == "script":
@@ -355,12 +363,16 @@ def advance(job, name, runner):
             head, dirty = git("rev-parse", "HEAD"), git("status", "--porcelain", "--untracked-files=all")
             if not shutil.which("sandbox-exec"):
                 return block(job, "sandbox-exec is missing: the check stage runs the worker's code only inside a sandbox")
-            result = run_test(job, task, sandboxed=True, capture_output=True, text=True)
+            # The engine posts the PR body right after this stage, outside any sandbox: the tested code must not write it.
+            bodies = [s["body"] for s in flow if s.get("body")]
+            result = run_test(job, task, sandboxed=True, protect=bodies, capture_output=True, text=True)
             (job / stage["out"]).write_text(
                 f"# {stage['id']}\n\n- 명령: `{task['test']}`\n- 커밋: `{head}`\n- exit {result.returncode}\n"
                 f"- 커밋하지 않은 변경: {dirty or '없음'}\n\n```\n{(result.stdout + result.stderr)[-4000:]}\n```\n", encoding="utf-8")
             if result.returncode or dirty:
                 failed = f"`{task['test']}` exit {result.returncode}" + (", uncommitted changes" if dirty else "")
+            else:
+                state["checked"] = head  # saved by move() below
         else:
             if stage["id"] == "review" and (reason := unpinned(job, task)):
                 return block(job, reason)
@@ -397,14 +409,14 @@ CONTROL = ("task.json", "state.json", "pr.txt", "pr.diff", "run.lock", "repo/.gi
            "CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".claude", ".mcp.json", ".envrc")
 
 
-def check_profile(job):
+def check_profile(job, protect=()):
     """Seatbelt rules for the check stage, the same writes the worker's sandbox allows: the task folder, minus its
     control files. No network but localhost and unix sockets in the task folder. No reads in the home folder (credentials) but the task folder, this
     checkout and the product's git data, like blockReadsOutsideWorkingDirectories for the worker. The worker's own `engine.py test` already runs in Claude Code's
     sandbox, which refuses a sandbox inside it, so only the engine's check stage uses this."""
     quote = json.dumps  # SBPL strings take the same escapes as JSON for quotes and backslashes
     real = job.resolve()
-    deny = " ".join(f"(literal {quote(str(real / n))}) (subpath {quote(str(real / n))})" for n in CONTROL)
+    deny = " ".join(f"(literal {quote(str(real / n))}) (subpath {quote(str(real / n))})" for n in (*CONTROL, *protect))
     deny += f" (literal {quote(str(real / 'repo'))})"  # renaming repo/ away and back would rewrite repo/.git
     common = subprocess.run(["git", "-C", str(job / "repo"), "rev-parse", "--path-format=absolute", "--git-common-dir"],
                             capture_output=True, text=True, env=SAFE_GIT).stdout.strip()
@@ -417,7 +429,7 @@ def check_profile(job):
             f"(deny file-read* (subpath {quote(str(Path.home().resolve()))})) (allow file-read* {readable})\n")
 
 
-def run_test(job, task, sandboxed=False, **kwargs):
+def run_test(job, task, sandboxed=False, protect=(), **kwargs):
     # The owner wrote this command (the product's AGENTS.md test cell) with `new`; workers cannot edit task.json.
     # The check stage fails on untracked files, and a worker's earlier test run would leave __pycache__ in repo/.
     # shortcut: Python bytecode only; other tools' artifacts must be in the product's .gitignore.
@@ -427,7 +439,7 @@ def run_test(job, task, sandboxed=False, **kwargs):
     tmp = job / "tmp"  # temp files stay in the one folder the sandbox lets the test write
     home = tmp / "home"  # the profile hides the real home; tools that cache or read config there (Godot, git) need a writable one
     home.mkdir(parents=True, exist_ok=True)
-    return subprocess.run(["sandbox-exec", "-p", check_profile(job), "/bin/sh", "-c", task["test"]], cwd=job / "repo",
+    return subprocess.run(["sandbox-exec", "-p", check_profile(job, protect), "/bin/sh", "-c", task["test"]], cwd=job / "repo",
                           env={**quiet, "TMPDIR": str(tmp), "HOME": str(home), "GIT_CONFIG_GLOBAL": "/dev/null"}, **kwargs)
 
 

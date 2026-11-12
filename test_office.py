@@ -331,6 +331,27 @@ class PipelineTests(unittest.TestCase):
         self.assertIsNone(self.engine.open_draft(self.job, task, {"id": "draft", "body": "pr-body.md", "out": "pr.txt"}))
         self.assertEqual([c[:2] for c in gh()], [["pr", "create"]])
 
+    @unittest.skipUnless(shutil.which("sandbox-exec"), "macOS sandbox-exec")
+    def test_draft_stage_pushes_only_the_checked_commit(self):
+        bare, _, gh = self.fake_github()
+        worker = FakeWorker(self.job)
+        self.engine.run("search", worker)
+        self.engine.approve("search")
+        self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
+        # A rerun after a blocked draft: a commit made since the check goes through the check again before the push.
+        (self.job / "pr.txt").unlink()
+        self.engine.save(self.job / "state.json", {**self.state(), "stage": "draft"})
+        repo = self.job / "repo"
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com",
+                        "commit", "-q", "--allow-empty", "-m", "after the check"], check=True)
+        head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
+        self.assertIn(head, (self.job / "check.md").read_text())
+        self.assertEqual(self.state()["checked"], head)
+        self.assertEqual(subprocess.run(["git", "-C", str(bare), "rev-parse", "office/search"],
+                                        capture_output=True, text=True).stdout.strip(), head)
+        self.assertEqual([c[:2] for c in gh()].count(["pr", "create"]), 2)
+
     def test_check_stage_reads_the_clone_and_the_office_checkout(self):
         profile = self.engine.check_profile(self.job)
         for path in (self.baseline, self.engine.OFFICE):
@@ -615,11 +636,11 @@ class PipelineTests(unittest.TestCase):
         outside = Path(self.tmp.name) / "outside.txt"  # a sibling of the task folder, still in the temp folder
         script = "; ".join(f"(echo x >> {p} && echo {name} ok || echo {name} denied)" for name, p in (
             ("repo", "kept.txt"), ("outside", outside), ("task", self.job / "task.json"), ("pr", self.job / "pr.txt"),
-            ("gitfile", self.job / "repo/.git"), ("claude", self.job / "CLAUDE.md"))) + f'; echo x > "$TMPDIR/t" && echo tmp ok; (ls {Path.home()} >/dev/null 2>&1 && echo home ok || echo home denied)'
+            ("gitfile", self.job / "repo/.git"), ("claude", self.job / "CLAUDE.md"), ("body", self.job / "pr-body.md"))) + f'; echo x > "$TMPDIR/t" && echo tmp ok; (ls {Path.home()} >/dev/null 2>&1 && echo home ok || echo home denied)'
         script += f"; (mv {self.job / 'repo'} {self.job / 'moved'} 2>/dev/null && echo rename ok || echo rename denied)"
-        result = self.engine.run_test(self.job, {"test": script}, sandboxed=True, capture_output=True, text=True)
+        result = self.engine.run_test(self.job, {"test": script}, sandboxed=True, protect=["pr-body.md"], capture_output=True, text=True)
         self.assertEqual(result.stdout.split("\n")[:-1], ["repo ok", "outside denied", "task denied", "pr denied",
-                                                         "gitfile denied", "claude denied", "tmp ok", "home denied",
+                                                         "gitfile denied", "claude denied", "body denied", "tmp ok", "home denied",
                                                          "rename denied"])
         self.assertFalse(outside.exists() or (self.job / "pr.txt").exists() or (self.job / "CLAUDE.md").exists())
 
