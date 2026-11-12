@@ -150,6 +150,12 @@
   - 함정: hc 터미널은 holder 프로세스(`hc hold`)가 띄운다. holder가 Claude Code 세션 안에서 시작되면 모든 작업자가 그 세션의 환경 변수(`CLAUDE_CODE_CHILD_SESSION` 등)를 물려받는다. 그러면 작업자가 대화 기록을 저장하지 않아 hc가 턴 끝을 알아채지 못하고 엔진이 멈춘다. `hc server restart`는 holder를 남긴다. 깨끗한 셸에서 `hc server stop` 뒤 `hc server start`로 띄우고, 엔진도 깨끗한 셸에서 돌린다. 엔진을 띄운 셸의 환경도 넘어가는지는 확인하지 않았다.
   - 곁가지: 작업자의 git은 사용자 전역 git 설정을 읽는다. `core.hooksPath`가 홈을 가리켜 커밋 때 `post-commit: Operation not permitted`가 나왔다. sandbox가 막았고 커밋은 됐다.
 
+- 2026-11-12, leader부터 리뷰까지 한 번에(Claude Code 2.1.322, 작업자·leader 모두 sonnet): `minjunkim-dev/office-toy`에 `toy-rename`(`mean`을 `arithmetic_mean`으로, 옛 이름 없앰)을 leader 세션에 사람 역할로 주고 끝까지 돌렸다(PR #4, 종료 코드 0).
+  - 접수: leader는 등록 전에 이름 후보 세 가지를 물었다. 요청이 막연하지 않다며 `grill-with-docs`는 권하지 않았다. 고른 뒤 `--base origin/main`으로 등록하고 `INTENT.md`의 「하지 않을 것」에 옛 이름을 남기지 않는다고 적었다.
+  - 승인 대기: leader가 `blast-radius`를 실행 폴더·금지 폴더와 함께 권했다. 설계 작업자는 Door를 쉬움으로 봤다(외부 호출자 없음). 그래서 `interrogate` 권유와 어려운 PR의 봇 리뷰 요청(§4 남은 결정)은 이번에 돌지 않았다.
+  - 구현 작업자는 `mattpocock-skills:tdd`로 빨강(`ImportError`) → 초록. 검사 통과, 엔진이 초안 PR을 열고 Ready를 기다렸다. 사람이 Ready로 바꾼 뒤 리뷰 작업자가 `engine.py skills` 종료 코드 0을 받고 `mattpocock-skills:code-review`를 불렀다. diff가 작아 축별 하위 에이전트는 띄우지 않고 두 축을 직접 봤다. CodeRabbit 건너뜀은 「없음(건너뜀)」으로 판정했다(repo-baseline #129 규칙대로).
+  - 함정: 구현·리뷰 작업자 모두 `git grep`이 허용 목록에 없어 거부됐다. 둘 다 파일을 Read로 읽어 대신했다. 옛 이름이 남았는지 같은 확인이 필요한 과제가 잦으면 단계표에 `git -C repo grep *`를 더할지 소유자가 정한다.
+
 ## 7. 다시 재현하는 법
 
 토큰을 적게 쓰려면 단계표를 복사해 각 claude 단계에 `"model": "sonnet"`을 넣고 `OFFICE_STAGES`로 지정한다. Haiku는 위 함정 때문에 Bash가 자주 막힌다.
