@@ -3,6 +3,7 @@
 import contextlib
 import importlib.util
 import io
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -306,8 +307,15 @@ class PipelineTests(unittest.TestCase):
                  ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: .claude/", False),
                  ("Door: 되돌리기 쉬움\nDoor: 되돌리기 어려움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", False),
                  ("되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", False),
-                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움", False)]
-        for design, body, ready in cases:
+                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움", False),
+                 ("## Door\n\nDoor: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", True),  # a heading is no claim
+                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n- **Door**: 되돌리기 어려움\n신뢰 경계: 없음", False),
+                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음\n> 신뢰 경계: 없음", False),
+                 ("Door: 되돌리기 쉬움", "**Door:** 되돌리기 쉬움\n신뢰 경계: 없음", False),
+                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", ".claude/settings.json"),
+                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", "docs/AGENTS.md")]
+        for design, body, *rest in cases:
+            ready, guarded = (rest[0], None) if isinstance(rest[0], bool) else (False, rest[0])
             with self.subTest(design=design, body=body):
                 self.setUp()
                 _, draft, gh = self.fake_github()
@@ -320,6 +328,12 @@ class PipelineTests(unittest.TestCase):
                             (self.job / "design.md").write_text(f"# d\n\n{design}\n", encoding="utf-8")
                         if stage == "implement":
                             (self.job / "pr-body.md").write_text(f"# fix: x\n\n{body}\n", encoding="utf-8")
+                            if guarded:  # the body says no trust boundary; the commit touches one
+                                path = self.job / "repo" / guarded
+                                path.parent.mkdir(parents=True, exist_ok=True)
+                                path.write_text("x\n", encoding="utf-8")
+                                subprocess.run(["git", "-C", str(self.job / "repo"), "add", guarded], check=True)
+                                subprocess.run(["git", "-C", str(self.job / "repo"), "commit", "-q", "-m", "g"], check=True)
 
                 worker = Worker(self.job)
                 self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
@@ -332,6 +346,21 @@ class PipelineTests(unittest.TestCase):
                     self.assertEqual(self.state()["stage"], "review")  # past the person's Ready
                 else:
                     self.assertEqual(self.state()["stage"], "pr")
+
+    def test_draft_stage_marks_ready_only_the_approved_design(self):
+        # The same easy text, but not the bytes a person approved: the PR stays a draft.
+        _, _, gh = self.fake_github()
+        (self.job / "design.md").write_text("Door: 되돌리기 쉬움\n", encoding="utf-8")
+        body = "# fix: x\n\nDoor: 되돌리기 쉬움\n신뢰 경계: 없음\n".encode()
+        task = json.loads((self.job / "task.json").read_text())
+        head = subprocess.run(["git", "-C", str(self.job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        stage = {"id": "draft", "body": "pr-body.md", "out": "pr.txt", "easy": "design.md"}
+        self.assertIsNone(self.engine.open_draft(self.job, task, stage, body, head, {"0" * 64}))
+        self.assertEqual([c[:2] for c in gh()], [["pr", "create"]])
+        (self.job / "pr.txt").unlink()
+        approved = {hashlib.sha256((self.job / "design.md").read_bytes()).hexdigest()}
+        self.assertIsNone(self.engine.open_draft(self.job, task, stage, body, head, approved))
+        self.assertEqual([c[:2] for c in gh()], [["pr", "create"], ["pr", "create"], ["pr", "ready"]])
 
     def test_draft_stage_opens_one_pr_and_blocks_instead_of_forcing(self):
         bare, _, gh = self.fake_github()
