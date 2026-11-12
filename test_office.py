@@ -367,21 +367,26 @@ class PipelineTests(unittest.TestCase):
 
     def test_draft_stage_posts_only_the_body_the_check_stage_read(self):
         # The tested code cannot write pr-body.md by name; a hard link it makes, writes and removes again would.
+        # The sandbox refuses that link today, so this stands in for one that lets it through.
         _, _, gh = self.fake_github()
-        task = json.loads((self.job / "task.json").read_text())
-        task["test"] = f"ln ../pr-body.md ../tmp/x 2>/dev/null && echo leaked >> ../tmp/x; rm -f ../tmp/x; {self.test_cmd}"
-        (self.job / "task.json").write_text(json.dumps(task))
+        real = self.engine.run_test
+
+        def leaky(job, *args, **kwargs):
+            result = real(job, *args, **kwargs)
+            with open(job / "pr-body.md", "a", encoding="utf-8") as body:
+                body.write("leaked\n")
+            return result
+
         worker = FakeWorker(self.job)
         self.engine.run("search", worker)
         self.engine.approve("search")
-        result = self.engine.run("search", worker)
-        if "leaked" in (self.job / "pr-body.md").read_text():  # the sandbox let the link through
-            self.assertEqual(result, self.engine.BLOCKED)
-            self.assertIn("changed after the check stage", (self.job / "BLOCKED.md").read_text())
-            self.assertEqual(gh(), [])
-            # A person read the body and cleared BLOCKED.md: the engine posts it without checking again.
-            (self.job / "BLOCKED.md").unlink()
-            self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
+        with unittest.mock.patch.object(self.engine, "run_test", leaky):
+            self.assertEqual(self.engine.run("search", worker), self.engine.BLOCKED)
+        self.assertIn("changed after the check stage", (self.job / "BLOCKED.md").read_text())
+        self.assertEqual(gh(), [])
+        # A person read the body and cleared BLOCKED.md: the engine posts it without checking again.
+        (self.job / "BLOCKED.md").unlink()
+        self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
         self.assertEqual([c[:2] for c in gh()].count(["pr", "create"]), 1)
 
     def test_draft_stage_posts_a_changed_body_only_after_a_person_read_it(self):
