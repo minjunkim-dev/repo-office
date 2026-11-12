@@ -319,6 +319,18 @@ class PipelineTests(unittest.TestCase):
         self.assertIsNone(self.engine.open_draft(self.job, task, stage))
         self.assertEqual(gh(), [])
 
+    def test_draft_stage_opens_the_pr_after_the_remote_base_moved(self):
+        bare, _, gh = self.fake_github()
+        other = Path(self.tmp.name) / "other"
+        subprocess.run(["git", "clone", "-q", str(bare), str(other)], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(other), "-c", "user.name=t", "-c", "user.email=t@example.com",
+                        "commit", "-q", "--allow-empty", "-m", "someone else's change"], check=True)
+        subprocess.run(["git", "-C", str(other), "push", "-q", "origin", "HEAD:refs/heads/main"], check=True, capture_output=True)
+        (self.job / "pr-body.md").write_text("# fix: x\n", encoding="utf-8")
+        task = json.loads((self.job / "task.json").read_text())
+        self.assertIsNone(self.engine.open_draft(self.job, task, {"id": "draft", "body": "pr-body.md", "out": "pr.txt"}))
+        self.assertEqual([c[:2] for c in gh()], [["pr", "create"]])
+
     def test_check_stage_reads_the_clone_and_the_office_checkout(self):
         profile = self.engine.check_profile(self.job)
         for path in (self.baseline, self.engine.OFFICE):

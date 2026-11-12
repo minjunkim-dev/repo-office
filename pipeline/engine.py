@@ -248,13 +248,17 @@ def open_draft(job, task, stage):
     remote = git("ls-remote", "origin", f"refs/heads/{base}").stdout.split()[:1]
     if not remote:
         return f"origin has no branch {base} to compare the task branch with"
-    ci = git("diff", "--name-only", f"{remote[0]}...HEAD", "--", ".github")
-    if ci.returncode or ci.stdout.strip():
-        return (f"the branch changes .github ({ci.stdout.split() or ci.stderr.strip()}): a person reads the diff, "
+    git("fetch", "-q", "origin", f"refs/heads/{base}")  # others may have pushed to it since this checkout was made
+    head = git("rev-parse", "--verify", "HEAD^{commit}").stdout.strip()  # one commit for the comparison and the push
+    ci = git("diff", "--name-only", f"{remote[0]}...{head}", "--", ".github")
+    if ci.returncode or not head:
+        return f"could not compare the task branch with origin's {base}: {ci.stderr.strip()}"
+    if ci.stdout.strip():
+        return (f"the branch changes .github ({ci.stdout.split()}): a person reads the diff, "
                 "pushes the branch, opens the PR and writes its URL into pr.txt")
     branch = f"office/{task['name']}"
     # No -u: it writes the product repository's shared config. No force: a diverged branch of that name stops here.
-    push = git("push", "origin", f"HEAD:refs/heads/{branch}")
+    push = git("push", "origin", f"{head}:refs/heads/{branch}")
     if push.returncode:
         return f"git push failed: {push.stderr.strip()}"
     made = subprocess.run(["gh", "pr", "create", "--repo", repo, "--draft", "--head", branch,
