@@ -22,7 +22,7 @@
 | 구성 요소 | 어디 | 맡는 층 | 지금 상태 |
 | --- | --- | --- | --- |
 | repo-baseline(원본) | `minjunkim-dev/repo-baseline`, 로컬 클론 경로는 `baseline.path` | PR이 `main`에 들어가는 조건: 완료 증거, 다른 컨텍스트 리뷰, Door, 사람 병합, GitHub 설정, 회고 | 코어 4파일 + 선택 프로필. 2026-11-12 `main` = `f6566c4` |
-| repo-office(이 저장소) | `minjunkim-dev/repo-office`(비공개). 2026-11-11에 repo-baseline-office의 `claude-office/`에서 git 기록째 옮겼다 | PR 전 작업을 단계로 돌리고, 초안 PR을 열고, 리뷰를 한 번 돌린다 | 엔진·권한·sandbox·스킬 연결·초안 PR까지 실측함 |
+| repo-office(이 저장소) | `minjunkim-dev/repo-office`(공개). 2026-11-11에 repo-baseline-office의 `claude-office/`에서 git 기록째 옮겼다 | PR 전 작업을 단계로 돌리고, 초안 PR을 열고, 리뷰를 한 번 돌린다 | 엔진·권한·sandbox·스킬 연결·초안 PR까지 실측함 |
 | Matt Pocock 스킬 | 플러그인 `mattpocock-skills@mattpocock`(캐시 1.3.2). 사용자 설정에서는 꺼져 있고, office `.claude/settings.json`의 `enabledPlugins`가 작업자에게만 켠다 | 리뷰 두 축, TDD, 버그 진단, 설계([matt-skills 프로필](https://github.com/minjunkim-dev/repo-baseline/blob/main/profiles/matt-skills/README.md)) | 작업자에 실린다(§6) |
 | pstack | 플러그인 `pstack@cursor-plugins` 0.15.36. 사용자 설정에서 켜져 있고 office 설정에는 없다 | 설계 질문(`interrogate`), 영향 범위(`blast-radius`) | 사람이 부를 때만([pstack 프로필](https://github.com/minjunkim-dev/repo-baseline/blob/main/profiles/pstack/README.md)). leader가 권한다 |
 | 개인 도구 | `hc`(herdr-core), ai-memory, trail 등 | 작업자 띄우기, 세션 간 기억 | 엔진이 `hc`를 쓴다 |
