@@ -457,11 +457,17 @@ class PipelineTests(unittest.TestCase):
         subprocess.run(["git", "-C", str(other), "-c", "user.name=t", "-c", "user.email=t@example.com",
                         "commit", "-q", "--allow-empty", "-m", "someone else's change"], check=True)
         subprocess.run(["git", "-C", str(other), "push", "-q", "origin", "HEAD:refs/heads/main"], check=True, capture_output=True)
-        (self.job / "pr-body.md").write_text("# fix: x\n", encoding="utf-8")
+        # The template's 그림 line as a Mermaid block: it reaches the PR byte for byte, so GitHub draws it.
+        text = "## Summary\n그림:\n```mermaid\nflowchart LR\n  a[\"# a\"] --> b\n```\n완료 기준: x\n"
+        raw = f"# fix: x\n\n{text}".encode()
+        (self.job / "pr-body.md").write_bytes(raw)
         task = json.loads((self.job / "task.json").read_text())
         head = subprocess.run(["git", "-C", str(self.job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-        self.assertIsNone(self.engine.open_draft(self.job, task, {"id": "draft", "body": "pr-body.md", "out": "pr.txt"}, b"# fix: x\n", head))
-        self.assertEqual([c[:2] for c in gh()], [["pr", "create"]])
+        self.assertIsNone(self.engine.open_draft(self.job, task, {"id": "draft", "body": "pr-body.md", "out": "pr.txt"}, raw, head))
+        [call] = gh()
+        self.assertEqual(call[:2], ["pr", "create"])
+        self.assertEqual(call[call.index("--title") + 1], "fix: x")
+        self.assertEqual(call[call.index("--body") + 1], text)
 
     @unittest.skipUnless(shutil.which("sandbox-exec"), "macOS sandbox-exec")
     def test_draft_stage_pushes_only_the_checked_commit(self):
