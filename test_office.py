@@ -322,7 +322,7 @@ class PipelineTests(unittest.TestCase):
     def test_draft_stage_opens_the_pr_after_the_remote_base_moved(self):
         bare, _, gh = self.fake_github()
         other = Path(self.tmp.name) / "other"
-        subprocess.run(["git", "clone", "-q", str(bare), str(other)], check=True, capture_output=True)
+        subprocess.run(["git", "clone", "-q", "-b", "main", str(bare), str(other)], check=True, capture_output=True)
         subprocess.run(["git", "-C", str(other), "-c", "user.name=t", "-c", "user.email=t@example.com",
                         "commit", "-q", "--allow-empty", "-m", "someone else's change"], check=True)
         subprocess.run(["git", "-C", str(other), "push", "-q", "origin", "HEAD:refs/heads/main"], check=True, capture_output=True)
