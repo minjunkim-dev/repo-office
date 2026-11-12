@@ -277,15 +277,17 @@ def open_draft(job, task, stage, raw, head, approved=()):
     # and Ready is when they ask a skipping review bot for a review (POLICY §3). A failed gh leaves the draft to them.
     if stage.get("easy"):
         design = read_body(job / stage["easy"])  # the bytes a person approved, not a copy changed since
-        names = git("diff", "--name-only", f"{remote[0]}...{head}")
-        guarded = names.returncode or any(re.match(TRUST_PATHS, n) for n in names.stdout.splitlines())
+        # -z: raw names, not C-quoted ones; --no-renames: a rename out of a trust path shows its old name too
+        names = git("diff", "--name-only", "-z", "--no-renames", f"{remote[0]}...{head}")
+        guarded = names.returncode or any(re.match(TRUST_PATHS, n) for n in names.stdout.split("\0") if n)
         if hashlib.sha256(design).hexdigest() in approved and easy(design, raw) and not guarded:
             subprocess.run(["gh", "pr", "ready", url], cwd=job, capture_output=True)
     return None
 
 
 # Paths a worker could use to steer later sessions or tools, whatever the body claims: those PRs wait for a person.
-TRUST_PATHS = r"(?i)(.*/)?(\.github|\.claude|\.agents|\.codex|\.cursor|\.mcp\.json|AGENTS\.md|CLAUDE\.md|REVIEW\.md|\.envrc)(/|$)"
+INSTRUCTIONS = ("CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".claude", ".mcp.json", ".envrc")
+TRUST_PATHS = rf"(?i)(.*/)?({'|'.join(map(re.escape, (*INSTRUCTIONS, '.github', '.agents', '.codex', '.cursor', 'REVIEW.md')))})(/|$)"
 
 
 def easy(design, body):
@@ -477,8 +479,7 @@ def advance(job, name, runner):
 
 
 # Words that, as a file or folder in the task folder, a later session or git reads as instructions or settings.
-CONTROL = ("task.json", "state.json", "pr.txt", "pr.diff", "run.lock", "repo/.git", ".git",
-           "CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".claude", ".mcp.json", ".envrc")
+CONTROL = ("task.json", "state.json", "pr.txt", "pr.diff", "run.lock", "repo/.git", ".git", *INSTRUCTIONS)
 
 
 def check_profile(job, protect=()):

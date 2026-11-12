@@ -313,11 +313,21 @@ class PipelineTests(unittest.TestCase):
                  ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음\n> 신뢰 경계: 없음", False),
                  ("Door: 되돌리기 쉬움", "**Door:** 되돌리기 쉬움\n신뢰 경계: 없음", False),
                  ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", ".claude/settings.json"),
-                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", "docs/AGENTS.md")]
+                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", "docs/AGENTS.md"),
+                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", "CLAUDE.local.md"),
+                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", ".claude/설정.json"),  # git quotes it by default
+                 ("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", "AGENTS.md->notes.md")]  # a rename out
         for design, body, *rest in cases:
             ready, guarded = (rest[0], None) if isinstance(rest[0], bool) else (False, rest[0])
             with self.subTest(design=design, body=body):
                 self.setUp()
+                git = ["git", "-C", str(self.job / "repo")]
+                subprocess.run([*git, "config", "core.quotePath", "true"], check=True)  # git's default, whatever ~/.gitconfig says
+                source, _, target = (guarded or "").partition("->")
+                if target:  # the base has the trust file; the branch renames it away
+                    (self.job / "repo" / source).write_text("x\n", encoding="utf-8")
+                    subprocess.run([*git, "add", source], check=True)
+                    subprocess.run([*git, "commit", "-q", "-m", "base"], check=True)
                 _, draft, gh = self.fake_github()
 
                 class Worker(FakeWorker):
@@ -328,12 +338,15 @@ class PipelineTests(unittest.TestCase):
                             (self.job / "design.md").write_text(f"# d\n\n{design}\n", encoding="utf-8")
                         if stage == "implement":
                             (self.job / "pr-body.md").write_text(f"# fix: x\n\n{body}\n", encoding="utf-8")
-                            if guarded:  # the body says no trust boundary; the commit touches one
+                            if target:
+                                subprocess.run([*git, "mv", source, target], check=True)
+                                subprocess.run([*git, "commit", "-q", "-m", "g"], check=True)
+                            elif guarded:  # the body says no trust boundary; the commit touches one
                                 path = self.job / "repo" / guarded
                                 path.parent.mkdir(parents=True, exist_ok=True)
                                 path.write_text("x\n", encoding="utf-8")
-                                subprocess.run(["git", "-C", str(self.job / "repo"), "add", guarded], check=True)
-                                subprocess.run(["git", "-C", str(self.job / "repo"), "commit", "-q", "-m", "g"], check=True)
+                                subprocess.run([*git, "add", "-f", guarded], check=True)  # -f: ignored names commit too
+                                subprocess.run([*git, "commit", "-q", "-m", "g"], check=True)
 
                 worker = Worker(self.job)
                 self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
