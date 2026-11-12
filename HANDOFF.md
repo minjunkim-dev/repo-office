@@ -90,6 +90,10 @@
 - 2026-11-12, leader 수동 스킬 요청 실측(HARNESS §9의 4, Claude Code 2.1.322, Opus 5.5 medium): `hc`로 `leader/`에 대화형 Claude Code를 띄우고, 장난감 저장소에 막연한 요청("계산 기능을 좀 더, 뭘 넣을지는 모르겠다")을 줬다.
   - 처음 규칙("요청이 막연하면 `grill-with-docs`를 권한다")으로는 leader가 방향 세 가지를 묻고, 과제를 등록하고, 엔진을 돌린 뒤에야 "다음에는 `grill-with-docs`로" 권했다. 그래서 규칙에 "방향을 묻기 전에, 등록하기 전에 권한다"를 더했다. 고친 뒤 새 leader 세션은 방향 질문 안에 `grill-with-docs` 권유를 함께 넣었다.
   - 설계 승인 대기(종료 코드 3): 작업자 설계의 Door가 되돌리기 쉬움이라 leader가 "`interrogate`·`blast-radius`는 권하지 않는다"고 밝히고 승인을 요청했다. Door가 어려움인 설계와 병합 뒤 `retro` 권유는 돌려 보지 않았다.
+- 2026-11-12, 설계·구현 스킬 실측(HARNESS §9의 3, Claude Code 2.1.322): 로컬 장난감 과제 `toy-tdd`(calc.py에 `multiply`)를 설계 → 승인 → 구현 → 검사까지 엔진으로 돌렸다.
+  - 설계 작업자는 지시대로 `design.md`에 「테스트할 seam」 목록(공개 인터페이스 하나, 경우 다섯)을 적었다. `codebase-design`은 부르지 않았다(인터페이스가 정해진 과제라 지시서상 부를 때가 아니다).
+  - 구현 작업자는 `mattpocock-skills:tdd`를 불렀고, 테스트를 먼저 쓰고 `engine.py test`로 실패를 본 뒤 구현해 통과시켰다(빨강 → 초록). seam을 사용자에게 묻지 않고 승인된 목록을 따랐다. 커밋 하나, 테스트 5개 통과.
+  - 함정: 작업자의 `engine.py test`가 남긴 `__pycache__/`를 검사 단계가 커밋하지 않은 변경으로 보아 두 번 실패했다. 작업자의 `rm`은 거부되어 `BLOCKED.md`를 썼다. 그래서 엔진이 돌리는 테스트에 `PYTHONDONTWRITEBYTECODE=1`을 준다. Python 말고 다른 도구의 산출물은 제품 저장소의 `.gitignore`에 있어야 한다. 고친 뒤 캐시를 지우고 검사 단계만 다시 돌려 통과(`pr.txt` 대기)를 봤다. 구현 단계부터 다시 돌리지는 않았다.
 
 ## 5. 다시 재현하는 법
 
