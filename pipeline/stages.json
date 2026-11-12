@@ -170,6 +170,7 @@
    "id": "draft",
    "by": "script",
    "body": "pr-body.md",
+   "easy": "design.md",
    "out": "pr.txt"
   },
   {
