@@ -49,7 +49,7 @@ git show f31431f^:docs/archive/CHANGELOG-2026.md       # 재설계 전 변경 �
 
 ## 4. 지금 검증된 것과 아닌 것
 
-- 검증됨: 단계 순서, 설계 승인 해시, 검사 실패 재시도, `BLOCKED.md`, 작업자 권한(병합·`main` push·`.env` 읽기 불가), 두 sandbox, Claude Code 판 확인. 단위 테스트 31개와 장난감 저장소 실제 실행, PR #24 리뷰 실행(`gh pr edit`·push 제외). 세부는 [HANDOFF.md](HANDOFF.md) §4.
+- 검증됨: 단계 순서, 설계 승인 해시, 검사 실패 재시도, `BLOCKED.md`, 작업자 권한(병합·`main` push·`.env` 읽기 불가), 두 sandbox, Claude Code 판 확인. 단위 테스트 34개와 장난감 저장소 실제 실행, 초안 PR 단계(엔진의 push·draft PR·Ready 대기), PR #24 리뷰 실행(`gh pr edit`·push 제외). 세부는 [HANDOFF.md](HANDOFF.md) §4.
 - 검증 안 됨: 스킬이 끼는 모든 경로. office 지시서(`pipeline/prompts/*.md`)와 단계표에 스킬 이름이 없다.
 - 2026-11-12 실측(§9의 1): 단계표 인자 그대로의 작업자가 어떤 스킬을 보고 부르는지 확인했다. 결과는 [HANDOFF.md](HANDOFF.md) §4의 2026-11-12 항목이다.
 - 규칙은 반쯤 연결되어 있다. 지시서가 POLICY·`prompts/review.md`를 가리키고, 허용 목록이 병합·`main` push를 막는다. 스킬은 연결되어 있지 않다.
@@ -105,7 +105,7 @@ git show f31431f^:docs/archive/CHANGELOG-2026.md       # 재설계 전 변경 �
    - 쓰는 스킬만 office 체크아웃 `.claude/skills/`에 둔다. 하네스 폴더라 신뢰 경계 경로이고 Door는 어려움이다.
    - `--setting-sources`를 넓힌다. 사용자 전역 허용 규칙이 새므로 권하지 않는다(HANDOFF §4).
 5. 원본 프로필(matt-skills·pstack)의 규칙을 바꿔야 하면 원본에서 바꾼다. 이 저장소에는 원본 파일의 사본을 두지 않는다.
-6. PR 열기를 자동으로 할까. 2026-11-12에 소유자가 아래 제안을 따르라고 했다. 채택하되 §9의 1~4를 끝낸 뒤 따로 PR 하나로 넣는다. 그때까지는 사람이 연다. 제안: 검사 단계가 통과하면 엔진이 PR 브랜치를 push하고 초안(draft) PR을 연다. 사람은 초안을 보고 "Ready for review"로 바꾸거나 닫는다. 근거: 원본 재설계안의 원칙이 "PR은 열되 병합은 막는다"이고, 초안 PR은 닫으면 되돌아간다. 바꿀 곳은 단계표·leader 규칙·`AGENTS.md`이므로 소유자 승인이 필요하다. 원격에 처음 무언가를 올리는 단계라 Door는 어려움으로 본다.
+6. PR 열기를 자동으로 할까. 2026-11-12에 소유자가 아래 제안을 따르라고 했다. 채택하되 §9의 1~4를 끝낸 뒤 따로 PR 하나로 넣는다. 그때까지는 사람이 연다. 제안: 검사 단계가 통과하면 엔진이 PR 브랜치를 push하고 초안(draft) PR을 연다. 사람은 초안을 보고 "Ready for review"로 바꾸거나 닫는다. 근거: 원본 재설계안의 원칙이 "PR은 열되 병합은 막는다"이고, 초안 PR은 닫으면 되돌아간다. 바꿀 곳은 단계표·leader 규칙·`AGENTS.md`이므로 소유자 승인이 필요하다. 원격에 처음 무언가를 올리는 단계라 Door는 어려움으로 본다. 2026-11-12에 구현했고, 장난감 저장소에서 리뷰까지 끝까지 돌렸다(HANDOFF §4).
 7. office를 어디에 둘까. 2026-11-11에 별도 저장소 `minjunkim-dev/repo-office`(이 저장소)로 옮겼다. 아래는 그 경위다. 옮기기 전에는 원본 위에 `claude-office/`를 얹은 후보 저장소다(README). 원본을 정본으로 두는 것은 유지한다. office를 정본으로 삼으면 모든 소비 레포가 Claude Code·macOS·`hc`에 묶이고, #73의 "어떤 하네스든 `cp`만으로"가 깨진다.
    - 지금 구조의 비용: `claude-office/` 밖을 원본과 손으로 맞춘다. 이 저장소가 원본의 사본인 이유는 엔진이 상위 폴더를 repo-baseline 클론으로 쓰기 때문이다(`engine.py`의 `BASELINE = OFFICE.parent`). 리뷰 단계도 원본 판이 아니라 이 사본의 `prompts/review.md`·`tools/review_preflight.py`를 쓴다.
    - 원본의 선택 프로필(`profiles/office`)로 옮기는 안은 버린다. `profiles/`는 소비 레포가 복사해 가는 파일을 두는 곳인데, office는 소비 레포에 복사하지 않고 자기 체크아웃에서 돈다. 또 macOS·Claude Code에 묶인 코드와 테스트가 중립 정본에 들어온다.

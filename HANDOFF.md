@@ -83,7 +83,7 @@
   - 곁가지: 2.1.322는 단계표의 `Write(<과제>/state.json)` 같은 거부 규칙이 「never matches」라며 `Edit(...)`를 쓰라고 경고한다. 같은 경로의 `Edit(...)` 거부가 함께 있어 빈틈은 아니다. 단계표는 소유자 승인 없이 고치지 않으므로 그대로 둔다.
 - 2026-11-12, 리뷰 위임 실측(HARNESS §9의 2, Claude Code 2.1.322): 공개 장난감 저장소 `minjunkim-dev/office-toy`(시험 뒤 지울 것)의 PR #1(REVIEW.md에 「스킬 위임」 절)을 엔진 리뷰 단계로 돌렸다. 단계표 인자 그대로, 과제를 `review` 단계에 두고 `engine.py run`.
   - 작업자 폴더는 git 저장소가 아니라 `check_skills.py`를 직접 돌리면 git이 실패한다. 그래서 `engine.py skills <과제> <base>`가 `repo/`에서 `--harness claude`로 돌린다. 작업자 sandbox 안에서도 플러그인 캐시를 읽어 종료 코드 0과 `code-review` 경로·sha256(1.3.2, `9c921a8d8813`)을 출력했다.
-  - 판은 고정되지 않는다. office `.claude/settings.json`은 `enabledPlugins`만 둔다. 같은 이름 `mattpocock` 마켓플레이스가 사용자 범위(`~/.claude/plugins/known_marketplaces.json`)에 ref 없이 있으면 프로젝트 설정의 ref는 듣지 않는다(PR #4 리뷰). 이 실측에 실린 것은 캐시 폴더 이름이 `1.3.2`여도 upstream `main`의 `4ae2317`이다(태그 `v1.3.2`는 `d1478fc`, `code-review/`는 두 커밋 사이에 같다). 판을 고정하려면 실린 `gitCommitSha`로 확인한다. 남은 이슈다.
+  - 판은 고정되지 않는다. office `.claude/settings.json`은 `enabledPlugins`만 둔다. 같은 이름 `mattpocock` 마켓플레이스가 사용자 범위(`~/.claude/plugins/known_marketplaces.json`)에 ref 없이 있으면 프로젝트 설정의 ref는 듣지 않는다(PR #4 리뷰). 이 실측에 실린 것은 캐시 폴더 이름이 `1.3.2`여도 upstream `main`의 `4ae2317`이다(태그 `v1.3.2`는 `d1478fc`, `code-review/`는 두 커밋 사이에 같다). 판을 고정하려면 실린 `gitCommitSha`로 확인한다. 2026-11-12에 소유자가 정했다: 판은 고정하지 않고 기록만 한다. 리뷰 보고 「확인한 것」의 `check_skills.py` 경로·sha256이 그 기록이다. 판이 다르면 작업자를 멈추는 안(PR #7)은 플러그인을 올릴 때마다 모든 과제를 멈추고 단계표 승인을 요구해서 닫았다.
   - 작업자는 `mattpocock-skills:code-review`를 불렀고, 스킬이 두 축을 하위 에이전트로 띄웠다. `Agent` 도구도 허용 규칙 없이 `dontAsk`에서 돌았다. 하위 에이전트는 지시대로 `pr.diff`를 Read로 읽었고, `cd ... && python3 -m unittest`는 거부됐다(부모의 `engine.py test` 결과로 대신했다). 보고를 `review.md`와 PR 본문에 쓰고 엔진은 `done`으로 끝났다.
   - 함정: 작업자의 `engine.py test`가 `repo/`에 `__pycache__/`를 남겨, 보고 직전 preflight가 `worktree: different`를 냈다. 작업자는 원인을 확인하고 넘어갔다. 제품 저장소의 `.gitignore`에 없으면 매번 나온다.
   - 첫 실행은 작업자 CLI 계정의 5시간 한도에 걸려 첫 응답 전에 끝났고, 엔진은 「review.md 없음」 두 번으로 `BLOCKED.md`를 썼다. 한도 오류와 작업 실패를 구별하지 못한다.
@@ -94,6 +94,13 @@
   - 설계 작업자는 지시대로 `design.md`에 「테스트할 seam」 목록(공개 인터페이스 하나, 경우 다섯)을 적었다. `codebase-design`은 부르지 않았다(인터페이스가 정해진 과제라 지시서상 부를 때가 아니다).
   - 구현 작업자는 `mattpocock-skills:tdd`를 불렀고, 테스트를 먼저 쓰고 `engine.py test`로 실패를 본 뒤 구현해 통과시켰다(빨강 → 초록). seam을 사용자에게 묻지 않고 승인된 목록을 따랐다. 커밋 하나, 테스트 5개 통과.
   - 함정: 작업자의 `engine.py test`가 남긴 `__pycache__/`를 검사 단계가 커밋하지 않은 변경으로 보아 두 번 실패했다. 작업자의 `rm`은 거부되어 `BLOCKED.md`를 썼다. 그래서 엔진이 돌리는 테스트에 `PYTHONDONTWRITEBYTECODE=1`을 준다. Python 말고 다른 도구의 산출물은 제품 저장소의 `.gitignore`에 있어야 한다. 고친 뒤 캐시를 지우고 검사 단계만 다시 돌려 통과(`pr.txt` 대기)를 봤다. 구현 단계부터 다시 돌리지는 않았다.
+- 2026-11-12, 초안 PR 단계 실측(HARNESS §8의 6, Claude Code 2.1.322, sonnet): `minjunkim-dev/office-toy`에 버그 과제 `toy-mean`(`mean([1, 2])`가 1을 낸다)을 등록하고 설계 → 승인 → 구현 → 검사 → 초안 PR → Ready → 리뷰를 엔진으로 끝까지 돌렸다(PR #3, 종료 코드 0).
+  - 엔진이 `office/toy-mean`을 push하고 draft PR을 열고 `pr.txt`를 썼다. draft인 동안 `run`은 종료 코드 3으로 기다렸고, Ready로 바꾼 뒤 리뷰 단계가 돌았다.
+  - 구현 작업자는 `mattpocock-skills:diagnosing-bugs`를 먼저, 이어서 `:tdd`를 불렀다(빨강 `1 != 1.5` → 초록). 설계 작업자는 `codebase-design`을 부르지 않았다(정할 인터페이스가 없다). 리뷰 작업자는 `engine.py skills` 종료 코드 0을 받고 `:code-review`를 두 축으로 불렀고, 보고에 플러그인 판과 `SKILL.md` sha256을 적었다.
+  - `check_skills.py` 종료 코드 2: `AGENTS.md`를 바꾸는 PR #2를 리뷰 단계만 돌렸다. 작업자는 종료 코드 2를 받고 위임하지 않고 두 축을 직접 리뷰했다. 곁가지: 작업자가 `gh pr view 2`처럼 번호만 넘기자 office 저장소의 PR로 해석됐다. 작업자는 `pr.txt`의 URL로 바꿨다.
+  - 측정하지 않은 것: 검사 실패 뒤 구현 재시도(검사가 한 번에 통과했다. 단위 테스트는 있다), `check_skills.py` 종료 코드 1(사용자 홈의 스킬을 지워야 한다).
+  - 함정: hc 터미널은 holder 프로세스(`hc hold`)가 띄운다. holder가 Claude Code 세션 안에서 시작되면 모든 작업자가 그 세션의 환경 변수(`CLAUDE_CODE_CHILD_SESSION` 등)를 물려받는다. 그러면 작업자가 대화 기록을 저장하지 않아 hc가 턴 끝을 알아채지 못하고 엔진이 멈춘다. `hc server restart`는 holder를 남긴다. 깨끗한 셸에서 `hc server stop` 뒤 `hc server start`로 띄우고, 엔진도 깨끗한 셸에서 돌린다. 엔진을 띄운 셸의 환경도 넘어가는지는 확인하지 않았다.
+  - 곁가지: 작업자의 git은 사용자 전역 git 설정을 읽는다. `core.hooksPath`가 홈을 가리켜 커밋 때 `post-commit: Operation not permitted`가 나왔다. sandbox가 막았고 커밋은 됐다.
 
 ## 5. 다시 재현하는 법
 
@@ -111,7 +118,7 @@ python3 pipeline/engine.py new toy-subtract --repo /tmp/toy --test 'python3 -m u
 # jobs/toy-subtract/INTENT.md에 목표를 쓴다. 예: calc.py에 subtract(a, b)와 테스트를 더한다
 OFFICE_STAGES=/tmp/stages-sonnet.json python3 pipeline/engine.py run toy-subtract   # exit 3: 설계 승인 대기
 python3 pipeline/engine.py approve toy-subtract                                       # 사람이 design.md를 읽은 뒤
-OFFICE_STAGES=/tmp/stages-sonnet.json python3 pipeline/engine.py run toy-subtract   # exit 3: pr.txt 대기
+OFFICE_STAGES=/tmp/stages-sonnet.json python3 pipeline/engine.py run toy-subtract   # exit 4: origin이 GitHub이 아니라 초안 PR을 못 연다. GitHub 저장소면 exit 3: 초안 PR 대기
 python3 pipeline/engine.py workers
 ```
 

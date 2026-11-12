@@ -9,6 +9,8 @@
   engine.py preflight <task>  run repo-baseline's review preflight for pr.txt in its repo/, diff into pr.diff
   engine.py skills <task> <base>  run matt-skills check_skills.py in its repo/ (exit 0 delegate, 1 missing, 2 do not)
 
+After the check passes, run pushes the task branch and opens a draft PR from pr-body.md; a person marks it ready.
+
 Exit codes for run: 0 done, 2 no such task or another run of it is going, 3 waiting for a person, 4 blocked.
 """
 
@@ -19,6 +21,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -41,9 +44,10 @@ STAGES = Path(os.environ.get("OFFICE_STAGES", PIPELINE / "stages.json"))
 DONE, WAIT, BLOCKED = 0, 3, 4
 # git the engine runs outside the sandbox over a task's repo/ ignores settings task code could plant, such as a
 # committed nested repository whose config runs core.fsmonitor on `git status`. Env config wins over repository files.
+# Replace refs, which task code can write, would show git a different history.
 _SAFE = {"core.fsmonitor": "false", "diff.ignoreSubmodules": "all", "core.hooksPath": "/dev/null",
          "fetch.recurseSubmodules": "false", "submodule.recurse": "false", "protocol.ext.allow": "never"}
-SAFE_GIT = {**os.environ, "GIT_CONFIG_COUNT": str(len(_SAFE)),
+SAFE_GIT = {**os.environ, "GIT_NO_REPLACE_OBJECTS": "1", "GIT_CONFIG_COUNT": str(len(_SAFE)),
             **{f"GIT_CONFIG_{kind}_{i}": v for i, kv in enumerate(_SAFE.items()) for kind, v in zip(("KEY", "VALUE"), kv)}}
 # hc terminal names are global to the hc core; this tag keeps another checkout's jobs folder from sharing them.
 TAG = hashlib.sha256(str(JOBS.resolve()).encode()).hexdigest()[:4]
@@ -196,7 +200,7 @@ def unpinned(job, task):
     def git(cwd, *args):
         return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True)
 
-    pr_file = job / "pr.txt"  # a person wrote it; workers cannot edit it
+    pr_file = job / "pr.txt"  # the draft stage or a person wrote it; workers cannot edit it
     pr = slug(pr_file.read_text(encoding="utf-8")) if pr_file.exists() else None
     product = git(task["repo"], "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
     for root in (BASELINE, OFFICE):  # the same repository twice gives the same answer twice
@@ -210,6 +214,77 @@ def unpinned(job, task):
                 root, "status", "--porcelain", "--untracked-files=all").stdout.strip():
             return (f"the PR under review is not known to belong to another repository, and {root} differs from "
                     "origin/main: run the task from a clean checkout at origin/main")
+    return None
+
+
+def read_body(body):
+    """The PR body's bytes, or b"" unless it is a regular file with one name of at most 60000 bytes.
+    The worker wrote it inside its sandbox, and the engine reads it outside and posts it: a link could point at
+    a file the sandbox hides (credentials). So it is opened without following links. O_NONBLOCK: a FIFO would wait for a writer."""
+    try:
+        fd = os.open(body, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return b""
+    with os.fdopen(fd, "rb") as file:
+        info = os.fstat(file.fileno())
+        ok = stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_size <= 60000
+        return file.read() if ok else b""
+
+
+def open_draft(job, task, stage, raw=None):
+    """Push the task branch and open a draft PR with the body the implement worker wrote, else why not."""
+    pr_file = job / stage["out"]
+    if pr_file.exists():  # an earlier run opened it, or a person did and wrote the URL
+        return None
+    body = job / stage["body"]
+    raw = read_body(body) if raw is None else raw  # the bytes the caller already checked, so it posts exactly those
+    title, _, text = raw.decode("utf-8", "replace").partition("\n")
+    if not title.startswith("# ") or not title[2:].strip():
+        return f"{body} must be a regular file of at most 60000 bytes that starts with a `# <PR title>` line"
+    git = lambda *a: subprocess.run(["git", "-C", str(job / "repo"), *a], capture_output=True, text=True, env=SAFE_GIT)  # noqa: E731
+    repo = slug(git("config", "--get", "remote.origin.url").stdout)  # as written: url.*.insteadOf may point elsewhere
+    if not repo:
+        return "the product repository's origin is not on GitHub: open the PR and write its URL into pr.txt"
+    # A pushed branch runs the repository's workflows, with their secrets: a person pushes changes to them. The
+    # worker can move local refs, origin/main included, so compare with the base commit the remote has now.
+    base = task["base"].removeprefix("origin/")
+    remote = git("ls-remote", "origin", f"refs/heads/{base}").stdout.split()[:1]
+    if not remote:
+        return f"origin has no branch {base} to compare the task branch with"
+    git("fetch", "-q", "origin", f"refs/heads/{base}")  # others may have pushed to it since this checkout was made
+    head = git("rev-parse", "--verify", "HEAD^{commit}").stdout.strip()  # one commit for the comparison and the push
+    ci = git("diff", "--name-only", f"{remote[0]}...{head}", "--", ".github")
+    if ci.returncode or not head:
+        return f"could not compare the task branch with origin's {base}: {ci.stderr.strip()}"
+    if ci.stdout.strip():
+        return (f"the branch changes .github ({ci.stdout.split()}): a person reads the diff, "
+                "pushes the branch, opens the PR and writes its URL into pr.txt")
+    branch = f"office/{task['name']}"
+    # No -u: it writes the product repository's shared config. No force: a diverged branch of that name stops here.
+    push = git("push", "origin", f"{head}:refs/heads/{branch}")
+    if push.returncode:
+        return f"git push failed: {push.stderr.strip()}"
+    made = subprocess.run(["gh", "pr", "create", "--repo", repo, "--draft", "--head", branch,
+                           "--base", base, "--title", title[2:].strip(),
+                           "--body", text.lstrip("\n")], cwd=job, capture_output=True, text=True)
+    url = (made.stdout.strip().splitlines() or [""])[-1]
+    if made.returncode or not re.fullmatch(rf"https://github\.com/{re.escape(repo)}/pull/\d+", url, re.I):
+        return f"gh pr create failed: {(made.stderr or made.stdout).strip()}"
+    pr_file.write_text(url + "\n", encoding="utf-8")
+    return None
+
+
+def not_ready(pr_file):
+    """What a person still has to do with the PR in pr_file before the review, else None."""
+    if not pr_file.exists():
+        return f"waiting: a person opens the PR and writes its URL into {pr_file}"
+    url = pr_file.read_text(encoding="utf-8").split()[:1]
+    view = subprocess.run(["gh", "pr", "view", *url, "--json", "isDraft", "--jq", ".isDraft"], cwd=pr_file.parent,
+                          capture_output=True, text=True)
+    if view.returncode:
+        return f"waiting: gh pr view {' '.join(url)} failed: {view.stderr.strip()}"
+    if view.stdout.strip() != "false":
+        return f"waiting: a person reads the draft PR {' '.join(url)} and marks it Ready for review, or closes it"
     return None
 
 
@@ -256,7 +331,7 @@ def advance(job, name, runner):
             print(f"blocked: see {job / 'BLOCKED.md'}")
             return BLOCKED
         if state["stage"] == "done":
-            print("done: the owner opens or merges the PR (POLICY §5)")
+            print("done: the owner merges the PR (POLICY §5)")
             return DONE
         index = ids.index(state["stage"])
         # An approval binds the file's content: any later change sends the task back to that approval.
@@ -271,21 +346,51 @@ def advance(job, name, runner):
             if stage.get("approve") and sha(job / stage["approve"]) != state.get("approved", {}).get(stage["id"]):
                 print(f"waiting: a person reads {job / stage['approve']} and runs engine.py approve {name}")
                 return WAIT
-            if stage.get("wait") and not (job / stage["wait"]).exists():
-                print(f"waiting: a person writes {job / stage['wait']}")
+            if stage.get("ready") and (waiting := not_ready(job / stage["ready"])):
+                print(waiting)
                 return WAIT
+        elif stage["by"] == "script" and stage.get("body"):
+            # Push only the commit the check stage passed: a commit made since (a rerun after a block) goes through it again.
+            head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=job / "repo", capture_output=True, text=True, env=SAFE_GIT).stdout.strip()
+            if not (job / stage["out"]).exists() and head != state.get("checked"):
+                check = next((s["id"] for s in reversed(flow[:index]) if s["by"] == "script" and not s.get("body")), None)
+                if not check:
+                    return block(job, "no check stage before the draft stage: push only a tested commit")
+                move(check)
+                continue
+            # The tested code cannot write the body by name, but a hard link it makes and removes again would change it.
+            # A changed body blocks, and its new hash becomes the one to match: a person reads that file, clears
+            # BLOCKED.md, and the engine posts it only if it is still what they read. No hash at all fails closed.
+            raw = read_body(job / stage["body"])
+            expected = state.get("bodies", {}).get(stage["body"])
+            if not (job / stage["out"]).exists() and hashlib.sha256(raw).hexdigest() != expected:
+                if expected is None:
+                    check = next(s["id"] for s in reversed(flow[:index]) if s["by"] == "script" and not s.get("body"))
+                    move(check)
+                    continue
+                state.setdefault("bodies", {})[stage["body"]] = hashlib.sha256(raw).hexdigest()
+                save(state_path, state)
+                return block(job, f"{stage['body']} changed after the check stage read it: a person reads it before the engine posts it")
+            if error := open_draft(job, task, stage, raw):
+                return block(job, error)
         elif stage["by"] == "script":
             git = lambda *a: subprocess.run(["git", *a], cwd=job / "repo", capture_output=True, text=True, env=SAFE_GIT).stdout.strip()  # noqa: E731
             # Read what the worker handed over before the test writes its own files (caches, reports).
             head, dirty = git("rev-parse", "HEAD"), git("status", "--porcelain", "--untracked-files=all")
+            bodies = [s["body"] for s in flow if s.get("body")]
+            # What the draft stage may post: the bodies as they are before the tested code runs.
+            body_shas = {b: hashlib.sha256(read_body(job / b)).hexdigest() for b in bodies}
             if not shutil.which("sandbox-exec"):
                 return block(job, "sandbox-exec is missing: the check stage runs the worker's code only inside a sandbox")
-            result = run_test(job, task, sandboxed=True, capture_output=True, text=True)
+            # The engine posts the PR body right after this stage, outside any sandbox: the tested code must not write it.
+            result = run_test(job, task, sandboxed=True, protect=bodies, capture_output=True, text=True)
             (job / stage["out"]).write_text(
                 f"# {stage['id']}\n\n- 명령: `{task['test']}`\n- 커밋: `{head}`\n- exit {result.returncode}\n"
                 f"- 커밋하지 않은 변경: {dirty or '없음'}\n\n```\n{(result.stdout + result.stderr)[-4000:]}\n```\n", encoding="utf-8")
             if result.returncode or dirty:
                 failed = f"`{task['test']}` exit {result.returncode}" + (", uncommitted changes" if dirty else "")
+            else:
+                state.update(checked=head, bodies=body_shas)  # saved by move() below
         else:
             if stage["id"] == "review" and (reason := unpinned(job, task)):
                 return block(job, reason)
@@ -322,14 +427,14 @@ CONTROL = ("task.json", "state.json", "pr.txt", "pr.diff", "run.lock", "repo/.gi
            "CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".claude", ".mcp.json", ".envrc")
 
 
-def check_profile(job):
+def check_profile(job, protect=()):
     """Seatbelt rules for the check stage, the same writes the worker's sandbox allows: the task folder, minus its
     control files. No network but localhost and unix sockets in the task folder. No reads in the home folder (credentials) but the task folder, this
     checkout and the product's git data, like blockReadsOutsideWorkingDirectories for the worker. The worker's own `engine.py test` already runs in Claude Code's
     sandbox, which refuses a sandbox inside it, so only the engine's check stage uses this."""
     quote = json.dumps  # SBPL strings take the same escapes as JSON for quotes and backslashes
     real = job.resolve()
-    deny = " ".join(f"(literal {quote(str(real / n))}) (subpath {quote(str(real / n))})" for n in CONTROL)
+    deny = " ".join(f"(literal {quote(str(real / n))}) (subpath {quote(str(real / n))})" for n in (*CONTROL, *protect))
     deny += f" (literal {quote(str(real / 'repo'))})"  # renaming repo/ away and back would rewrite repo/.git
     common = subprocess.run(["git", "-C", str(job / "repo"), "rev-parse", "--path-format=absolute", "--git-common-dir"],
                             capture_output=True, text=True, env=SAFE_GIT).stdout.strip()
@@ -342,7 +447,7 @@ def check_profile(job):
             f"(deny file-read* (subpath {quote(str(Path.home().resolve()))})) (allow file-read* {readable})\n")
 
 
-def run_test(job, task, sandboxed=False, **kwargs):
+def run_test(job, task, sandboxed=False, protect=(), **kwargs):
     # The owner wrote this command (the product's AGENTS.md test cell) with `new`; workers cannot edit task.json.
     # The check stage fails on untracked files, and a worker's earlier test run would leave __pycache__ in repo/.
     # shortcut: Python bytecode only; other tools' artifacts must be in the product's .gitignore.
@@ -352,7 +457,7 @@ def run_test(job, task, sandboxed=False, **kwargs):
     tmp = job / "tmp"  # temp files stay in the one folder the sandbox lets the test write
     home = tmp / "home"  # the profile hides the real home; tools that cache or read config there (Godot, git) need a writable one
     home.mkdir(parents=True, exist_ok=True)
-    return subprocess.run(["sandbox-exec", "-p", check_profile(job), "/bin/sh", "-c", task["test"]], cwd=job / "repo",
+    return subprocess.run(["sandbox-exec", "-p", check_profile(job, protect), "/bin/sh", "-c", task["test"]], cwd=job / "repo",
                           env={**quiet, "TMPDIR": str(tmp), "HOME": str(home), "GIT_CONFIG_GLOBAL": "/dev/null"}, **kwargs)
 
 
@@ -373,7 +478,7 @@ def preflight(name):
     if error:
         print(error, file=sys.stderr)
         return 2
-    pr = (job / "pr.txt").read_text(encoding="utf-8").split()  # a person wrote it; workers cannot edit it
+    pr = (job / "pr.txt").read_text(encoding="utf-8").split()  # the draft stage or a person wrote it; workers cannot edit it
     script = BASELINE / "tools/review_preflight.py"
     diff_file = job / "pr.diff"
     diff_file.unlink(missing_ok=True)
