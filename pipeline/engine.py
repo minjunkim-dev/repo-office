@@ -132,14 +132,8 @@ def sandbox(base, job, task):
             "filesystem": {"denyWrite": deny, "allowWrite": allow}}
 
 
-# A leader is itself a Claude Code session. A worker that inherits its child marker saves no transcript, so hc never
-# sees the turn end and the next stage cannot --resume (Claude Code 2.1.322).
-PARENT_MARKERS = ("CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_ENTRYPOINT")
-
-
 def hc(*args, check=True):
-    env = {k: v for k, v in os.environ.items() if k not in PARENT_MARKERS}
-    return subprocess.run(["hc", *args], capture_output=True, text=True, check=check, env=env).stdout
+    return subprocess.run(["hc", *args], capture_output=True, text=True, check=check).stdout
 
 
 def claude_too_old(version):
