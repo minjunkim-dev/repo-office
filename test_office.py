@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import unittest
 import unittest.mock
@@ -455,16 +456,19 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual([c[:2] for c in calls[start - 2:start]], [("kill", "w"), ("rm", "w")])
 
     def test_workers_do_not_inherit_the_leader_session_markers(self):
-        seen = Path(self.tmp.name) / "env"
-        fake = Path(self.tmp.name) / "hc"
-        fake.write_text(f"#!/bin/sh\nenv > {seen}\n", encoding="utf-8")
+        calls = []
+        self.engine.hc = lambda *args, check=True: calls.append(args) or ""
+        self.engine.run_worker("w", self.job, [sys.executable, "--flag"], "hi")  # any binary: the version check fails
+        fake = Path(self.tmp.name) / "claude"
+        fake.write_text("#!/bin/sh\necho '2.1.300 (Claude Code)'\n", encoding="utf-8")
         fake.chmod(0o755)
-        markers = {m: "1" for m in self.engine.PARENT_MARKERS}
-        with unittest.mock.patch.dict(os.environ, {"PATH": f"{self.tmp.name}{os.pathsep}{os.environ['PATH']}", **markers}):
-            self.engine.hc("ls")
-        names = {line.split("=", 1)[0] for line in seen.read_text().splitlines()}
-        self.assertFalse(names & set(markers))
-        self.assertIn("PATH", names)
+        self.engine.run_worker("w", self.job, [str(fake), "--flag"], "hi")
+        run = next(c for c in calls if c[0] == "run")
+        command = list(run[run.index(str(self.job)) + 1:])
+        self.assertEqual(command, ["/usr/bin/env", *(f"-u{m}" for m in self.engine.PARENT_MARKERS), str(fake), "--flag"])
+        env = subprocess.run([*command[:-2], "env"], capture_output=True, text=True,
+                             env={**os.environ, **{m: "1" for m in self.engine.PARENT_MARKERS}}).stdout
+        self.assertFalse({line.split("=", 1)[0] for line in env.splitlines()} & set(self.engine.PARENT_MARKERS))
 
     def test_failed_hc_run_blocks_instead_of_crashing(self):
         fake = Path(self.tmp.name) / "claude"
