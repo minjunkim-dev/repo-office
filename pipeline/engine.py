@@ -26,6 +26,7 @@ import stat
 import subprocess
 import sys
 import time
+import unicodedata
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -232,9 +233,10 @@ def read_body(body):
         return file.read() if ok else b""
 
 
-def open_draft(job, task, stage, raw, head):
+def open_draft(job, task, stage, raw, head, approved=None):
     """Push the task branch and open a draft PR with the body the implement worker wrote, else why not.
-    raw and head are what the caller already checked (the body's bytes, the tested commit): nothing here reads them again."""
+    raw and head are what the caller already checked (the body's bytes, the tested commit): nothing here reads them again.
+    approved is the sha256 a person approved for the stage's easy file."""
     pr_file = job / stage["out"]
     if pr_file.exists():  # an earlier run opened it, or a person did and wrote the URL
         return None
@@ -271,7 +273,36 @@ def open_draft(job, task, stage, raw, head):
     if made.returncode or not re.fullmatch(rf"https://github\.com/{re.escape(repo)}/pull/\d+", url, re.I):
         return f"gh pr create failed: {(made.stderr or made.stdout).strip()}"
     pr_file.write_text(url + "\n", encoding="utf-8")
+    # An easy PR skips the person's Ready: they already approved the design that says so. A hard one waits for them,
+    # and Ready is when they ask a skipping review bot for a review (POLICY §3). A failed gh leaves the draft to them.
+    if stage.get("easy"):
+        # The bytes read here must be the approved ones: a process the tested code left could rewrite the file since run() checked.
+        design = read_body(job / stage["easy"])
+        # -z: raw names, not C-quoted ones; --no-renames: a rename out of a trust path shows its old name too
+        names = git("diff", "--name-only", "-z", "--no-renames", f"{remote[0]}...{head}")
+        guarded = names.returncode or any(part.casefold() in TRUST_NAMES for n in names.stdout.split("\0") for part in n.split("/"))
+        if approved and hashlib.sha256(design).hexdigest() == approved and easy(design, raw) and not guarded:
+            subprocess.run(["gh", "pr", "ready", url], cwd=job, capture_output=True)
     return None
+
+
+# Paths a worker could use to steer later sessions or tools, whatever the body claims: those PRs wait for a person.
+INSTRUCTIONS = ("CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".claude", ".mcp.json", ".envrc")
+TRUST_NAMES = {n.casefold() for n in (*INSTRUCTIONS, ".github", ".agents", ".codex", ".cursor", "REVIEW.md")}
+
+
+def easy(design, body):
+    """True only when every line of the approved design and of the PR body that names Door says exactly
+    Door: 되돌리기 쉬움 (a heading aside), there is one, and the body has exactly one line naming a trust boundary: 신뢰 경계: 없음.
+    Fails closed: list markers, emphasis or a second claim anywhere leave the PR a draft."""
+    def claims(raw, word, value):
+        found = [l.strip() for l in unicodedata.normalize("NFKC", raw.decode("utf-8", "replace")).splitlines()
+                 if re.search(word, l, re.I) and not re.match(r"\s*#+\s*\S+\s*$", l)]
+        return bool(found) and set(found) == {value}
+    door, trust = r"d\W*o\W*o\W*r", r"신뢰\W*경계"
+    return (claims(design, door, "Door: 되돌리기 쉬움") and claims(body, door, "Door: 되돌리기 쉬움")
+            and claims(body, trust, "신뢰 경계: 없음")
+            and sum(bool(re.search(trust, l)) for l in body.decode("utf-8", "replace").splitlines()) == 1)
 
 
 def post_body(job, stage):
@@ -389,7 +420,8 @@ def advance(job, name, runner):
                 save(state_path, state)
                 return block(job, f"{stage['body']} changed after the check stage read it: a person reads it before the engine posts it")
             # The commit compared above, not HEAD again: HEAD can move between here and the push.
-            if error := open_draft(job, task, stage, raw, state["checked"]):
+            approved = next((state.get("approved", {}).get(s["id"]) for s in flow if stage.get("easy") and s.get("approve") == stage["easy"]), None)
+            if error := open_draft(job, task, stage, raw, state["checked"], approved):
                 return block(job, error)
         elif stage["by"] == "script" and stage.get("edit"):
             if error := post_body(job, stage):
@@ -404,7 +436,9 @@ def advance(job, name, runner):
             if not shutil.which("sandbox-exec"):
                 return block(job, "sandbox-exec is missing: the check stage runs the worker's code only inside a sandbox")
             # The engine posts the PR body right after this stage, outside any sandbox: the tested code must not write it.
-            result = run_test(job, task, sandboxed=True, protect=bodies, capture_output=True, text=True)
+            # Nor the approved files: the draft stage reads them to decide the Ready.
+            approves = [s["approve"] for s in flow if s.get("approve")]
+            result = run_test(job, task, sandboxed=True, protect=[*bodies, *approves], capture_output=True, text=True)
             (job / stage["out"]).write_text(
                 f"# {stage['id']}\n\n- 명령: `{task['test']}`\n- 커밋: `{head}`\n- exit {result.returncode}\n"
                 f"- 커밋하지 않은 변경: {dirty or '없음'}\n\n```\n{(result.stdout + result.stderr)[-4000:]}\n```\n", encoding="utf-8")
@@ -447,8 +481,7 @@ def advance(job, name, runner):
 
 
 # Words that, as a file or folder in the task folder, a later session or git reads as instructions or settings.
-CONTROL = ("task.json", "state.json", "pr.txt", "pr.diff", "run.lock", "repo/.git", ".git",
-           "CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".claude", ".mcp.json", ".envrc")
+CONTROL = ("task.json", "state.json", "pr.txt", "pr.diff", "run.lock", "repo/.git", ".git", *INSTRUCTIONS)
 
 
 def check_profile(job, protect=()):
