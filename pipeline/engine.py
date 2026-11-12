@@ -10,6 +10,7 @@
   engine.py skills <task> <base>  run matt-skills check_skills.py in its repo/ (exit 0 delegate, 1 missing, 2 do not)
 
 After the check passes, run pushes the task branch and opens a draft PR from pr-body.md; a person marks it ready.
+After the review, run replaces the PR body with review-body.md.
 
 Exit codes for run: 0 done, 2 no such task or another run of it is going, 3 waiting for a person, 4 blocked.
 """
@@ -231,13 +232,13 @@ def read_body(body):
         return file.read() if ok else b""
 
 
-def open_draft(job, task, stage, raw=None):
-    """Push the task branch and open a draft PR with the body the implement worker wrote, else why not."""
+def open_draft(job, task, stage, raw, head):
+    """Push the task branch and open a draft PR with the body the implement worker wrote, else why not.
+    raw and head are what the caller already checked (the body's bytes, the tested commit): nothing here reads them again."""
     pr_file = job / stage["out"]
     if pr_file.exists():  # an earlier run opened it, or a person did and wrote the URL
         return None
     body = job / stage["body"]
-    raw = read_body(body) if raw is None else raw  # the bytes the caller already checked, so it posts exactly those
     title, _, text = raw.decode("utf-8", "replace").partition("\n")
     if not title.startswith("# ") or not title[2:].strip():
         return f"{body} must be a regular file of at most 60000 bytes that starts with a `# <PR title>` line"
@@ -252,8 +253,7 @@ def open_draft(job, task, stage, raw=None):
     if not remote:
         return f"origin has no branch {base} to compare the task branch with"
     git("fetch", "-q", "origin", f"refs/heads/{base}")  # others may have pushed to it since this checkout was made
-    head = git("rev-parse", "--verify", "HEAD^{commit}").stdout.strip()  # one commit for the comparison and the push
-    ci = git("diff", "--name-only", f"{remote[0]}...{head}", "--", ".github")
+    ci = git("diff", "--name-only", f"{remote[0]}...{head}", "--", ".github")  # the commit that is pushed below
     if ci.returncode or not head:
         return f"could not compare the task branch with origin's {base}: {ci.stderr.strip()}"
     if ci.stdout.strip():
@@ -271,6 +271,23 @@ def open_draft(job, task, stage, raw=None):
     if made.returncode or not re.fullmatch(rf"https://github\.com/{re.escape(repo)}/pull/\d+", url, re.I):
         return f"gh pr create failed: {(made.stderr or made.stdout).strip()}"
     pr_file.write_text(url + "\n", encoding="utf-8")
+    return None
+
+
+def post_body(job, stage):
+    """Replace the PR body with the file the review worker wrote, else why not.
+    gh gets the bytes on stdin, never a path: it runs outside the sandbox and would follow a link to a hidden file."""
+    body = job / stage["edit"]
+    raw = read_body(body)
+    pr_file = job / "pr.txt"  # the draft stage or a person wrote it; workers cannot edit it
+    url = pr_file.read_text(encoding="utf-8").split()[:1] if pr_file.exists() else []
+    if not raw.strip():
+        return f"{body} must be a regular file of 1 to 60000 bytes with the whole PR body: the review worker writes it"
+    if not url or not re.fullmatch(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+", url[0]):
+        return f"{pr_file} must hold the PR's GitHub URL"
+    edit = subprocess.run(["gh", "pr", "edit", url[0], "--body-file", "-"], input=raw, cwd=job, capture_output=True)
+    if edit.returncode:
+        return f"gh pr edit failed: {(edit.stderr or edit.stdout).decode(errors='replace').strip()}"
     return None
 
 
@@ -371,7 +388,11 @@ def advance(job, name, runner):
                 state.setdefault("bodies", {})[stage["body"]] = hashlib.sha256(raw).hexdigest()
                 save(state_path, state)
                 return block(job, f"{stage['body']} changed after the check stage read it: a person reads it before the engine posts it")
-            if error := open_draft(job, task, stage, raw):
+            # The commit compared above, not HEAD again: HEAD can move between here and the push.
+            if error := open_draft(job, task, stage, raw, state["checked"]):
+                return block(job, error)
+        elif stage["by"] == "script" and stage.get("edit"):
+            if error := post_body(job, stage):
                 return block(job, error)
         elif stage["by"] == "script":
             git = lambda *a: subprocess.run(["git", *a], cwd=job / "repo", capture_output=True, text=True, env=SAFE_GIT).stdout.strip()  # noqa: E731
@@ -396,6 +417,9 @@ def advance(job, name, runner):
                 return block(job, reason)
             out = job / stage["out"]
             out.unlink(missing_ok=True)
+            # A body left from an earlier try must not be posted as this try's.
+            if following != "done" and (edit := flow[index + 1].get("edit")):
+                (job / edit).unlink(missing_ok=True)
             prompt = job / f"{stage['id']}.prompt.md"
             prompt.write_text(fill((PIPELINE / stage["prompt"]).read_text(encoding="utf-8"), job, task), encoding="utf-8")
             # The task folder sits inside the trusted office checkout; a fresh worktree would show the trust dialog.

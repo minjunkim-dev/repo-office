@@ -41,6 +41,8 @@ class FakeWorker:
         if stage == "implement":
             subprocess.run(["git", "-C", str(self.job / "repo"), "commit", "-q", "--allow-empty", "-m", "x"], check=True)
             (self.job / "pr-body.md").write_text("# fix: x\n\n## Summary\n", encoding="utf-8")
+        if stage == "review":
+            (self.job / "review-body.md").write_text("## Summary\n\n## Review\nok\n", encoding="utf-8")
         return None
 
 
@@ -64,6 +66,14 @@ class PipelineTests(unittest.TestCase):
         self.baseline = Path(self.tmp.name) / "baseline"  # a repo-baseline clone outside the office checkout
         (self.baseline / "tools").mkdir(parents=True)
         self.engine.BASELINE = self.baseline
+        # The engine now runs gh writes itself: no test may reach the real gh. fake_gh() puts a recording one first.
+        stub = Path(self.tmp.name) / "nogh"
+        stub.mkdir()
+        (stub / "gh").write_text("#!/bin/sh\necho 'no gh in tests' >&2\nexit 1\n", encoding="utf-8")
+        (stub / "gh").chmod(0o755)
+        patcher = unittest.mock.patch.dict(os.environ, {"PATH": f"{stub}{os.pathsep}{os.environ['PATH']}"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         if not shutil.which("sandbox-exec"):
             # Off macOS (CI), a stand-in drops `-p <profile>` and runs the command, so the flow tests still reach the
             # check stage. The real sandbox is tested only where sandbox-exec exists.
@@ -86,12 +96,18 @@ class PipelineTests(unittest.TestCase):
         subprocess.run([*repo, "remote", "add", "origin", "https://github.com/o/r.git"], check=True)
         subprocess.run([*repo, "config", f"url.{bare}.insteadOf", "https://github.com/o/r.git"], check=True)
         subprocess.run([*repo, "push", "-q", "origin", "HEAD:refs/heads/main"], check=True)  # the PR base
+        return (bare, *self.fake_gh())
+
+    def fake_gh(self):
+        """gh records its calls; `pr edit` also records what it read on stdin as a last item."""
+        bin_dir = Path(self.tmp.name) / "ghbin"
         bin_dir.mkdir()
         log, draft = Path(self.tmp.name) / "gh.log", Path(self.tmp.name) / "draft"
         draft.write_text("true\n", encoding="utf-8")
         (bin_dir / "gh").write_text(
             "#!/usr/bin/env python3\nimport json, sys\n"
-            f"open({str(log)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
+            "stdin = [sys.stdin.read()] if sys.argv[1:3] == ['pr', 'edit'] else []\n"
+            f"open({str(log)!r}, 'a').write(json.dumps(sys.argv[1:] + stdin) + '\\n')\n"
             "if sys.argv[1:3] == ['pr', 'create']: print('https://github.com/O/R/pull/7')\n"
             f"if sys.argv[1:3] == ['pr', 'view']: print(open({str(draft)!r}).read().strip())\n", encoding="utf-8")
         (bin_dir / "gh").chmod(0o755)
@@ -99,7 +115,7 @@ class PipelineTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         calls = lambda: [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []  # noqa: E731
-        return bare, draft, calls
+        return draft, calls
 
     def test_full_flow_waits_for_people_and_keeps_contexts_apart(self):
         bare, draft, gh = self.fake_github()
@@ -131,6 +147,9 @@ class PipelineTests(unittest.TestCase):
         self.engine.BASELINE = office
         self.assertEqual(self.engine.run("search", worker), self.engine.DONE)
         self.assertEqual([c[:2] for c in gh()].count(["pr", "create"]), 1)
+        # The engine, not the reviewer, posts the review's body: as bytes on stdin to the pr.txt URL.
+        self.assertEqual(gh()[-1], ["pr", "edit", "https://github.com/O/R/pull/7", "--body-file", "-",
+                                    "## Summary\n\n## Review\nok\n"])
 
         (design, d_argv, message), (implement, i_argv, _), (review, r_argv, _) = worker.calls
         self.assertEqual((design, implement, review), ("design", "implement", "review"))
@@ -203,6 +222,9 @@ class PipelineTests(unittest.TestCase):
                 self.assertIn(f"Bash(git -C repo diff*{mark}*)", argv)
         self.assertEqual(r_argv[r_argv.index("--add-dir") + 1], str(office))
         self.assertIn(f"Bash(git -C {self.job}/repo push origin HEAD)", r_argv)
+        # gh outside the sandbox would read any --body-file path, links included: workers cannot run gh pr edit.
+        self.assertFalse([r for r in allowed + box["excludedCommands"] if "pr edit" in r])
+        self.assertIn("Bash(gh pr edit*)", r_argv[r_argv.index("--disallowedTools"):])
         # commit takes -m first: git refuses -F with -m, and -F reads a file outside the task folder into the message.
         self.assertIn(f"Bash(git -C {self.job}/repo commit -m *)", i_argv)
         self.assertFalse([r for r in i_argv + r_argv if r.endswith("commit*)")])
@@ -280,10 +302,13 @@ class PipelineTests(unittest.TestCase):
         stage = {"id": "draft", "body": "pr-body.md", "out": "pr.txt"}
         task = json.loads((self.job / "task.json").read_text())
         body = self.job / "pr-body.md"
+        head = lambda: subprocess.run(["git", "-C", str(self.job / "repo"), "rev-parse", "HEAD"],  # noqa: E731
+                                      capture_output=True, text=True).stdout.strip()
+        draft = lambda t=task: self.engine.open_draft(self.job, t, stage, self.engine.read_body(body), head())  # noqa: E731
         for text in (None, "no title line\n", "# \n"):
             if text:
                 body.write_text(text, encoding="utf-8")
-            self.assertIn("# <PR title>", self.engine.open_draft(self.job, task, stage))
+            self.assertIn("# <PR title>", draft())
         self.assertEqual(gh(), [])
         # A branch of that name with other history on the remote: no force push, no PR.
         other = Path(self.tmp.name) / "other"
@@ -292,7 +317,7 @@ class PipelineTests(unittest.TestCase):
                         "commit", "-q", "--allow-empty", "-m", "theirs"], check=True)
         subprocess.run(["git", "-C", str(other), "push", "-q", "origin", "HEAD:refs/heads/office/search"], check=True, capture_output=True)
         body.write_text("# fix: x\n", encoding="utf-8")
-        self.assertIn("git push failed", self.engine.open_draft(self.job, task, stage))
+        self.assertIn("git push failed", draft())
         self.assertEqual(gh(), [])
         # The engine reads the body outside the sandbox and posts it: no link out, no second name, no FIFO.
         secret = Path(self.tmp.name) / "credentials"
@@ -300,7 +325,7 @@ class PipelineTests(unittest.TestCase):
         for make in (lambda: body.symlink_to(secret), lambda: os.link(secret, body), lambda: os.mkfifo(body)):
             body.unlink()
             make()
-            self.assertIn("regular file", self.engine.open_draft(self.job, task, stage))
+            self.assertIn("regular file", draft())
         body.unlink()
         # A branch that changes the workflows waits for a person: a push runs them with the repository's secrets.
         # The base is the remote's commit: the worker can point its own origin/main at HEAD.
@@ -311,12 +336,12 @@ class PipelineTests(unittest.TestCase):
         subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "ci"], check=True)
         subprocess.run(["git", "-C", str(repo), "update-ref", "refs/remotes/origin/main", "HEAD"], check=True)
         body.write_text("# fix: x\n", encoding="utf-8")
-        self.assertIn(".github", self.engine.open_draft(self.job, {**task, "base": "origin/main"}, stage))
-        self.assertIn("no branch gone", self.engine.open_draft(self.job, {**task, "base": "origin/gone"}, stage))
+        self.assertIn(".github", draft({**task, "base": "origin/main"}))
+        self.assertIn("no branch gone", draft({**task, "base": "origin/gone"}))
         self.assertEqual(gh(), [])
         # A URL already in pr.txt (an earlier run, or a person) is kept: nothing is pushed or opened.
         (self.job / "pr.txt").write_text("https://github.com/o/r/pull/1\n", encoding="utf-8")
-        self.assertIsNone(self.engine.open_draft(self.job, task, stage))
+        self.assertIsNone(draft())
         self.assertEqual(gh(), [])
 
     def test_draft_stage_opens_the_pr_after_the_remote_base_moved(self):
@@ -328,7 +353,8 @@ class PipelineTests(unittest.TestCase):
         subprocess.run(["git", "-C", str(other), "push", "-q", "origin", "HEAD:refs/heads/main"], check=True, capture_output=True)
         (self.job / "pr-body.md").write_text("# fix: x\n", encoding="utf-8")
         task = json.loads((self.job / "task.json").read_text())
-        self.assertIsNone(self.engine.open_draft(self.job, task, {"id": "draft", "body": "pr-body.md", "out": "pr.txt"}))
+        head = subprocess.run(["git", "-C", str(self.job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        self.assertIsNone(self.engine.open_draft(self.job, task, {"id": "draft", "body": "pr-body.md", "out": "pr.txt"}, b"# fix: x\n", head))
         self.assertEqual([c[:2] for c in gh()], [["pr", "create"]])
 
     @unittest.skipUnless(shutil.which("sandbox-exec"), "macOS sandbox-exec")
@@ -408,6 +434,82 @@ class PipelineTests(unittest.TestCase):
         titles = [c[c.index("--title") + 1] for c in gh() if c[:2] == ["pr", "create"]]
         self.assertEqual(titles, ["fix: x"])
 
+    def test_draft_stage_pushes_the_commit_it_compared(self):
+        # HEAD moves after the draft stage compared it with the checked commit: the push still sends the checked one.
+        bare, _, gh = self.fake_github()
+        repo, real, reads = self.job / "repo", self.engine.read_body, []
+
+        def commit_after_the_comparison(path):
+            reads.append(path)
+            if len(reads) == 2:  # the check stage read the body, then the draft stage, after its HEAD comparison
+                subprocess.run(["git", "-C", str(repo), "commit", "-q", "--allow-empty", "-m", "late"], check=True)
+            return real(path)
+
+        worker = FakeWorker(self.job)
+        self.engine.run("search", worker)
+        self.engine.approve("search")
+        with unittest.mock.patch.object(self.engine, "read_body", commit_after_the_comparison):
+            self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
+        rev = lambda *a: subprocess.run(["git", *a], capture_output=True, text=True).stdout.strip()  # noqa: E731
+        self.assertEqual(len(reads), 2)
+        self.assertNotEqual(rev("-C", str(repo), "rev-parse", "HEAD"), self.state()["checked"])  # the race happened
+        self.assertEqual(rev("-C", str(bare), "rev-parse", "office/search"), self.state()["checked"])
+        self.assertEqual([c[:2] for c in gh()].count(["pr", "create"]), 1)
+
+    def test_the_engine_posts_the_review_body_only_from_a_regular_file(self):
+        _, draft, gh = self.fake_github()
+        draft.write_text("false\n", encoding="utf-8")
+        worker = FakeWorker(self.job)
+        self.engine.run("search", worker)
+        self.engine.approve("search")
+        self.engine.run("search", worker)  # opens the draft; the review blocks: setUp's clone is not pinned
+        office = Path(self.tmp.name) / "office"
+        subprocess.run(["git", "init", "-q", str(office)], check=True)
+        subprocess.run(["git", "-C", str(office), "remote", "add", "origin", "https://github.com/me/office.git"], check=True)
+        self.engine.BASELINE = office
+        body, secret = self.job / "review-body.md", Path(self.tmp.name) / "credentials"
+        secret.write_text("token\n", encoding="utf-8")
+        edits = lambda: [c for c in gh() if c[:2] == ["pr", "edit"]]  # noqa: E731
+        # gh runs outside the sandbox: a link out, a second name, a FIFO, no file or an empty one is not posted.
+        for make in (lambda: body.symlink_to(secret), lambda: os.link(secret, body), lambda: os.mkfifo(body),
+                     lambda: None, lambda: body.write_text("", encoding="utf-8")):
+            def review(name, cwd, argv, message, make=make):
+                worker(name, cwd, argv, message)
+                body.unlink()
+                make()
+            self.engine.save(self.job / "state.json", {**self.state(), "stage": "review"})
+            (self.job / "BLOCKED.md").unlink(missing_ok=True)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(self.engine.run("search", review), self.engine.BLOCKED)
+            self.assertIn("review-body.md", (self.job / "BLOCKED.md").read_text())
+            self.assertEqual(edits(), [])
+            body.unlink(missing_ok=True)
+        # A person fixed the file and cleared BLOCKED.md: the post runs again, not the review.
+        self.assertEqual(self.state()["stage"], "post")
+        body.write_text("## Review\nfixed\n", encoding="utf-8")
+        (self.job / "BLOCKED.md").unlink()
+        calls = len(worker.calls)
+        self.assertEqual(self.engine.run("search", worker), self.engine.DONE)
+        self.assertEqual(len(worker.calls), calls)
+        self.assertEqual(edits(), [["pr", "edit", "https://github.com/O/R/pull/7", "--body-file", "-", "## Review\nfixed\n"]])
+
+    def test_a_review_body_left_from_an_earlier_try_is_not_posted(self):
+        _, _, gh = self.fake_github()
+        (self.job / "pr.txt").write_text("https://github.com/O/R/pull/7\n", encoding="utf-8")
+        (self.job / "review-body.md").write_text("stale\n", encoding="utf-8")
+        office = Path(self.tmp.name) / "office"
+        subprocess.run(["git", "init", "-q", str(office)], check=True)
+        subprocess.run(["git", "-C", str(office), "remote", "add", "origin", "https://github.com/me/office.git"], check=True)
+        self.engine.BASELINE = office
+        (self.job / "design.md").write_text("d\n", encoding="utf-8")
+        self.engine.save(self.job / "state.json", {"stage": "review", "since": 0, "fails": {}, "sessions": [],
+                                                   "approved": {"approve": self.engine.sha(self.job / "design.md")}})
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.engine.run("search", lambda *a: (self.job / "review.md").write_text("r\n") and None),
+                             self.engine.BLOCKED)
+        self.assertIn("review-body.md", (self.job / "BLOCKED.md").read_text())  # the post blocked, not the review
+        self.assertEqual([c for c in gh() if c[:2] == ["pr", "edit"]], [])
+
     def test_draft_stage_posts_a_changed_body_only_after_a_person_read_it(self):
         _, _, gh = self.fake_github()
         worker = FakeWorker(self.job)
@@ -484,6 +586,8 @@ class PipelineTests(unittest.TestCase):
             subprocess.run(["git", "-C", str(repo), *args], check=True)
         self.engine.BASELINE = self.engine.OFFICE = repo  # office, repo-baseline and the product are one repository
         (self.job / "design.md").write_text("d\n", encoding="utf-8")
+        self.fake_gh()  # the post stage after the review
+        (self.job / "pr.txt").write_text("https://github.com/o/r/pull/1\n", encoding="utf-8")
 
         def review():
             (self.job / "BLOCKED.md").unlink(missing_ok=True)
