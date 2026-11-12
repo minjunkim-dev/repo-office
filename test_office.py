@@ -359,7 +359,7 @@ class PipelineTests(unittest.TestCase):
         self.engine.run("search", worker)
         self.engine.approve("search")
         task = json.loads((self.job / "task.json").read_text())
-        task["test"] = f"{task['test']} && ! (echo leaked >> ../pr-body.md) 2>/dev/null"
+        task["test"] = f"{task['test']} && ! (echo leaked >> ../pr-body.md) 2>/dev/null && ! ln ../pr-body.md ../tmp/x 2>/dev/null"
         (self.job / "task.json").write_text(json.dumps(task))
         self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
         self.assertEqual(self.state()["stage"], "pr")
@@ -384,10 +384,29 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(self.engine.run("search", worker), self.engine.BLOCKED)
         self.assertIn("changed after the check stage", (self.job / "BLOCKED.md").read_text())
         self.assertEqual(gh(), [])
-        # A person read the body and cleared BLOCKED.md: the engine posts it without checking again.
+        # A person read the body and cleared BLOCKED.md: it still matches the hash taken at the block, so it is posted.
         (self.job / "BLOCKED.md").unlink()
         self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
         self.assertEqual([c[:2] for c in gh()].count(["pr", "create"]), 1)
+
+    def test_draft_stage_posts_the_bytes_it_compared(self):
+        _, _, gh = self.fake_github()
+        real, reads = self.engine.read_body, []
+
+        def swap_after_the_draft_read(path):
+            raw = real(path)
+            reads.append(path)
+            if len(reads) == 2:  # the check stage read it, then the draft stage: change it before anything reads again
+                Path(path).write_text("# fix: swapped\n", encoding="utf-8")
+            return raw
+
+        worker = FakeWorker(self.job)
+        self.engine.run("search", worker)
+        self.engine.approve("search")
+        with unittest.mock.patch.object(self.engine, "read_body", swap_after_the_draft_read):
+            self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
+        titles = [c[c.index("--title") + 1] for c in gh() if c[:2] == ["pr", "create"]]
+        self.assertEqual(titles, ["fix: x"])
 
     def test_draft_stage_posts_a_changed_body_only_after_a_person_read_it(self):
         _, _, gh = self.fake_github()
