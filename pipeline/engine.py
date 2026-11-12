@@ -44,9 +44,10 @@ STAGES = Path(os.environ.get("OFFICE_STAGES", PIPELINE / "stages.json"))
 DONE, WAIT, BLOCKED = 0, 3, 4
 # git the engine runs outside the sandbox over a task's repo/ ignores settings task code could plant, such as a
 # committed nested repository whose config runs core.fsmonitor on `git status`. Env config wins over repository files.
+# Replace refs, which task code can write, would show git a different history.
 _SAFE = {"core.fsmonitor": "false", "diff.ignoreSubmodules": "all", "core.hooksPath": "/dev/null",
          "fetch.recurseSubmodules": "false", "submodule.recurse": "false", "protocol.ext.allow": "never"}
-SAFE_GIT = {**os.environ, "GIT_CONFIG_COUNT": str(len(_SAFE)),
+SAFE_GIT = {**os.environ, "GIT_NO_REPLACE_OBJECTS": "1", "GIT_CONFIG_COUNT": str(len(_SAFE)),
             **{f"GIT_CONFIG_{kind}_{i}": v for i, kv in enumerate(_SAFE.items()) for kind, v in zip(("KEY", "VALUE"), kv)}}
 # hc terminal names are global to the hc core; this tag keeps another checkout's jobs folder from sharing them.
 TAG = hashlib.sha256(str(JOBS.resolve()).encode()).hexdigest()[:4]
@@ -238,11 +239,16 @@ def open_draft(job, task, stage):
     if not title.startswith("# ") or not title[2:].strip():
         return f"{body} must be a regular file of at most 60000 bytes that starts with a `# <PR title>` line"
     git = lambda *a: subprocess.run(["git", "-C", str(job / "repo"), *a], capture_output=True, text=True, env=SAFE_GIT)  # noqa: E731
-    repo = slug(git("remote", "get-url", "origin").stdout)
+    repo = slug(git("config", "--get", "remote.origin.url").stdout)  # as written: url.*.insteadOf may point elsewhere
     if not repo:
         return "the product repository's origin is not on GitHub: open the PR and write its URL into pr.txt"
-    # A pushed branch runs the repository's workflows, with their secrets: a person pushes changes to them.
-    ci = git("diff", "--name-only", f"{task['base']}...HEAD", "--", ".github")
+    # A pushed branch runs the repository's workflows, with their secrets: a person pushes changes to them. The
+    # worker can move local refs, origin/main included, so compare with the base commit the remote has now.
+    base = task["base"].removeprefix("origin/")
+    remote = git("ls-remote", "origin", f"refs/heads/{base}").stdout.split()[:1]
+    if not remote:
+        return f"origin has no branch {base} to compare the task branch with"
+    ci = git("diff", "--name-only", f"{remote[0]}...HEAD", "--", ".github")
     if ci.returncode or ci.stdout.strip():
         return (f"the branch changes .github ({ci.stdout.split() or ci.stderr.strip()}): a person reads the diff, "
                 "pushes the branch, opens the PR and writes its URL into pr.txt")
@@ -252,7 +258,7 @@ def open_draft(job, task, stage):
     if push.returncode:
         return f"git push failed: {push.stderr.strip()}"
     made = subprocess.run(["gh", "pr", "create", "--repo", repo, "--draft", "--head", branch,
-                           "--base", task["base"].removeprefix("origin/"), "--title", title[2:].strip(),
+                           "--base", base, "--title", title[2:].strip(),
                            "--body", text.lstrip("\n")], cwd=job, capture_output=True, text=True)
     url = (made.stdout.strip().splitlines() or [""])[-1]
     if made.returncode or not re.fullmatch(rf"https://github\.com/{re.escape(repo)}/pull/\d+", url, re.I):

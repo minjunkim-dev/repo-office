@@ -84,7 +84,8 @@ class PipelineTests(unittest.TestCase):
         subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
         repo = ["git", "-C", str(self.job / "repo")]
         subprocess.run([*repo, "remote", "add", "origin", "https://github.com/o/r.git"], check=True)
-        subprocess.run([*repo, "config", f"url.{bare}.pushInsteadOf", "https://github.com/o/r.git"], check=True)
+        subprocess.run([*repo, "config", f"url.{bare}.insteadOf", "https://github.com/o/r.git"], check=True)
+        subprocess.run([*repo, "push", "-q", "origin", "HEAD:refs/heads/main"], check=True)  # the PR base
         bin_dir.mkdir()
         log, draft = Path(self.tmp.name) / "gh.log", Path(self.tmp.name) / "draft"
         draft.write_text("true\n", encoding="utf-8")
@@ -302,14 +303,16 @@ class PipelineTests(unittest.TestCase):
             self.assertIn("regular file", self.engine.open_draft(self.job, task, stage))
         body.unlink()
         # A branch that changes the workflows waits for a person: a push runs them with the repository's secrets.
+        # The base is the remote's commit: the worker can point its own origin/main at HEAD.
         repo = self.job / "repo"
-        subprocess.run(["git", "-C", str(repo), "update-ref", "refs/remotes/origin/main", "HEAD"], check=True)
         (repo / ".github").mkdir()
         (repo / ".github/ci.yml").write_text("on: push\n", encoding="utf-8")
         subprocess.run(["git", "-C", str(repo), "add", ".github"], check=True)
         subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "ci"], check=True)
+        subprocess.run(["git", "-C", str(repo), "update-ref", "refs/remotes/origin/main", "HEAD"], check=True)
         body.write_text("# fix: x\n", encoding="utf-8")
         self.assertIn(".github", self.engine.open_draft(self.job, {**task, "base": "origin/main"}, stage))
+        self.assertIn("no branch gone", self.engine.open_draft(self.job, {**task, "base": "origin/gone"}, stage))
         self.assertEqual(gh(), [])
         # A URL already in pr.txt (an earlier run, or a person) is kept: nothing is pushed or opened.
         (self.job / "pr.txt").write_text("https://github.com/o/r/pull/1\n", encoding="utf-8")
