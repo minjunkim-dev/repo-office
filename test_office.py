@@ -63,6 +63,10 @@ class PipelineTests(unittest.TestCase):
         self.baseline = Path(self.tmp.name) / "baseline"  # a repo-baseline clone outside the office checkout
         (self.baseline / "tools").mkdir(parents=True)
         self.engine.BASELINE = self.baseline
+        # The plugins installed at the commits stages.json pins, so the flow tests do not read this machine's.
+        self.engine.PLUGINS = Path(self.tmp.name) / "installed_plugins.json"
+        pins = json.loads(self.engine.STAGES.read_text())["plugins"]
+        self.engine.PLUGINS.write_text(json.dumps({"plugins": {n: [{"gitCommitSha": s}] for n, s in pins.items()}}))
         if not shutil.which("sandbox-exec"):
             # Off macOS (CI), a stand-in drops `-p <profile>` and runs the command, so the flow tests still reach the
             # check stage. The real sandbox is tested only where sandbox-exec exists.
@@ -342,6 +346,20 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(engine.slug("git@github.com:O/R.git\n"), "o/r")
         self.assertEqual(engine.slug("https://github.com/o/r/pull/1\n"), "o/r")
         self.assertIsNone(engine.slug("/tmp/r"))
+
+    def test_a_worker_starts_only_with_the_pinned_plugin_commits(self):
+        name, pin = next(iter(json.loads(self.engine.STAGES.read_text())["plugins"].items()))
+        self.assertIsNone(self.engine.plugin_drift({name: pin}))
+        # Another commit, a second install of the same name at another commit, or nothing installed.
+        for entries in ([{"gitCommitSha": "0" * 40}], [{"gitCommitSha": pin}, {"gitCommitSha": "0" * 40}], [{}], []):
+            self.engine.PLUGINS.write_text(json.dumps({"plugins": {name: entries}}))
+            self.assertIn(pin, self.engine.plugin_drift({name: pin}))
+        self.engine.PLUGINS.unlink()
+        self.assertIn("nothing", self.engine.plugin_drift({name: pin}))
+        worker = FakeWorker(self.job)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.engine.run("search", worker), self.engine.BLOCKED)
+        self.assertEqual(worker.calls, [])
 
     def test_task_names_are_safe_folder_and_terminal_names(self):
         for bad in ("../x", "검색", "A", "a" * 25):

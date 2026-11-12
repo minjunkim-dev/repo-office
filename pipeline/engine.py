@@ -45,6 +45,9 @@ _SAFE = {"core.fsmonitor": "false", "diff.ignoreSubmodules": "all", "core.hooksP
          "fetch.recurseSubmodules": "false", "submodule.recurse": "false", "protocol.ext.allow": "never"}
 SAFE_GIT = {**os.environ, "GIT_CONFIG_COUNT": str(len(_SAFE)),
             **{f"GIT_CONFIG_{kind}_{i}": v for i, kv in enumerate(_SAFE.items()) for kind, v in zip(("KEY", "VALUE"), kv)}}
+# Which commit of each plugin Claude Code installed. Project settings only enable a plugin: a user-scope marketplace of
+# the same name decides the commit, so the engine checks it instead of pinning it. shortcut: one machine's layout, no docs.
+PLUGINS = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")) / "plugins/installed_plugins.json"
 # hc terminal names are global to the hc core; this tag keeps another checkout's jobs folder from sharing them.
 TAG = hashlib.sha256(str(JOBS.resolve()).encode()).hexdigest()[:4]
 
@@ -213,6 +216,17 @@ def unpinned(job, task):
     return None
 
 
+def plugin_drift(pins):
+    """Why the installed plugins are not the commits stages.json pins, else None."""
+    installed = load(PLUGINS, {}).get("plugins", {})
+    for name, want in pins.items():
+        got = sorted({str(entry.get("gitCommitSha")) for entry in installed.get(name, [])})
+        if got != [want]:
+            return (f"plugin {name} is installed at {', '.join(got) or 'nothing'} but stages.json pins {want}: "
+                    "install that commit, or check the skills against the new one and change the pin")
+    return None
+
+
 def missing(job, name, *files):
     """One-line error for the first absent task folder or file, else None."""
     if not job.is_dir():
@@ -287,6 +301,8 @@ def advance(job, name, runner):
             if result.returncode or dirty:
                 failed = f"`{task['test']}` exit {result.returncode}" + (", uncommitted changes" if dirty else "")
         else:
+            if reason := plugin_drift(config.get("plugins", {})):
+                return block(job, reason)
             if stage["id"] == "review" and (reason := unpinned(job, task)):
                 return block(job, reason)
             out = job / stage["out"]

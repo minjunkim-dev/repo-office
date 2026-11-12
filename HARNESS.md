@@ -100,7 +100,7 @@ git show f31431f^:docs/archive/CHANGELOG-2026.md       # 재설계 전 변경 �
    - (가) leader가 알맞은 때에 사람에게 실행을 요청한다. 작성자 의도에 맞는다.
    - (나) 엔진이 `hc send`로 작업자 터미널에 `/스킬이름`을 입력한다. 기술적으로 사람 입력이라 돌지만, 작성자의 수동 표시를 우회한다.
    - (다) 작업자가 `SKILL.md`를 참고 문서로 읽는다. 역시 우회다.
-4. 작업자에 스킬을 어떻게 실을까. 2026-11-12에 첫 안(office 체크아웃의 프로젝트 설정으로 플러그인을 켠다)으로 정했다. 같은 날 실측에서 `enabledPlugins`만으로 두 플러그인(mattpocock-skills 1.3.2, pstack 0.15.36)이 실렸다. 이 설정은 플러그인을 켤 뿐 설치하거나 판을 고정하지 않는다. 사용자의 플러그인 캐시에 이미 있어서 됐다. 설정 파일을 더하는 일은 §9의 2·3에서 한다.
+4. 작업자에 스킬을 어떻게 실을까. 2026-11-12에 첫 안(office 체크아웃의 프로젝트 설정으로 플러그인을 켠다)으로 정했다. 같은 날 실측에서 `enabledPlugins`만으로 두 플러그인(mattpocock-skills 1.3.2, pstack 0.15.36)이 실렸다. 이 설정은 플러그인을 켤 뿐 설치하거나 판을 고정하지 않는다. 사용자의 플러그인 캐시에 이미 있어서 됐다. 판은 단계표 `plugins`의 커밋과 설치된 커밋을 엔진이 비교해, 다르면 작업자를 띄우지 않는다(2026-11-12, HANDOFF §4). 설정 파일을 더하는 일은 §9의 2·3에서 한다.
    - office 체크아웃의 프로젝트 설정(`.claude/settings.json`의 `extraKnownMarketplaces`·`enabledPlugins`, 원본 [templates/github/agents/README.md](https://github.com/minjunkim-dev/repo-baseline/blob/main/templates/github/agents/README.md)의 예)으로 플러그인을 켠다.
    - 쓰는 스킬만 office 체크아웃 `.claude/skills/`에 둔다. 하네스 폴더라 신뢰 경계 경로이고 Door는 어려움이다.
    - `--setting-sources`를 넓힌다. 사용자 전역 허용 규칙이 새므로 권하지 않는다(HANDOFF §4).
