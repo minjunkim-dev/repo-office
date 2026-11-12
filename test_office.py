@@ -174,6 +174,11 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual([box[k] for k in ("enabled", "autoAllowBashIfSandboxed", "allowUnsandboxedCommands", "failIfUnavailable")],
                              [True, False, False, True])
             self.assertEqual(box["filesystem"]["allowWrite"][0], str(self.job))
+            # git in repo/ reads the product repository's git data, which lies outside the working directories.
+            common = subprocess.run(["git", "-C", str(self.job / "repo"), "rev-parse", "--path-format=absolute",
+                                     "--git-common-dir"], capture_output=True, text=True).stdout.strip()
+            self.assertIn(common, box["filesystem"]["allowRead"])
+            self.assertNotIn(str(self.job), box["filesystem"]["allowRead"])
             self.assertIn(str(self.engine.PIPELINE), box["filesystem"]["denyWrite"])
             deny = box["filesystem"]["denyWrite"]
             self.assertFalse([d for d in deny if str(self.job).startswith(d)])
