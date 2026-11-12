@@ -233,10 +233,10 @@ def read_body(body):
         return file.read() if ok else b""
 
 
-def open_draft(job, task, stage, raw, head, approved=()):
+def open_draft(job, task, stage, raw, head, approved=None):
     """Push the task branch and open a draft PR with the body the implement worker wrote, else why not.
     raw and head are what the caller already checked (the body's bytes, the tested commit): nothing here reads them again.
-    approved holds the sha256 of each file a person approved: only those bytes can mark the PR Ready."""
+    approved is the sha256 a person approved for the stage's easy file."""
     pr_file = job / stage["out"]
     if pr_file.exists():  # an earlier run opened it, or a person did and wrote the URL
         return None
@@ -276,18 +276,19 @@ def open_draft(job, task, stage, raw, head, approved=()):
     # An easy PR skips the person's Ready: they already approved the design that says so. A hard one waits for them,
     # and Ready is when they ask a skipping review bot for a review (POLICY §3). A failed gh leaves the draft to them.
     if stage.get("easy"):
-        design = read_body(job / stage["easy"])  # the bytes a person approved, not a copy changed since
+        # The bytes read here must be the approved ones: a process the tested code left could rewrite the file since run() checked.
+        design = read_body(job / stage["easy"])
         # -z: raw names, not C-quoted ones; --no-renames: a rename out of a trust path shows its old name too
         names = git("diff", "--name-only", "-z", "--no-renames", f"{remote[0]}...{head}")
-        guarded = names.returncode or any(re.match(TRUST_PATHS, n) for n in names.stdout.split("\0") if n)
-        if hashlib.sha256(design).hexdigest() in approved and easy(design, raw) and not guarded:
+        guarded = names.returncode or any(part.casefold() in TRUST_NAMES for n in names.stdout.split("\0") for part in n.split("/"))
+        if approved and hashlib.sha256(design).hexdigest() == approved and easy(design, raw) and not guarded:
             subprocess.run(["gh", "pr", "ready", url], cwd=job, capture_output=True)
     return None
 
 
 # Paths a worker could use to steer later sessions or tools, whatever the body claims: those PRs wait for a person.
 INSTRUCTIONS = ("CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".claude", ".mcp.json", ".envrc")
-TRUST_PATHS = rf"(?i)(.*/)?({'|'.join(map(re.escape, (*INSTRUCTIONS, '.github', '.agents', '.codex', '.cursor', 'REVIEW.md')))})(/|$)"
+TRUST_NAMES = {n.casefold() for n in (*INSTRUCTIONS, ".github", ".agents", ".codex", ".cursor", "REVIEW.md")}
 
 
 def easy(design, body):
@@ -419,7 +420,8 @@ def advance(job, name, runner):
                 save(state_path, state)
                 return block(job, f"{stage['body']} changed after the check stage read it: a person reads it before the engine posts it")
             # The commit compared above, not HEAD again: HEAD can move between here and the push.
-            if error := open_draft(job, task, stage, raw, state["checked"], set(state.get("approved", {}).values())):
+            approved = next((state.get("approved", {}).get(s["id"]) for s in flow if stage.get("easy") and s.get("approve") == stage["easy"]), None)
+            if error := open_draft(job, task, stage, raw, state["checked"], approved):
                 return block(job, error)
         elif stage["by"] == "script" and stage.get("edit"):
             if error := post_body(job, stage):
