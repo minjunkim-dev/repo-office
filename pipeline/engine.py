@@ -21,6 +21,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -221,13 +222,30 @@ def open_draft(job, task, stage):
     if pr_file.exists():  # an earlier run opened it, or a person did and wrote the URL
         return None
     body = job / stage["body"]
-    title, _, text = (body.read_text(encoding="utf-8") if body.exists() else "").partition("\n")
+    # The worker wrote it inside its sandbox, and this process reads outside it and posts it: a link could point at
+    # a file the sandbox hides (credentials). So only a regular file with one name, opened without following links.
+    # O_NONBLOCK: opening a FIFO would wait for a writer.
+    try:
+        fd = os.open(body, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        raw = b""
+    else:
+        with os.fdopen(fd, "rb") as file:
+            info = os.fstat(file.fileno())
+            ok = stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_size <= 60000
+            raw = file.read() if ok else b""
+    title, _, text = raw.decode("utf-8", "replace").partition("\n")
     if not title.startswith("# ") or not title[2:].strip():
-        return f"{body} must exist and start with a `# <PR title>` line"
+        return f"{body} must be a regular file of at most 60000 bytes that starts with a `# <PR title>` line"
     git = lambda *a: subprocess.run(["git", "-C", str(job / "repo"), *a], capture_output=True, text=True, env=SAFE_GIT)  # noqa: E731
     repo = slug(git("remote", "get-url", "origin").stdout)
     if not repo:
         return "the product repository's origin is not on GitHub: open the PR and write its URL into pr.txt"
+    # A pushed branch runs the repository's workflows, with their secrets: a person pushes changes to them.
+    ci = git("diff", "--name-only", f"{task['base']}...HEAD", "--", ".github")
+    if ci.returncode or ci.stdout.strip():
+        return (f"the branch changes .github ({ci.stdout.split() or ci.stderr.strip()}): a person reads the diff, "
+                "pushes the branch, opens the PR and writes its URL into pr.txt")
     branch = f"office/{task['name']}"
     # No -u: it writes the product repository's shared config. No force: a diverged branch of that name stops here.
     push = git("push", "origin", f"HEAD:refs/heads/{branch}")

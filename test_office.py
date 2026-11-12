@@ -293,6 +293,24 @@ class PipelineTests(unittest.TestCase):
         body.write_text("# fix: x\n", encoding="utf-8")
         self.assertIn("git push failed", self.engine.open_draft(self.job, task, stage))
         self.assertEqual(gh(), [])
+        # The engine reads the body outside the sandbox and posts it: no link out, no second name, no FIFO.
+        secret = Path(self.tmp.name) / "credentials"
+        secret.write_text("# token\n", encoding="utf-8")
+        for make in (lambda: body.symlink_to(secret), lambda: os.link(secret, body), lambda: os.mkfifo(body)):
+            body.unlink()
+            make()
+            self.assertIn("regular file", self.engine.open_draft(self.job, task, stage))
+        body.unlink()
+        # A branch that changes the workflows waits for a person: a push runs them with the repository's secrets.
+        repo = self.job / "repo"
+        subprocess.run(["git", "-C", str(repo), "update-ref", "refs/remotes/origin/main", "HEAD"], check=True)
+        (repo / ".github").mkdir()
+        (repo / ".github/ci.yml").write_text("on: push\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo), "add", ".github"], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "ci"], check=True)
+        body.write_text("# fix: x\n", encoding="utf-8")
+        self.assertIn(".github", self.engine.open_draft(self.job, {**task, "base": "origin/main"}, stage))
+        self.assertEqual(gh(), [])
         # A URL already in pr.txt (an earlier run, or a person) is kept: nothing is pushed or opened.
         (self.job / "pr.txt").write_text("https://github.com/o/r/pull/1\n", encoding="utf-8")
         self.assertIsNone(self.engine.open_draft(self.job, task, stage))
