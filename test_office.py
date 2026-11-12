@@ -861,6 +861,14 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(self.engine.test("search"), 0)
             self.assertFalse((self.job / "repo/__pycache__").exists())
 
+    def test_a_worker_test_run_gets_the_same_home_as_the_check(self):
+        # The worker's Claude Code sandbox blocks writes to the real home; Godot failed writing its caches there.
+        task = {"test": 'echo "$HOME"; echo "$TMPDIR"; echo "$GIT_CONFIG_GLOBAL"; echo x > "$HOME/c" && echo cache ok'}
+        with unittest.mock.patch.dict(os.environ, {"HOME": self.tmp.name}):  # without the fix, write here, not the real home
+            result = self.engine.run_test(self.job, task, capture_output=True, text=True)
+        self.assertEqual(result.stdout.split("\n")[:-1],
+                         [str(self.job / "tmp/home"), str(self.job / "tmp"), "/dev/null", "cache ok"], result.stderr)
+
     def test_baseline_path_names_the_clone_else_commands_stop(self):
         office = Path(self.tmp.name) / "standalone"
         shutil.copytree(OFFICE / "pipeline", office / "pipeline", ignore=shutil.ignore_patterns("__pycache__"))
