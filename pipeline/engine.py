@@ -47,9 +47,11 @@ STAGES = Path(os.environ.get("OFFICE_STAGES", PIPELINE / "stages.json"))
 DONE, WAIT, BLOCKED = 0, 3, 4
 # git the engine runs outside the sandbox over a task's repo/ ignores settings task code could plant, such as a
 # committed nested repository whose config runs core.fsmonitor on `git status`. Env config wins over repository files.
-# Replace refs, which task code can write, would show git a different history.
+# Replace refs, which task code can write, would show git a different history. The owner's global push settings
+# would push more than the branch: tags task code made, or committed submodules.
 _SAFE = {"core.fsmonitor": "false", "diff.ignoreSubmodules": "all", "core.hooksPath": "/dev/null",
-         "fetch.recurseSubmodules": "false", "submodule.recurse": "false", "protocol.ext.allow": "never"}
+         "fetch.recurseSubmodules": "false", "submodule.recurse": "false", "protocol.ext.allow": "never",
+         "push.followTags": "false", "push.recurseSubmodules": "no"}
 SAFE_GIT = {**os.environ, "GIT_NO_REPLACE_OBJECTS": "1", "GIT_CONFIG_COUNT": str(len(_SAFE)),
             **{f"GIT_CONFIG_{kind}_{i}": v for i, kv in enumerate(_SAFE.items()) for kind, v in zip(("KEY", "VALUE"), kv)}}
 # hc terminal names are global to the hc core; this tag keeps another checkout's jobs folder from sharing them.
