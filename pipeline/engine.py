@@ -523,7 +523,7 @@ CONTROL = ("task.json", "state.json", "pr.txt", "pr.diff", "run.lock", "repo/.gi
 def check_profile(job, protect=()):
     """Seatbelt rules for the check stage, the same writes the worker's sandbox allows: the task folder, minus its
     control files. No network but localhost and unix sockets in the task folder. No reads in the home folder (credentials) but the task folder, this
-    checkout and the product's git data, like blockReadsOutsideWorkingDirectories for the worker. The worker's own `engine.py test` already runs in Claude Code's
+    checkout, the product's git data and TOOLCHAINS, like blockReadsOutsideWorkingDirectories for the worker. /bin/ps alone runs outside it. The worker's own `engine.py test` already runs in Claude Code's
     sandbox, which refuses a sandbox inside it, so only the engine's check stage uses this."""
     quote = json.dumps  # SBPL strings take the same escapes as JSON for quotes and backslashes
     real = job.resolve()
