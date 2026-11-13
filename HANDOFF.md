@@ -14,7 +14,7 @@
 지금 상태(2026-11-12):
 
 - 흐름: 접수(leader) → 설계 → 사람 승인(`design.md` sha256) → 구현 → 검사(`sandbox-exec`) → 엔진이 push하고 초안 PR → 사람이 Ready → 리뷰(다른 세션) → 엔진이 리뷰 커밋을 push하고 리뷰 본문을 PR에 올림 → 사람이 병합.
-- 이 흐름 전체를 장난감 저장소에서 엔진과 실제 작업자로 끝까지 돌렸다(leader 접수는 따로 돌렸다)(§6의 2026-11-12 항목). 단위 테스트는 44개다.
+- 이 흐름 전체를 장난감 저장소에서 엔진과 실제 작업자로 끝까지 돌렸다(leader 접수는 따로 돌렸다)(§6의 2026-11-12 항목). 단위 테스트는 60개다.
 - 열린 이슈는 없다. 남은 결정은 §4에 있다.
 
 ## 2. 구성 요소
@@ -161,6 +161,14 @@
   - 측정하지 않은 것: 구현·검사·초안 PR·리뷰를 BGLike 과제로 끝까지 돌리는 것, 작업자의 `engine.py test`로 Godot를 돌리는 것.
 - 2026-11-13, BGLike #503 과제(`overload-preview`, Claude Code 2.1.322): 설계 단계가 끝나고 사람이 승인했다. 구현 단계의 작업자가 `engine.py test`를 두 번 돌렸고 모두 exit 2였다. Godot가 `~/Library/Caches/Godot`, `~/Library/Application Support/Godot`, `user://`(홈 아래)에 쓰지 못해 `combat_save_test`가 실패했다. 작업자는 INTENT 지시대로 고치지 않고 `BLOCKED.md`를 썼다. 그래서 `run_test`가 sandbox 여부와 관계없이 `HOME=<과제>/tmp/home`, `TMPDIR=<과제>/tmp`, `GIT_CONFIG_GLOBAL=/dev/null`을 준다. 고친 엔진으로 같은 과제의 구현 단계를 다시 돌리는 것은 이 변경이 병합된 뒤에 한다.
 - 2026-11-13, 리뷰 push 실측(Claude Code 2.1.323): BGLike `env-water`의 리뷰 작업자가 `git -C <job>/repo push origin HEAD`로 push하다 `~/.config/gh/config.yml: operation not permitted`, `could not read Username`으로 실패했다. 이 명령은 `excludedCommands`에 그대로 있었다. `jobs/` 아래 빈 폴더에서 엔진과 같은 설정으로 대화형 작업자를 띄워, 비공개 저장소에 `ls-remote`를 보냈다. `excludedCommands`에 넣은 `git -C <절대 경로>/r ls-remote ...`와 `git -C r ls-remote ...`, 넣지 않은 대조군이 모두 같은 오류로 실패했다. `excludedCommands`에 넣은 `gh auth status`는 성공했다. 그래서 git은 경로 형태와 관계없이 sandbox 안에서 돈다. 작업자의 push를 없애고 엔진이 `post` 단계에서 push한다(#19). git만 sandbox에 남는 이유는 확인하지 않았다. Claude Code의 `!` 셸 모드는 sandbox를 거치지 않으므로(홈 폴더 `touch`가 성공했다) 이 시험에 쓰지 않는다.
+- 2026-11-14, 세 제품 저장소의 문서상 test 명령(Claude Code 2.1.323, macOS 27.2): BGLike `bg-ws-tests`, smallnext `sn-purge-tests`, MobileEnvironment `mr-avd-hint2`가 모두 검사 단계 전에 멈췄다. 원인 네 가지를 고쳤다.
+  - 작업자 sandbox는 작업 폴더(과제 폴더) 안의 `.git/config`·`.git/hooks` 쓰기를 막는다. 그래서 `TMPDIR=<과제>/tmp`에서 테스트의 `git init`이 128로 실패했다(BGLike 17건). `allowWrite`로 더한 폴더와 sandbox가 주는 `TMPDIR`(`/tmp/claude-501`)에서는 성공했다. 환경 변수를 비우고 띄워도 sandbox가 이 `TMPDIR`을 준다. 그래서 작업자 경로는 `TMPDIR`을 바꾸지 않는다. 고친 뒤 0건이다.
+  - `/bin/ps`는 setuid root라서 `(allow default)`만 쓴 profile에서도 실행되지 않는다. 그래서 `/bin/ps` 하나에만 `(with no-sandbox)`를 준다. smallnext 260건, BGLike 14건, MobileEnvironment `test_validation_processes`가 이것으로 실패했고, 고친 뒤 0건이다.
+  - 검사 단계에서 `rustc`(rustup proxy, `~/.cargo/bin`)를 실행하지 못했다. 툴체인 폴더를 읽기·실행만 열고, `RUSTUP_HOME`이 없으면 실제 `~/.rustup`을 준다. 고친 뒤 `rustc`는 돈다.
+  - 작업자가 본 출력이 가운데에서 잘렸다(`[20012 characters truncated]`). `engine.py test`가 전체 출력을 `<과제>/tmp/test.log`에 쓴다.
+  - 검사 단계 결과(전 → 후): smallnext 420개 중 failures 4·errors 263 → failures 2·errors 4, BGLike 145개 중 failures 10·errors 2 → failures 3·errors 2, MobileEnvironment 첫 명령 47개 중 실패 1 → 통과.
+  - 남은 것(office 쪽, 넓히려면 소유자가 정한다): macOS 27.2의 `mktemp`는 `TMPDIR`을 무시하고 `/var/folders/.../T`에 쓴다. 검사 sandbox는 그 폴더 쓰기를 막는다. 그래서 BGLike `test_pre_push` 5건과 MobileEnvironment `test-release-input.py` 12건이 실패한다. `xcrun_db` 경고도 같은 폴더다. SwiftPM은 `HOME`과 관계없이 `~/Library/...swiftpm`과 `/var/folders/.../C`의 clang 모듈 캐시에 써서 `swift test`가 manifest 단계에서 실패한다. smallnext `test_backup_ai_budget` 4건은 검사 단계의 `TMPDIR`(`<과제>/tmp`)이 office git 체크아웃 안이라 "path outside Git" 검사에 걸린다.
+  - 남은 것(환경·제품 쪽): 소유자 환경의 `RUSTUP_TOOLCHAIN=stable`(mise 전역)이 `rust-toolchain.toml`(1.99.1)을 덮어 `make api-check`가 버전 검사에서 실패한다. sandbox 밖에서도 같다. cargo 의존성은 `index.crates.io`에서 받는데, 검사 단계는 네트워크가 없고 작업자는 `github.com`만 되므로 미리 받아 둘 수 없다. smallnext `test_launch_evaluation` 2건은 원본 체크아웃의 `work/launch-model.lock`에 쓰려 한다(제품 쪽).
 
 ## 7. 다시 재현하는 법
 
