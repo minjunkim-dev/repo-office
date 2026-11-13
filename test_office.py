@@ -247,6 +247,32 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.state()["stage"], "approve")
         self.assertEqual([c[0] for c in worker.calls], ["design"])
 
+    def test_a_person_adds_a_bash_rule_that_the_next_worker_gets(self):
+        # A task blocked on a missing command goes on without registering it again.
+        rule = "Bash(git -C repo grep *)"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.engine.allow("search", rule), 0)
+            self.assertEqual(self.engine.allow("search", rule), 0)
+        task = json.loads((self.job / "task.json").read_text())
+        self.assertEqual(task["allow"], ["Bash(npm test)", rule])
+        config = self.engine.load(self.engine.STAGES, None)
+        stage = next(s for s in config["flow"] if s["id"] == "implement")
+        self.assertIn(rule, self.engine.claude_argv(config, stage, self.job, task, {"sessions": []}))
+
+    def test_extra_rules_are_bash_only_and_never_run_outside_the_sandbox(self):
+        # excludedCommands run outside the sandbox with the owner's gh and git login, whichever rule allowed them.
+        refused = ["Read(**)", "Bash(*)", "Bash(gh *)", "Bash(gh pr view 7)", "Bash(gh api --paginate repos/o/r)",
+                   "Bash(python3 *)"]
+        with contextlib.redirect_stderr(io.StringIO()):
+            for rule in refused:
+                self.assertEqual(self.engine.allow("search", rule), 2, rule)
+            self.assertEqual(self.engine.new("other", str(self.job / "repo"), "true", ["Bash(gh *)"], "main"), 2)
+        self.assertFalse((self.engine.JOBS / "other").exists())
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.engine.allow("search", "Bash(python3 repo/tools/draw.py*)"), 0)
+        self.assertEqual(json.loads((self.job / "task.json").read_text())["allow"],
+                         ["Bash(npm test)", "Bash(python3 repo/tools/draw.py*)"])
+
     def test_approve_refuses_outside_an_approval_stage(self):
         self.engine.run("search", FakeWorker(self.job))
         self.engine.approve("search")
