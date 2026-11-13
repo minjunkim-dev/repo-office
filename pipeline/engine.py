@@ -54,6 +54,9 @@ _SAFE = {"core.fsmonitor": "false", "diff.ignoreSubmodules": "all", "core.hooksP
          "push.followTags": "false", "push.recurseSubmodules": "no"}
 SAFE_GIT = {**os.environ, "GIT_NO_REPLACE_OBJECTS": "1", "GIT_CONFIG_COUNT": str(len(_SAFE)),
             **{f"GIT_CONFIG_{kind}_{i}": v for i, kv in enumerate(_SAFE.items()) for kind, v in zip(("KEY", "VALUE"), kv)}}
+# Toolchains the check stage may read and run, never write: mise's installs and rustup's proxies and toolchains.
+# Not the rest of ~/.cargo: it holds credentials.toml.
+TOOLCHAINS = [Path.home() / p for p in (".local/share/mise/installs", ".cargo/bin", ".rustup")]
 # hc terminal names are global to the hc core; this tag keeps another checkout's jobs folder from sharing them.
 TAG = hashlib.sha256(str(JOBS.resolve()).encode()).hexdigest()[:4]
 
@@ -528,8 +531,11 @@ def check_profile(job, protect=()):
     deny += f" (literal {quote(str(real / 'repo'))})"  # renaming repo/ away and back would rewrite repo/.git
     common = subprocess.run(["git", "-C", str(job / "repo"), "rev-parse", "--path-format=absolute", "--git-common-dir"],
                             capture_output=True, text=True, env=SAFE_GIT).stdout.strip()
-    readable = " ".join(f"(subpath {quote(str(Path(p).resolve()))})" for p in (job, BASELINE, OFFICE, *([common] if common else [])))
+    readable = " ".join(f"(subpath {quote(str(Path(p).resolve()))})" for p in (job, BASELINE, OFFICE, *([common] if common else []),
+                                                                         *(t for t in TOOLCHAINS if t.exists())))
     return ("(version 1) (allow default)\n"
+            # ps is setuid root, which macOS never starts inside a sandbox; it only reads process information.
+            "(allow process-exec (literal \"/bin/ps\") (with no-sandbox))\n"
             # Unix sockets only in the task folder: one outside, such as /var/run/docker.sock, can start processes outside the sandbox.
             f"(deny network-outbound) (allow network-outbound (remote ip \"localhost:*\") (remote unix-socket (subpath {quote(str(real))})))\n"
             f"(deny file-write*) (allow file-write* (subpath {quote(str(real))}) (subpath \"/dev\"))\n"
@@ -541,26 +547,39 @@ def run_test(job, task, sandboxed=False, protect=(), **kwargs):
     # The owner wrote this command (the product's AGENTS.md test cell) with `new`; workers cannot edit task.json.
     # The check stage fails on untracked files, and a worker's earlier test run would leave __pycache__ in repo/.
     # shortcut: Python bytecode only; other tools' artifacts must be in the product's .gitignore.
-    tmp = job / "tmp"  # temp files stay in the one folder both sandboxes let the test write
+    tmp = job / "tmp"
     # Both sandboxes (the worker's Claude Code one and the check stage's) block the real home;
     # tools that cache or read config there (Godot, git) need a writable one.
     home = tmp / "home"
     home.mkdir(parents=True, exist_ok=True)
-    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "TMPDIR": str(tmp), "HOME": str(home), "GIT_CONFIG_GLOBAL": "/dev/null"}
+    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "HOME": str(home), "GIT_CONFIG_GLOBAL": "/dev/null"}
+    if TOOLCHAINS[2].is_dir():
+        env.setdefault("RUSTUP_HOME", str(TOOLCHAINS[2]))  # rustup finds its toolchains from HOME otherwise
     if not sandboxed:
+        # The worker's sandbox denies .git/config and .git/hooks under its folder, so a test's `git init` in tmp/
+        # failed; the sandbox's own TMPDIR allows them (seen 2026-11-14, Claude Code 2.1.323).
         return subprocess.run(task["test"], shell=True, cwd=job / "repo", env=env, **kwargs)
+    env["TMPDIR"] = str(tmp)  # the one folder the check stage lets the test write
     return subprocess.run(["sandbox-exec", "-p", check_profile(job, protect), "/bin/sh", "-c", task["test"]], cwd=job / "repo",
                           env=env, **kwargs)
 
 
 def test(name):
-    """A worker's Bash cd is refused while blockReadsOutsideWorkingDirectories is on, so the engine runs the test in repo/."""
+    """A worker's Bash cd is refused while blockReadsOutsideWorkingDirectories is on, so the engine runs the test in repo/.
+
+    The worker's Bash output is cut in the middle, which lost the summary line: the full output goes to tmp/test.log."""
     job = JOBS / name
     error = missing(job, name, "task.json")
     if error:
         print(error, file=sys.stderr)
         return 2
-    return run_test(job, load(job / "task.json", None)).returncode
+    log = job / "tmp/test.log"
+    log.parent.mkdir(exist_ok=True)
+    with open(log, "wb") as out:
+        code = run_test(job, load(job / "task.json", None), stdout=out, stderr=subprocess.STDOUT).returncode
+    print(log.read_text(encoding="utf-8", errors="replace")[-4000:])
+    print(f"exit {code}; full output: {log}")
+    return code
 
 
 def preflight(name):

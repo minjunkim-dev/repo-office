@@ -998,11 +998,26 @@ class PipelineTests(unittest.TestCase):
 
     def test_a_worker_test_run_gets_the_same_home_as_the_check(self):
         # The worker's Claude Code sandbox blocks writes to the real home; Godot failed writing its caches there.
+        # It keeps the sandbox's TMPDIR: that sandbox denies .git/config and hooks in the task folder, so `git init` failed in tmp/.
         task = {"test": 'echo "$HOME"; echo "$TMPDIR"; echo "$GIT_CONFIG_GLOBAL"; echo x > "$HOME/c" && echo cache ok'}
-        with unittest.mock.patch.dict(os.environ, {"HOME": self.tmp.name}):  # without the fix, write here, not the real home
+        sandbox_tmp = str(Path(self.tmp.name) / "sandbox-tmp")
+        with unittest.mock.patch.dict(os.environ, {"HOME": self.tmp.name, "TMPDIR": sandbox_tmp}):  # without the fix, write here, not the real home
             result = self.engine.run_test(self.job, task, capture_output=True, text=True)
         self.assertEqual(result.stdout.split("\n")[:-1],
-                         [str(self.job / "tmp/home"), str(self.job / "tmp"), "/dev/null", "cache ok"], result.stderr)
+                         [str(self.job / "tmp/home"), sandbox_tmp, "/dev/null", "cache ok"], result.stderr)
+
+    def test_a_worker_sees_the_end_of_the_test_output_and_the_full_log(self):
+        # Claude Code cut a long output in the middle, so the worker never saw the summary line (2026-11-14).
+        task = json.loads((self.job / "task.json").read_text())
+        task["test"] = "python3 -c \"print('head'); print('x' * 30000); print('Ran 3 tests')\"; echo err >&2; exit 3"
+        (self.job / "task.json").write_text(json.dumps(task))
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(self.engine.test("search"), 3)
+        log = self.job / "tmp/test.log"
+        self.assertLess(len(out.getvalue()), 5000)
+        self.assertIn("Ran 3 tests\nerr\n", out.getvalue())
+        self.assertIn(f"exit 3; full output: {log}", out.getvalue())
+        self.assertTrue(log.read_text().startswith("head\n" + "x" * 30000))
 
     def test_baseline_path_names_the_clone_else_commands_stop(self):
         office = Path(self.tmp.name) / "standalone"
@@ -1115,6 +1130,25 @@ class PipelineTests(unittest.TestCase):
         script = 'git rev-parse HEAD >/dev/null && echo git ok; echo "$HOME"; echo x > "$HOME/c" && echo cache ok'
         result = self.engine.run_test(self.job, {"test": script}, sandboxed=True, capture_output=True, text=True)
         self.assertEqual(result.stdout.split("\n")[:-1], ["git ok", str(self.job / "tmp/home"), "cache ok"], result.stderr)
+
+    @unittest.skipUnless(shutil.which("sandbox-exec"), "macOS sandbox-exec")
+    def test_check_stage_runs_ps_but_no_other_setuid_program(self):
+        # macOS never starts a setuid program in a sandbox; smallnext and MobileEnvironment tests call ps.
+        script = "(ps -p $$ -o pid= >/dev/null && echo ps ok); (/usr/bin/sudo -n true 2>/dev/null && echo sudo ok || echo sudo denied)"
+        result = self.engine.run_test(self.job, {"test": script}, sandboxed=True, capture_output=True, text=True)
+        self.assertEqual(result.stdout.split("\n")[:-1], ["ps ok", "sudo denied"], result.stderr)
+
+    @unittest.skipUnless(shutil.which("sandbox-exec") and (Path.home() / ".cargo/bin/rustc").exists(), "macOS, rustup")
+    def test_check_stage_runs_the_owners_toolchains_but_reads_no_other_home_file(self):
+        # smallnext's api-check runs rustc from rustup; the rest of ~/.cargo holds credentials.toml.
+        cargo = Path.home() / ".cargo"
+        script = (f"({cargo}/bin/rustc --version >/dev/null && echo rustc ok); (ls {cargo} >/dev/null 2>&1 && echo cargo ok || echo cargo denied); "
+                  f"(echo x > {cargo}/bin/planted 2>/dev/null && echo write ok || echo write denied)")
+        with unittest.mock.patch.dict(os.environ):
+            os.environ.pop("RUSTUP_HOME", None)  # rustup would look under the engine's HOME and try to download a toolchain
+            result = self.engine.run_test(self.job, {"test": script}, sandboxed=True, capture_output=True, text=True)
+        self.assertEqual(result.stdout.split("\n")[:-1], ["rustc ok", "cargo denied", "write denied"], result.stderr)
+        self.assertFalse((cargo / "bin/planted").exists())
 
     @unittest.skipUnless(shutil.which("sandbox-exec") and shutil.which("nc"), "macOS sandbox-exec")
     def test_check_stage_reaches_only_unix_sockets_in_the_task_folder(self):
