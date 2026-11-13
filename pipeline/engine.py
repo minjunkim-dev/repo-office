@@ -307,8 +307,33 @@ def easy(design, body):
             and sum(bool(re.search(trust, l)) for l in body.decode("utf-8", "replace").splitlines()) == 1)
 
 
-def post_body(job, stage):
-    """Replace the PR body with the file the review worker wrote, else why not.
+def push_review(job, task):
+    """Push the review worker's commits to the PR branch, else why not.
+    The worker cannot push: excluded from the sandbox or not, its git cannot read the owner's gh login (seen 2026-11-13)."""
+    git = lambda *a: subprocess.run(["git", "-C", str(job / "repo"), *a], capture_output=True, text=True, env=SAFE_GIT)  # noqa: E731
+    # The engine names the branch: tests in the sandbox can move this worktree's HEAD and local refs.
+    branch = f"refs/heads/office/{task['name']}"
+    remote = git("ls-remote", "origin", branch).stdout.split()[:1]
+    if not remote:
+        return f"origin has no {branch}: a person pushes the review's commits to the PR branch"
+    head = git("rev-parse", "HEAD").stdout.strip()
+    if head == remote[0]:
+        return None
+    git("fetch", "-q", "origin", branch)
+    # Only what the review added: the draft stage or a person already let the rest of the branch onto GitHub.
+    ci = git("diff", "--name-only", remote[0], head, "--", ".github")
+    if ci.returncode or not head:
+        return f"could not compare the review's commits with origin's {branch}: {ci.stderr.strip()}"
+    if ci.stdout.strip():
+        return (f"the review's commits change .github ({ci.stdout.split()}): a person reads the diff and pushes them")
+    push = git("push", "origin", f"{head}:{branch}")  # no force: a diverged branch stops here
+    if push.returncode:
+        return f"git push failed: {push.stderr.strip()}"
+    return None
+
+
+def post_body(job, task, stage):
+    """Push the review's commits, then replace the PR body with the file the review worker wrote, else why not.
     gh gets the bytes on stdin, never a path: it runs outside the sandbox and would follow a link to a hidden file."""
     body = job / stage["edit"]
     raw = read_body(body)
@@ -318,7 +343,10 @@ def post_body(job, stage):
         return f"{body} must be a regular file of 1 to 60000 bytes with the whole PR body: the review worker writes it"
     if not url or not re.fullmatch(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+", url[0]):
         return f"{pr_file} must hold the PR's GitHub URL"
-    edit = subprocess.run(["gh", "pr", "edit", url[0], "--body-file", "-"], input=raw, cwd=job, capture_output=True)
+    # The body names the reviewed head, and the owner merges that SHA: it goes up only once the commits are there.
+    if error := push_review(job, task):
+        return error
+    edit =subprocess.run(["gh", "pr", "edit", url[0], "--body-file", "-"], input=raw, cwd=job, capture_output=True)
     if edit.returncode:
         return f"gh pr edit failed: {(edit.stderr or edit.stdout).decode(errors='replace').strip()}"
     return None
@@ -426,7 +454,7 @@ def advance(job, name, runner):
             if error := open_draft(job, task, stage, raw, state["checked"], approved):
                 return block(job, error)
         elif stage["by"] == "script" and stage.get("edit"):
-            if error := post_body(job, stage):
+            if error := post_body(job, task, stage):
                 return block(job, error)
         elif stage["by"] == "script":
             git = lambda *a: subprocess.run(["git", *a], cwd=job / "repo", capture_output=True, text=True, env=SAFE_GIT).stdout.strip()  # noqa: E731

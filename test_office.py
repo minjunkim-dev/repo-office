@@ -228,7 +228,8 @@ class PipelineTests(unittest.TestCase):
                 self.assertIn(f"Bash(git diff*{mark}*)", argv)
                 self.assertIn(f"Bash(git -C repo diff*{mark}*)", argv)
         self.assertEqual(r_argv[r_argv.index("--add-dir") + 1], str(office))
-        self.assertIn(f"Bash(git -C {self.job}/repo push origin HEAD)", r_argv)
+        # git stays in the sandbox even when excluded, where it cannot read the gh login: the engine pushes instead.
+        self.assertFalse([r for r in allowed + box["excludedCommands"] if " push" in r])
         # gh outside the sandbox would read any --body-file path, links included: workers cannot run gh pr edit.
         self.assertFalse([r for r in allowed + box["excludedCommands"] if "pr edit" in r])
         self.assertIn("Bash(gh pr edit*)", r_argv[r_argv.index("--disallowedTools"):])
@@ -647,6 +648,84 @@ class PipelineTests(unittest.TestCase):
             self.assertIn("pr.txt", (self.job / "BLOCKED.md").read_text())
             self.assertEqual([c for c in gh() if c[:2] == ["pr", "edit"]], [])
 
+    def at_post(self):
+        """A reviewed PR whose branch office/search is on origin, at the post stage. Returns the remote's tip and gh calls."""
+        bare, _, gh = self.fake_github()
+        subprocess.run(["git", "-C", str(self.job / "repo"), "push", "-q", "origin", "HEAD:refs/heads/office/search"], check=True)
+        (self.job / "design.md").write_text("d\n", encoding="utf-8")
+        (self.job / "review-body.md").write_text("## Review\nok\n", encoding="utf-8")
+        (self.job / "pr.txt").write_text("https://github.com/O/R/pull/7\n", encoding="utf-8")
+        self.engine.save(self.job / "state.json", {"stage": "post", "since": 0, "fails": {}, "sessions": [],
+                                                   "approved": {"approve": self.engine.sha(self.job / "design.md")}})
+        tip = lambda ref="refs/heads/office/search": subprocess.run(  # noqa: E731
+            ["git", "-C", str(bare), "rev-parse", "-q", "--verify", ref], capture_output=True, text=True).stdout.strip()
+        return tip, lambda: [c for c in gh() if c[:2] == ["pr", "edit"]]
+
+    def review_commit(self, *files):
+        repo = self.job / "repo"
+        for name in files:
+            (repo / name).parent.mkdir(parents=True, exist_ok=True)
+            (repo / name).write_text("x\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo), "add", "-A", "--", *files], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-q", "--allow-empty", "-m", "review fix"], check=True)
+        return subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+
+    def post(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return self.engine.run("search", FakeWorker(self.job))
+
+    def test_the_engine_pushes_the_review_commits_then_posts_the_body(self):
+        # In the sandbox the worker's git cannot read the gh login, excluded or not: the engine pushes for it.
+        tip, edits = self.at_post()
+        head = self.review_commit("fix.py")
+        self.assertEqual(self.post(), self.engine.DONE)
+        self.assertEqual(tip(), head)
+        self.assertEqual(len(edits()), 1)
+
+    def test_a_review_without_commits_posts_the_body_only(self):
+        tip, edits = self.at_post()
+        before = tip()
+        self.assertEqual(self.post(), self.engine.DONE)
+        self.assertEqual(tip(), before)
+        self.assertEqual(len(edits()), 1)
+
+    def test_review_commits_that_change_github_wait_for_a_person(self):
+        # A pushed workflow runs with the repository's secrets: neither the commits nor the body that names them go up.
+        tip, edits = self.at_post()
+        before = tip()
+        self.review_commit(".github/ci.yml")
+        self.assertEqual(self.post(), self.engine.BLOCKED)
+        self.assertIn(".github", (self.job / "BLOCKED.md").read_text())
+        self.assertEqual((tip(), edits()), (before, []))
+
+    def test_review_commits_go_only_to_the_task_branch(self):
+        # Tests in the sandbox can rename the local branch: the engine names the remote branch itself.
+        tip, edits = self.at_post()
+        before_main = tip("refs/heads/main")
+        subprocess.run(["git", "-C", str(self.job / "repo"), "checkout", "-q", "-B", "main"], check=True)
+        head = self.review_commit("fix.py")
+        self.assertEqual(self.post(), self.engine.DONE)
+        self.assertEqual((tip(), tip("refs/heads/main")), (head, before_main))
+
+    def test_review_commits_are_not_pushed_without_the_task_branch_or_over_other_history(self):
+        tip, edits = self.at_post()
+        bare = Path(self.tmp.name) / "origin.git"
+        self.review_commit("fix.py")
+        subprocess.run(["git", "-C", str(bare), "update-ref", "-d", "refs/heads/office/search"], check=True)
+        self.assertEqual(self.post(), self.engine.BLOCKED)  # a person opened the PR from another branch
+        self.assertIn("office/search", (self.job / "BLOCKED.md").read_text())
+        # Someone else pushed to the branch: no force push.
+        other = Path(self.tmp.name) / "other"
+        subprocess.run(["git", "clone", "-q", str(bare), str(other)], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(other), "-c", "user.email=o@example.com", "-c", "user.name=o", "commit", "-q",
+                        "--allow-empty", "-m", "other"], check=True)
+        subprocess.run(["git", "-C", str(other), "push", "-q", "origin", "HEAD:refs/heads/office/search"], check=True, capture_output=True)
+        theirs = tip()
+        (self.job / "BLOCKED.md").unlink()
+        self.assertEqual(self.post(), self.engine.BLOCKED)
+        self.assertIn("git push failed", (self.job / "BLOCKED.md").read_text())
+        self.assertEqual((tip(), edits()), (theirs, []))
+
     def test_draft_stage_posts_a_changed_body_only_after_a_person_read_it(self):
         _, _, gh = self.fake_github()
         worker = FakeWorker(self.job)
@@ -724,6 +803,10 @@ class PipelineTests(unittest.TestCase):
         self.engine.BASELINE = self.engine.OFFICE = repo  # office, repo-baseline and the product are one repository
         (self.job / "design.md").write_text("d\n", encoding="utf-8")
         self.fake_gh()  # the post stage after the review
+        bare = Path(self.tmp.name) / "origin.git"  # the post stage checks the PR branch before posting
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", str(bare)], check=True)
+        subprocess.run(["git", "-C", str(repo), "push", "-q", "origin", "HEAD:refs/heads/office/search"], check=True)
         (self.job / "pr.txt").write_text("https://github.com/o/r/pull/1\n", encoding="utf-8")
 
         def review():
