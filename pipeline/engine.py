@@ -18,7 +18,6 @@ Exit codes for run: 0 done, 2 no such task or another run of it is going, 3 wait
 
 import argparse
 import fcntl
-from fnmatch import fnmatchcase
 import hashlib
 import json
 import os
@@ -637,13 +636,24 @@ def approve(name):
 
 def bad_rule(rule, job, task):
     """Why a task's extra tool rule is refused: it must be one Bash rule the sandbox does not run outside itself."""
-    command = re.fullmatch(r"Bash\((.+)\)", rule)
+    # Claude Code splits an --allowedTools value at spaces and commas outside parentheses: "Bash(x) Read(**)" is two rules.
+    command = re.fullmatch(r"Bash\(([^()]+)\)", rule)
     if not command:
-        return f"{rule}: only Bash(...) rules"
+        return f"{rule}: only one Bash(...) rule, without parentheses inside"
+    body = command[1]
+    if body != " ".join(body.split()):
+        return f"{rule}: single spaces only"
+    body = body[:-2] + "*" if body.endswith(":*") else body  # the legacy prefix form, Bash(gh:*)
+    # A * elsewhere matches across words (Bash(gh p* view 7)); only a trailing * keeps the overlap check exact.
+    if "*" in body[:-1]:
+        return f"{rule}: * only at the end"
+    prefix = body.rstrip("*")
     # An excluded command runs outside the sandbox with the owner's gh and git login, whichever rule allowed it.
     for excluded in load(STAGES, None).get("sandbox", {}).get("excludedCommands", []):
         excluded = fill(excluded, job, task)
-        if fnmatchcase(excluded.rstrip("*"), command[1]) or fnmatchcase(command[1], excluded):
+        literal = excluded.rstrip("*")
+        if (prefix == literal or (body.endswith("*") and literal.startswith(prefix))
+                or (excluded.endswith("*") and prefix.startswith(literal))):
             return f"{rule}: matches {excluded}, which runs outside the sandbox"
     return None
 

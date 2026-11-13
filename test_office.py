@@ -262,7 +262,9 @@ class PipelineTests(unittest.TestCase):
     def test_extra_rules_are_bash_only_and_never_run_outside_the_sandbox(self):
         # excludedCommands run outside the sandbox with the owner's gh and git login, whichever rule allowed them.
         refused = ["Read(**)", "Bash(*)", "Bash(gh *)", "Bash(gh pr view 7)", "Bash(gh api --paginate repos/o/r)",
-                   "Bash(python3 *)"]
+                   "Bash(python3 *)", "Bash(gh:*)", "Bash(python3:*)", "Bash(git -C repo grep x) Bash(gh *)",
+                   "Bash(x),Read(**)", "Bash(x) Write(/**)", "Bash(gh p* view 7)", "Bash(* api --paginate repos/o/r)",
+                   "Bash(gh  pr view 7)", "Bash( gh pr view 7)"]
         with contextlib.redirect_stderr(io.StringIO()):
             for rule in refused:
                 self.assertEqual(self.engine.allow("search", rule), 2, rule)
