@@ -13,7 +13,7 @@
 
 지금 상태(2026-11-12):
 
-- 흐름: 접수(leader) → 설계 → 사람 승인(`design.md` sha256) → 구현 → 검사(`sandbox-exec`) → 엔진이 push하고 초안 PR → 사람이 Ready → 리뷰(다른 세션) → 엔진이 리뷰 본문을 PR에 올림 → 사람이 병합.
+- 흐름: 접수(leader) → 설계 → 사람 승인(`design.md` sha256) → 구현 → 검사(`sandbox-exec`) → 엔진이 push하고 초안 PR → 사람이 Ready → 리뷰(다른 세션) → 엔진이 리뷰 커밋을 push하고 리뷰 본문을 PR에 올림 → 사람이 병합.
 - 이 흐름 전체를 장난감 저장소에서 엔진과 실제 작업자로 끝까지 돌렸다(leader 접수는 따로 돌렸다)(§6의 2026-11-12 항목). 단위 테스트는 44개다.
 - 열린 이슈는 없다. 남은 결정은 §4에 있다.
 
@@ -119,7 +119,7 @@
   - 네트워크: `allowedDomains: ["github.com"]`으로 `git -C repo fetch origin`이 됐다. `gh`는 sandbox 안에서 `~/.config/gh`를 읽지 못하고, 읽게 해도 macOS 인증서 확인(TLS)에서 실패하고, 그것을 풀어도(`enableWeakerNetworkIsolation`) 키체인의 토큰을 읽지 못해 401이었다. 키체인을 sandbox에 열면 작업자 코드도 키체인을 읽게 되므로 열지 않는다. 대신 `gh`·`preflight`·`push`를 `excludedCommands`로 뺐고, 그러자 `gh pr view`가 됐다.
   - 고친 엔진으로 장난감 과제를 설계·구현·검사까지 돌려 PR 대기(exit 3)까지 갔다. 리뷰 단계는 실제 PR로 돌리지 않았다. 리뷰 단계의 명령은 위 `gh`·`fetch` 시험으로만 확인했다.
   - PR #28 리뷰가 찾은 것: 과제 폴더 전체를 열면 sandbox 안의 테스트가 `task.json`·`state.json`·`pr.txt`를 고친다(Edit 거부 규칙은 도구에만 듣는다). 제품 저장소의 git 데이터를 열면 `repo/.git` 파일, `config`, `hooks`도 고친다. 그 설정은 sandbox 밖에서 도는 preflight·push의 git이 따른다(`core.fsmonitor`, `pre-push`). 그래서 이 경로들과 아직 없는 지시 파일(`CLAUDE.md` 등)을 하나씩 `denyWrite`에 넣었다. 같은 날 실제 작업자로 13곳에 쓰기를 시도해, 과제 폴더의 일반 파일만 되고 제어 파일·git 설정·hook·worktree 연결 파일·새 `CLAUDE.md`·`pr.txt` 생성은 모두 `Operation not permitted`인 것을 봤다. 그 뒤에도 `git commit`은 됐다. 리뷰 2라운드는 과제 코드가 `repo/` 안에 하위 저장소(gitlink)를 커밋하고 그 gitdir 설정에 `core.fsmonitor`를 넣으면 sandbox 밖의 `git status`가 그 명령을 실행하는 것을 찾았다(git 2.54.0, sandbox 없이 재현). 파일을 하나씩 막는 대신, 엔진이 돌리는 git에 환경 변수(`GIT_CONFIG_COUNT`)로 `core.fsmonitor=false` 등을 강제했다. 하위 저장소의 git에도 넘어간다. 단위 테스트가 이 공격을 재현하고 강제가 막는 것을 확인한다.
-  - 남은 구멍은 `AGENTS.md` 규칙에 적었다(단계 도중 새로 생긴 과제·worktree 폴더, `github.com`으로 내보내기, 리뷰 `push`에는 git 설정 강제가 없음). Linux는 bubblewrap과 socat이 있어야 하고 시험하지 않았다. Windows는 sandbox가 없으므로 작업자가 시작하지 않는다.
+  - 남은 구멍은 `AGENTS.md` 규칙에 적었다(단계 도중 새로 생긴 과제·worktree 폴더, `github.com`으로 내보내기). Linux는 bubblewrap과 socat이 있어야 하고 시험하지 않았다. Windows는 sandbox가 없으므로 작업자가 시작하지 않는다.
 - #29(2026-11-11): 검사 단계는 엔진이 sandbox 없이 테스트를 돌려, 작업자가 쓴 코드가 사용자 권한으로 한 번 실행됐다. 그래서 엔진이 macOS `sandbox-exec`로 감싼다. Claude Code가 쓰는 sandbox runtime(`srt`)은 설치되어 있지 않아 의존성을 늘리지 않으려고 쓰지 않았다. 작업자의 `engine.py test`는 감싸지 않는다. Claude Code sandbox 안에서는 sandbox를 다시 걸 수 없다. 단위 테스트가 실제 `sandbox-exec`로 과제 폴더 쓰기와 `$TMPDIR` 쓰기는 되고, 밖의 파일·`task.json`·`pr.txt` 생성·`repo/.git`·새 `CLAUDE.md`·홈 폴더 읽기는 막히는 것을 확인한다. 같은 날 엔진으로 장난감 과제를 돌려 검사 단계가 sandbox 안에서 테스트 2개를 통과(exit 0)했고, 그 과제 폴더에서 `https://github.com` 연결, 홈 폴더 쓰기, `~/.zshrc` 읽기가 모두 `Operation not permitted`인 것을 봤다. 엔진의 `git rev-parse`·`git status`는 sandbox 밖이지만 `SAFE_GIT`을 쓴다. BGLike(Godot)의 `make godot-check`가 sandbox 안에서 홈 쓰기(`~/Library/Application Support/Godot`)와 `~/.gitconfig` 읽기로 실패해서, 검사 단계는 `HOME=<과제>/tmp/home`과 `GIT_CONFIG_GLOBAL=/dev/null`을 기본으로 준다. 작업자의 `engine.py test`(Claude Code sandbox)에는 처음에 적용하지 않았다가, 2026-11-13 BGLike 과제에서 실패를 보고 같은 값을 주었다(§6 BGLike 항목).
 - 2026-11-12, 스킬 실측(Claude Code 2.1.322): 엔진의 `claude_argv`로 리뷰 단계 인자를 그대로 만들어 `hc`로 작업자를 띄웠다. 과제 폴더 `jobs/skill-probe-*`에 빈 제품 저장소를 두고, 작업자에게 스킬 목록을 파일로 옮겨 적고 이름마다 `Skill` 도구를 한 번씩 부르게 했다. 세 번 돌렸다.
   - 지금 설정 그대로: 개인 스킬(`~/.claude/skills`, Matt 포함)과 사용자 설정이 켠 플러그인(pstack)은 목록에 없고 부르면 `Unknown skill`이다. 과제 폴더의 `.claude/skills`와 office 체크아웃의 `.claude/skills`에 둔 스킬은 보이고 불렸다. Claude Code 내장 스킬(`code-review`, `simplify`, `security-review` 등)도 보인다.
@@ -160,6 +160,7 @@
   - 고친 뒤(엔진이 제품 저장소의 `--git-common-dir`를 sandbox `allowRead`에 넣음): 위 git 명령이 모두 종료 코드 0, `engine.py skills` 종료 코드 0, `git -C <과제>/repo commit -m ... --allow-empty`도 성공했다. BGLike의 `commit-msg` 훅(`core.hooksPath=.githooks`)이 작업자 sandbox 안에서 돌아 형식이 틀린 메시지를 막았다.
   - 측정하지 않은 것: 구현·검사·초안 PR·리뷰를 BGLike 과제로 끝까지 돌리는 것, 작업자의 `engine.py test`로 Godot를 돌리는 것.
 - 2026-11-13, BGLike #503 과제(`overload-preview`, Claude Code 2.1.322): 설계 단계가 끝나고 사람이 승인했다. 구현 단계의 작업자가 `engine.py test`를 두 번 돌렸고 모두 exit 2였다. Godot가 `~/Library/Caches/Godot`, `~/Library/Application Support/Godot`, `user://`(홈 아래)에 쓰지 못해 `combat_save_test`가 실패했다. 작업자는 INTENT 지시대로 고치지 않고 `BLOCKED.md`를 썼다. 그래서 `run_test`가 sandbox 여부와 관계없이 `HOME=<과제>/tmp/home`, `TMPDIR=<과제>/tmp`, `GIT_CONFIG_GLOBAL=/dev/null`을 준다. 고친 엔진으로 같은 과제의 구현 단계를 다시 돌리는 것은 이 변경이 병합된 뒤에 한다.
+- 2026-11-13, 리뷰 push 실측(Claude Code 2.1.323): BGLike `env-water`의 리뷰 작업자가 `git -C <job>/repo push origin HEAD`로 push하다 `~/.config/gh/config.yml: operation not permitted`, `could not read Username`으로 실패했다. 이 명령은 `excludedCommands`에 그대로 있었다. `jobs/` 아래 빈 폴더에서 엔진과 같은 설정으로 대화형 작업자를 띄워, 비공개 저장소에 `ls-remote`를 보냈다. `excludedCommands`에 넣은 `git -C <절대 경로>/r ls-remote ...`와 `git -C r ls-remote ...`, 넣지 않은 대조군이 모두 같은 오류로 실패했다. `excludedCommands`에 넣은 `gh auth status`는 성공했다. 그래서 git은 경로 형태와 관계없이 sandbox 안에서 돈다. 작업자의 push를 없애고 엔진이 `post` 단계에서 push한다(#19). git만 sandbox에 남는 이유는 확인하지 않았다. Claude Code의 `!` 셸 모드는 sandbox를 거치지 않으므로(홈 폴더 `touch`가 성공했다) 이 시험에 쓰지 않는다.
 
 ## 7. 다시 재현하는 법
 
