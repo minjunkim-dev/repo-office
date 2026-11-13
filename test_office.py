@@ -1134,7 +1134,8 @@ class PipelineTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("sandbox-exec"), "macOS sandbox-exec")
     def test_check_stage_runs_ps_but_no_other_setuid_program(self):
         # macOS never starts a setuid program in a sandbox; smallnext and MobileEnvironment tests call ps.
-        script = "(ps -p $$ -o pid= >/dev/null && echo ps ok); (/usr/bin/sudo -n true 2>/dev/null && echo sudo ok || echo sudo denied)"
+        # sudo -V needs no password, so outside the sandbox it exits 0; `sudo -n true` failed there too and proved nothing.
+        script = "(ps -p $$ -o pid= >/dev/null && echo ps ok); (/usr/bin/sudo -V >/dev/null 2>&1 && echo sudo ok || echo sudo denied)"
         result = self.engine.run_test(self.job, {"test": script}, sandboxed=True, capture_output=True, text=True)
         self.assertEqual(result.stdout.split("\n")[:-1], ["ps ok", "sudo denied"], result.stderr)
 
