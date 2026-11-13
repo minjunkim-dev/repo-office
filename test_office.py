@@ -719,6 +719,18 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.post(), self.engine.DONE)
         self.assertEqual((tip(), marker.exists(), len(edits())), (head, False, 1))
 
+    def test_the_engine_pushes_only_the_branch_whatever_the_owners_push_settings(self):
+        # Task code can tag its commits; the owner's global push.followTags would send those tags along.
+        tip, _ = self.at_post()
+        head = self.review_commit("fix.py")
+        repo = self.job / "repo"
+        subprocess.run(["git", "-C", str(repo), "tag", "-a", "-m", "t", "v9", head], check=True)
+        config = Path(self.tmp.name) / "global.gitconfig"
+        config.write_text("[push]\n\tfollowTags = true\n", encoding="utf-8")
+        with unittest.mock.patch.dict(self.engine.SAFE_GIT, {"GIT_CONFIG_GLOBAL": str(config)}):
+            self.assertEqual(self.post(), self.engine.DONE)
+        self.assertEqual((tip(), tip("refs/tags/v9")), (head, ""))
+
     def test_review_commits_are_not_pushed_without_the_task_branch_or_over_other_history(self):
         tip, edits = self.at_post()
         bare = Path(self.tmp.name) / "origin.git"
