@@ -4,6 +4,7 @@
   engine.py new <task> --repo PATH --test CMD [--allow RULE ...] [--base main]
   engine.py run <task>        advance until a person is needed, the task is blocked, or it is done
   engine.py approve <task>    a person approves the current design file (bound to its sha256)
+  engine.py allow <task> RULE a person adds a Bash rule to the task's implement and review stages
   engine.py workers           show every task's stage from files only
   engine.py test <task>       run the task's test command in its repo/ (workers cannot cd there)
   engine.py preflight <task>  run repo-baseline's review preflight for pr.txt in its repo/, diff into pr.diff
@@ -635,12 +636,55 @@ def approve(name):
     return 0
 
 
+def bad_rule(rule, job, task):
+    """Why a task's extra tool rule is refused: it must be one Bash rule the sandbox does not run outside itself."""
+    # Claude Code splits an --allowedTools value at spaces and commas outside parentheses: "Bash(x) Read(**)" is two rules.
+    command = re.fullmatch(r"Bash\(([^()]+)\)", rule)
+    if not command:
+        return f"{rule}: only one Bash(...) rule, without parentheses inside"
+    body = command[1]
+    if body != " ".join(body.split()):
+        return f"{rule}: single spaces only"
+    body = body[:-2] + "*" if body.endswith(":*") else body  # the legacy prefix form, Bash(gh:*)
+    # A * elsewhere matches across words (Bash(gh p* view 7)); only a trailing * keeps the overlap check exact.
+    if "*" in body[:-1]:
+        return f"{rule}: * only at the end"
+    prefix = body.rstrip("*")
+    # An excluded command runs outside the sandbox with the owner's gh and git login, whichever rule allowed it.
+    for excluded in load(STAGES, None).get("sandbox", {}).get("excludedCommands", []):
+        excluded = fill(excluded, job, task)
+        literal = excluded.rstrip("*")
+        if (prefix == literal or (body.endswith("*") and literal.startswith(prefix))
+                or (excluded.endswith("*") and prefix.startswith(literal))):
+            return f"{rule}: matches {excluded}, which runs outside the sandbox"
+    return None
+
+
+def allow(name, rule):
+    job = JOBS / name
+    error = missing(job, name, "task.json")
+    task = None if error else load(job / "task.json", None)
+    error = error or bad_rule(rule, job, task)
+    if error:
+        print(error, file=sys.stderr)
+        return 2
+    if rule not in task["allow"]:
+        task["allow"].append(rule)
+        save(job / "task.json", task)
+    print(f"{name} allows {task['allow']}; the next worker gets them")
+    return 0
+
+
 def new(name, repo, test, allow, base):
     # The name becomes a folder, a branch and an hc terminal name (a-z 0-9 - _ only).
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,23}", name):
         print("task name: a-z 0-9 - _, at most 24 characters", file=sys.stderr)
         return 2
     job = JOBS / name
+    errors = [e for e in (bad_rule(r, job, {"name": name, "test": test}) for r in allow) if e]
+    if errors:
+        print("\n".join(errors), file=sys.stderr)
+        return 2
     job.mkdir(parents=True)
     save(job / "task.json", {"name": name, "repo": str(Path(repo).resolve()), "test": test, "allow": allow, "base": base})
     (job / "INTENT.md").write_text(
@@ -673,6 +717,9 @@ def main(argv=None):
     created.add_argument("--base", default="main")
     for command in ("run", "approve", "test", "preflight"):
         sub.add_parser(command).add_argument("task")
+    added = sub.add_parser("allow")
+    added.add_argument("task")
+    added.add_argument("rule", help="e.g. 'Bash(git -C repo grep *)'; runs from the task folder")
     checked = sub.add_parser("skills")
     checked.add_argument("task")
     checked.add_argument("base")
@@ -685,6 +732,8 @@ def main(argv=None):
         return new(args.task, args.repo, args.test, args.allow, args.base)
     if args.command == "workers":
         return workers()
+    if args.command == "allow":
+        return allow(args.task, args.rule)
     if args.command == "skills":
         return skills(args.task, args.base)
     return {"run": run, "approve": approve, "test": test, "preflight": preflight}[args.command](args.task)
