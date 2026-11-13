@@ -707,13 +707,25 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.post(), self.engine.DONE)
         self.assertEqual((tip(), tip("refs/heads/main")), (head, before_main))
 
+    def test_the_review_push_runs_no_hook_from_the_worktree(self):
+        # A product repo may set core.hooksPath to a folder in the worktree, which the worker and task code can write.
+        tip, edits = self.at_post()
+        repo, marker = self.job / "repo", Path(self.tmp.name) / "hook-ran"
+        subprocess.run(["git", "-C", str(repo), "config", "core.hooksPath", ".githooks"], check=True)
+        (repo / ".githooks").mkdir()
+        (repo / ".githooks" / "pre-push").write_text(f"#!/bin/sh\ntouch '{marker}'\nexit 1\n", encoding="utf-8")
+        (repo / ".githooks" / "pre-push").chmod(0o755)
+        head = self.review_commit(".githooks/pre-push")
+        self.assertEqual(self.post(), self.engine.DONE)
+        self.assertEqual((tip(), marker.exists(), len(edits())), (head, False, 1))
+
     def test_review_commits_are_not_pushed_without_the_task_branch_or_over_other_history(self):
         tip, edits = self.at_post()
         bare = Path(self.tmp.name) / "origin.git"
         self.review_commit("fix.py")
         subprocess.run(["git", "-C", str(bare), "update-ref", "-d", "refs/heads/office/search"], check=True)
         self.assertEqual(self.post(), self.engine.BLOCKED)  # a person opened the PR from another branch
-        self.assertIn("office/search", (self.job / "BLOCKED.md").read_text())
+        self.assertIn("origin has no refs/heads/office/search", (self.job / "BLOCKED.md").read_text())
         # Someone else pushed to the branch: no force push.
         other = Path(self.tmp.name) / "other"
         subprocess.run(["git", "clone", "-q", str(bare), str(other)], check=True, capture_output=True)
