@@ -19,7 +19,6 @@
   "failIfUnavailable": true,
   "excludedCommands": [
    "python3 {office}/pipeline/engine.py preflight {name}",
-   "git -C {job}/repo push origin HEAD",
    "gh pr view*",
    "gh pr checks*",
    "gh api --paginate repos/*"
@@ -204,7 +203,6 @@
     "Bash(git -C repo fetch origin)",
     "Bash(git -C {job}/repo add*)",
     "Bash(git -C {job}/repo commit -m *)",
-    "Bash(git -C {job}/repo push origin HEAD)",
     "Bash(gh pr view*)",
     "Bash(gh pr checks*)",
     "Bash(gh api --paginate repos/*)",
