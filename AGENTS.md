@@ -28,16 +28,101 @@ PR을 열기 전의 작업을 단계로 나눠 돌리는 실험 파이프라인�
 
 ## office 규칙
 
-- 상주 세션은 leader 하나다. 작업자는 단계마다 띄우고, 결과 파일을 쓰면 엔진이 닫는다. 한 과제는 세션 키마다 세션 ID 하나를 쓴다. 설계와 구현은 같은 세션을 `--resume`으로 이어 설계 맥락을 잇는다(모델이 바뀌면 프롬프트 캐시는 이어지지 않는다). 리뷰는 다른 세션이다(POLICY §3).
-- 작업자는 `--permission-mode dontAsk`에서 일반 개발 도구(단계표 `allow`: Bash, Read, Edit, Write 등)를 쓴다. 거부 규칙(단계표 `deny`)은 push, `gh pr merge`, `gh pr edit`, `gh api` 쓰기만 막는다. Claude Code 문서는 거부 규칙이 모든 권한 모드에서 막는다고 적는다(permission-modes, 2026-11-14 확인). `dontAsk`는 그 밖에 허락을 물을 일을 거부하므로 hc 작업자가 멈추지 않는다. sandbox는 없다. 작업자와 테스트는 사용자 권한으로 돈다. 그래서 엔진의 제어 파일(`task.json`·`state.json`·`pr.txt`)과 이 체크아웃은 지시로만 지킨다. 설계 승인 sha256도 작업자가 `state.json`을 고치지 않는다는 데 기대다. 사용자 전역 설정의 규칙은 읽지 않는다(`--setting-sources project`). 실측: `OFFICE_LIVE_CLAUDE=1`로 도는 `test_a_real_worker_may_develop_but_never_push`.
-- 검사 단계(`check`)는 엔진이 과제의 test 명령을 `repo/`에서 그대로 돌리고, 테스트 전에 커밋하지 않은 변경이 없는지 본다. 작업자의 `engine.py test <과제>`도 같은 명령을 돌리고 전체 출력을 `<과제>/test.log`에 쓴다.
-- 사람이 repo-baseline 클론의 절대 경로를 `baseline.path`(이 체크아웃 루트, git이 무시한다)에 한 줄로 적는다. 파일이 없으면 `workers` 말고 엔진 명령이 멈춘다. 상대 경로나 빈 파일이면 엔진이 시작하지 않는다(상대 경로는 작업 폴더를 따른다). 엔진은 단계 지시서의 `{baseline}`, 리뷰 전 확인 스크립트, 작업자의 `--add-dir`에 이 경로를 쓴다. 리뷰할 PR이 다른 저장소의 것임을 증명하지 못하면, 엔진은 repo-baseline 클론과 office 체크아웃이 각각 `origin/main`과 같은지 확인하고 다르면 멈춘다.
-- 설계 승인은 사람이 한다. 승인은 `design.md`의 sha256에 묶인다. 승인 뒤 한 글자라도 바뀌면 다시 승인받는다.
+### 세션
+
+- 상주 세션은 leader 하나다.
+- 작업자는 단계마다 띄운다. 작업자가 결과 파일을 쓰면 엔진이 닫는다.
+- 한 과제는 세션 키마다 세션 ID 하나를 쓴다.
+- 설계와 구현은 같은 세션을 `--resume`으로 이어 설계 맥락을 잇는다. 모델이 바뀌면 프롬프트 캐시는 이어지지 않는다.
+- 리뷰는 다른 세션이다(POLICY §3).
 - 사람이 손대는 곳은 둘뿐이다. 설계 승인(`engine.py approve`, sha256)과 PR 병합(POLICY §5)이다. 나머지는 엔진과 leader가 돈다.
-- 같은 단계가 두 번 연속 실패하거나 작업자가 `BLOCKED.md`를 쓰면 멈춘다. 다시 하면 풀릴 수 있는 오류(git push·`gh`·`hc` 실패, `TRANSIENT`)는 엔진이 단계마다 한 번 다시 해 본다. 작업자가 hc 오류 상태로 끝나거나(사용량 한도 등, 그 메시지를 적는다) 한 턴이 `OFFICE_WORKER_TIMEOUT`(기본 4시간)을 넘으면 엔진은 작업자를 닫고 `BLOCKED.md`를 쓴다. 이 막힘은 실패 횟수에 세지 않고 haiku를 sonnet으로 올리지도 않는다. 사람의 판단이 필요한 막힘은 leader가 사람에게 묻고, 답을 그 과제 `INTENT.md` 결정 기록에 적고 `run`을 다시 돌린다. 엔진은 `BLOCKED.md`보다 새로운 `INTENT.md`를 답으로 보고 `BLOCKED.md`를 `BLOCKED.<시각>.md`로 옮긴다. 다시 띄운 작업자에게는 엔진이 첫 메시지로 `INTENT.md`와 지시서를 다시 읽으라고 한다. setup 막힘에 답하면 엔진이 setup부터 다시 돈다. 엔진은 리뷰 단계를 한 번만 돌리고 끝낸다. 남은 지적으로 2·3라운드를 할지는 소유자가 정한다(`prompts/review.md`의 최대 3라운드). 엔진은 그 라운드를 돌리지 않는다.
-- 검사 단계가 통과하면 엔진이 작업 브랜치 `office/<과제>`를 push하고 초안(draft) PR을 연다(단계표 `draft`). 본문은 구현 작업자가 쓴 `<과제>/pr-body.md`다. 엔진은 force push하지 않는다. 같은 이름의 브랜치가 원격에 다른 기록으로 있으면 `BLOCKED.md`를 쓴다. 브랜치가 `.github`을 바꾸면 push하지 않고 `BLOCKED.md`를 쓴다. push한 브랜치에서는 저장소의 workflow가 그 secrets로 돈다. 그래서 그 변경은 사람이 diff를 읽고 push한다. 엔진은 `pr-body.md`가 있고 60000바이트 이하일 때만 올린다. 엔진은 검사가 통과한 커밋만 push한다. 그 뒤에 커밋이 생기면 검사부터 다시 돈다. push와 `.github` 비교에는 검사 단계가 남긴 커밋 SHA를 그대로 쓰고 HEAD를 다시 읽지 않는다. 엔진은 PR을 연 뒤 늘 Ready로 바꾼다. 쉬움이 아닌 PR이면 리뷰 봇에 한 번 리뷰를 요청한다(단계표 `ready`, CodeRabbit은 `@coderabbitai review` 댓글). 쉬운 PR은 요청하지 않는다(POLICY §3, 봇 사용량). POLICY는 봇이 건너뛰었을 때만 요청하라고 하지만, Ready 직후에는 봇이 아직 돌지 않았을 수 있어 쉬움이 아니면 늘 요청한다. 쉬움 판정(단계표 `easy`)은 리뷰 모델, 봇 요청, 보고를 정한다. 사람이 승인한 `design.md`와 PR 본문이 둘 다 `되돌리기: 쉬움`이라고 쓰고 본문이 `민감한 파일: 없음`이어야 쉬움이다(옛 `Door: 되돌리기 쉬움`·`신뢰 경계: 없음`도 받는다). 엔진은 승인 때의 sha256과 같은 `design.md`만 믿는다. `되돌리기`·`민감한 파일` 뒤에 콜론이 있는 줄(예: `되돌리기 판정:`)과 옛 말 `Door`·`신뢰 경계`가 들어간 줄은 모두 정확히 그 문구여야 하고(제목 줄 제외), 브랜치가 하네스·지시 파일(`.github`, `.claude`, `.agents`, `.codex`, `.cursor`, `.mcp.json`, `AGENTS.md`, `CLAUDE.md`, `CLAUDE.local.md`, `REVIEW.md`, `.envrc`)을 바꾸거나 이름을 바꿔 옮기면 본문과 관계없이 쉬움이 아니다. 줄이 없거나 다르면 쉬움이 아니다. 쉬움이 아니면 `REPORT.md`에 사람이 diff를 읽고 병합한다고 적는다. 엔진이 PR을 열지 못하면 사람이 열고 그 URL을 `pr.txt`에 적어도 된다. 병합은 사람이 한다. 엔진과 작업자는 병합·배포·`main` push를 하지 않는다. 작업자는 push하지 않는다. 리뷰 작업자가 고친 커밋은 리뷰가 끝난 뒤 엔진이 `post` 단계에서 본문을 올리기 전에 `office/<과제>`로 push한다. 엔진이 브랜치 이름을 정한다(worktree의 HEAD와 로컬 ref는 바뀌었을 수 있다). 원격에 그 브랜치가 없으면, 리뷰 커밋이 `.github`을 바꾸면, 또는 원격 기록과 갈라졌으면 push하지 않고 본문도 올리지 않고 `BLOCKED.md`를 쓴다. force push하지 않는다. 리뷰 작업자가 고친 커밋은 검사 단계를 다시 거치지 않는다. 리뷰 작업자의 `engine.py test`와 CI가 돌린다. 리뷰가 끝나면 엔진이 `<과제>/REPORT.md`를 쓴다(PR 링크, 단계별 모델, 돌린 명령과 결과, 리뷰가 고친 지적 수와 남은 지적, 리뷰 보고, 리뷰 보고의 「리뷰한 head」와 PR URL·그 SHA의 병합 명령(40자 SHA가 없으면 병합 명령을 쓰지 않는다), 되돌리기와 민감한 파일, 확인하지 않은 것). production 자격 증명은 세션 환경에 두지 않는다.
-- 단계마다 엔진이 `--model`을 준다. 작업자는 `--setting-sources project`로 hc에서 돌아 사용자의 모델 설정을 받지 않기 때문이다. 설계는 opus다. 설계가 정한 난이도와 되돌리기 판정이 구현 모델과 리뷰 경로를 정하기 때문이다. 구현은 승인된 `design.md`의 `난이도: 쉬움`이면 haiku, 줄이 없거나 다른 값이면 sonnet이다. haiku 구현이 실패하면(결과 파일 없음, `BLOCKED.md`, 검사 실패) 엔진이 새 세션의 sonnet으로 한 번 다시 돌린다. haiku의 `BLOCKED.md`는 `BLOCKED.haiku.md`로 남는다. 리뷰는 엔진이 검사한 그 커밋으로 쉬운 PR을 확인했으면(쉬움 판정) sonnet, 아니면 opus다. 리뷰가 되돌리기 어려움으로 보면(「리뷰한 head와 되돌리기」 줄, 줄이 없어도) 엔진은 `post` 단계에서 본문을 올린 뒤 리뷰 봇에 한 번 요청하고 `REPORT.md`에 사람이 diff를 읽고 병합한다고 적는다. haiku는 쓰지 않는다. 단계마다 쓴 모델과 다시 돌림은 `state.json`의 `models`에 남는다. leader는 `leader/.claude/settings.json`의 `"model": "opus"`로 opus다.
+
+### 작업자 권한
+
+- 작업자는 `--permission-mode dontAsk`에서 일반 개발 도구(단계표 `allow`: Bash, Read, Edit, Write 등)를 쓴다.
+- 거부 규칙(단계표 `deny`)은 push, `gh pr merge`, `gh pr edit`, `gh api` 쓰기만 막는다. Claude Code 문서는 거부 규칙이 모든 권한 모드에서 막는다고 적는다(permission-modes, 2026-11-14 확인).
+- `dontAsk`는 그 밖에 허락을 물을 일을 거부한다. 그래서 hc 작업자가 멈추지 않는다.
+- 작업자는 사용자 전역 설정의 규칙을 읽지 않는다(`--setting-sources project`).
+- sandbox는 없다. 작업자와 테스트는 사용자 권한으로 돈다.
+- 그래서 엔진의 제어 파일(`task.json`·`state.json`·`pr.txt`)과 이 체크아웃은 지시로만 지킨다. 설계 승인 sha256도 작업자가 `state.json`을 고치지 않는다는 데 기댄다.
+- 실측: `OFFICE_LIVE_CLAUDE=1`로 도는 `test_a_real_worker_may_develop_but_never_push`.
+- production 자격 증명은 세션 환경에 두지 않는다.
+
+### baseline.path
+
+- 사람이 repo-baseline 클론의 절대 경로를 `baseline.path`(이 체크아웃 루트, git이 무시한다)에 한 줄로 적는다.
+- 파일이 없으면 `workers` 말고 엔진 명령이 멈춘다.
+- 상대 경로나 빈 파일이면 엔진이 시작하지 않는다. 상대 경로는 작업 폴더를 따르기 때문이다.
+- 엔진은 이 경로를 단계 지시서의 `{baseline}`, 리뷰 전 확인 스크립트, 작업자의 `--add-dir`에 쓴다.
+- 리뷰할 PR이 다른 저장소의 것임을 증명하지 못하면, 엔진은 repo-baseline 클론과 office 체크아웃이 각각 `origin/main`과 같은지 확인하고 다르면 멈춘다.
+
+### 설계 승인
+
+- 설계 승인은 사람이 한다.
+- 승인은 `design.md`의 sha256에 묶인다. 승인 뒤 한 글자라도 바뀌면 다시 승인받는다.
+
+### 검사
+
 - 결정적 검사(테스트, 커밋하지 않은 변경)는 스크립트 단계가 한다. 모델은 판단이 필요한 단계에만 쓴다.
+- 검사 단계(`check`)는 엔진이 과제의 test 명령을 `repo/`에서 그대로 돌린다.
+- 검사 단계는 테스트 전에 커밋하지 않은 변경이 없는지 본다.
+- 작업자의 `engine.py test <과제>`도 같은 명령을 돌리고 전체 출력을 `<과제>/test.log`에 쓴다.
+
+### 모델 고르기
+
+- 단계마다 엔진이 `--model`을 준다. 작업자는 `--setting-sources project`로 hc에서 돌아 사용자의 모델 설정을 받지 않기 때문이다.
+- 설계는 opus다. 설계가 정한 난이도와 되돌리기 판정이 구현 모델과 리뷰 경로를 정하기 때문이다.
+- 구현은 승인된 `design.md`가 `난이도: 쉬움`이면 haiku다. 줄이 없거나 다른 값이면 sonnet이다.
+- haiku 구현이 실패하면(결과 파일 없음, `BLOCKED.md`, 검사 실패) 엔진이 새 세션의 sonnet으로 한 번 다시 돌린다. haiku의 `BLOCKED.md`는 `BLOCKED.haiku.md`로 남는다.
+- 리뷰는 엔진이 검사한 그 커밋으로 쉬운 PR을 확인했으면(쉬움 판정) sonnet, 아니면 opus다. 리뷰에는 haiku를 쓰지 않는다.
+- 단계마다 쓴 모델과 다시 돌림은 `state.json`의 `models`에 남는다.
+- leader는 `leader/.claude/settings.json`의 `"model": "opus"`로 opus다.
+
+### 막힘과 다시 하기
+
+- 같은 단계가 두 번 연속 실패하면 멈춘다. 작업자가 `BLOCKED.md`를 써도 멈춘다.
+- 다시 하면 풀릴 수 있는 오류(git push·`gh`·`hc` 실패, `TRANSIENT`)는 엔진이 단계마다 한 번 다시 해 본다.
+- 작업자가 hc 오류 상태로 끝나면(사용량 한도 등) 엔진은 작업자를 닫고 그 메시지를 `BLOCKED.md`에 쓴다.
+- 한 턴이 `OFFICE_WORKER_TIMEOUT`(기본 4시간)을 넘어도 엔진은 작업자를 닫고 `BLOCKED.md`를 쓴다.
+- 위 두 막힘은 실패 횟수에 세지 않는다. haiku를 sonnet으로 올리지도 않는다.
+- 사람의 판단이 필요한 막힘은 leader가 사람에게 묻는다. leader는 답을 그 과제 `INTENT.md` 결정 기록에 적고 `run`을 다시 돌린다.
+- 엔진은 `BLOCKED.md`보다 새로운 `INTENT.md`를 답으로 보고 `BLOCKED.md`를 `BLOCKED.<시각>.md`로 옮긴다.
+- 다시 띄운 작업자에게는 엔진이 첫 메시지로 `INTENT.md`와 지시서를 다시 읽으라고 한다.
+- setup 막힘에 답하면 엔진이 setup부터 다시 돈다.
+- 엔진은 리뷰 단계를 한 번만 돌리고 끝낸다. 남은 지적으로 2·3라운드를 할지는 소유자가 정한다(`prompts/review.md`의 최대 3라운드). 엔진은 그 라운드를 돌리지 않는다.
+
+### push와 PR
+
+- 검사 단계가 통과하면 엔진이 작업 브랜치 `office/<과제>`를 push하고 초안(draft) PR을 연다(단계표 `draft`).
+- PR 본문은 구현 작업자가 쓴 `<과제>/pr-body.md`다. 엔진은 이 파일이 있고 60000바이트 이하일 때만 올린다.
+- 엔진은 검사가 통과한 커밋만 push한다. 그 뒤에 커밋이 생기면 검사부터 다시 돈다.
+- push와 `.github` 비교에는 검사 단계가 남긴 커밋 SHA를 그대로 쓴다. HEAD를 다시 읽지 않는다.
+- 엔진은 force push하지 않는다. 같은 이름의 브랜치가 원격에 다른 기록으로 있으면 `BLOCKED.md`를 쓴다.
+- 브랜치가 `.github`을 바꾸면 엔진은 push하지 않고 `BLOCKED.md`를 쓴다. push한 브랜치에서는 저장소의 workflow가 그 secrets로 돌기 때문이다. 그 변경은 사람이 diff를 읽고 push한다.
+- 엔진이 PR을 열지 못하면 사람이 열고 그 URL을 `pr.txt`에 적어도 된다.
+- 엔진은 PR을 연 뒤 늘 Ready로 바꾼다.
+- 쉬움이 아닌 PR이면 엔진이 리뷰 봇에 한 번 리뷰를 요청한다(단계표 `ready`, CodeRabbit은 `@coderabbitai review` 댓글). 쉬운 PR은 요청하지 않는다(POLICY §3, 봇 사용량).
+- POLICY는 봇이 건너뛰었을 때만 요청하라고 한다. 하지만 Ready 직후에는 봇이 아직 돌지 않았을 수 있다. 그래서 쉬움이 아니면 늘 요청한다.
+- 병합은 사람이 한다. 엔진과 작업자는 병합·배포·`main` push를 하지 않는다. 작업자는 push하지 않는다.
+
+### 쉬움 판정
+
+쉬움 판정(단계표 `easy`)은 리뷰 모델, 봇 요청, 보고를 정한다. 판정 코드는 `pipeline/engine.py`의 `easy`와 `proven_easy`다.
+
+- 사람이 승인한 `design.md`와 PR 본문이 둘 다 `되돌리기: 쉬움`이라고 쓰고, 본문이 `민감한 파일: 없음`이라고 써야 쉬움이다. 옛 `Door: 되돌리기 쉬움`·`신뢰 경계: 없음`도 받는다.
+- 엔진은 승인 때의 sha256과 같은 `design.md`만 믿는다.
+- 줄이 없거나 다르면 쉬움이 아니다. `되돌리기`·`민감한 파일` 뒤에 콜론이 있는 줄(예: `되돌리기 판정:`)과 옛 말 `Door`·`신뢰 경계`가 들어간 줄은 모두 정확히 그 문구여야 한다(제목 줄 제외).
+- 브랜치가 에이전트 설정 폴더(`.claude/`·`.agents/`·`.codex/`·`.cursor/`)나 `.mcp.json`, 지시 파일(`.github`, `AGENTS.md`, `CLAUDE.md`, `CLAUDE.local.md`, `REVIEW.md`, `.envrc`)을 바꾸거나 이름을 바꿔 옮기면 본문과 관계없이 쉬움이 아니다(`TRUST_NAMES`).
+- 쉬움이 아니면 엔진이 `REPORT.md`에 사람이 diff를 읽고 병합한다고 적는다.
+
+### 리뷰 뒤 push와 REPORT
+
+- 리뷰 작업자가 고친 커밋은 리뷰가 끝난 뒤 엔진이 `post` 단계에서 본문을 올리기 전에 `office/<과제>`로 push한다.
+- 브랜치 이름은 엔진이 정한다. worktree의 HEAD와 로컬 ref는 바뀌었을 수 있기 때문이다.
+- 다음 중 하나면 엔진은 push하지 않고 본문도 올리지 않고 `BLOCKED.md`를 쓴다. 원격에 그 브랜치가 없다. 리뷰 커밋이 `.github`을 바꾼다. 원격 기록과 갈라졌다. 이때도 force push하지 않는다.
+- 리뷰 작업자가 고친 커밋은 검사 단계를 다시 거치지 않는다. 리뷰 작업자의 `engine.py test`와 CI가 돌린다.
+- 리뷰가 되돌리기 어려움으로 보면(「리뷰한 head와 되돌리기」 줄, 그 줄이 없어도) 엔진은 `post` 단계에서 본문을 올린 뒤 리뷰 봇에 한 번 요청하고 `REPORT.md`에 사람이 diff를 읽고 병합한다고 적는다.
+- 리뷰가 끝나면 엔진이 `<과제>/REPORT.md`를 쓴다. 담는 것: PR 링크, 단계별 모델, 돌린 명령과 결과, 리뷰가 고친 지적 수와 남은 지적, 리뷰 보고, 리뷰 보고의 「리뷰한 head」, PR URL과 그 SHA의 병합 명령(40자 SHA가 없으면 병합 명령을 쓰지 않는다), 되돌리기와 민감한 파일, 확인하지 않은 것.
 
 ## 작업 방식
 
