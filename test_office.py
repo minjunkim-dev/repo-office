@@ -1066,7 +1066,7 @@ class PipelineTests(unittest.TestCase):
 
     def test_a_relative_path_entry_is_no_toolchain(self):
         # A relative entry would name the folder `new` ran from; here that folder is inside a home of its own.
-        home = Path(tempfile.mkdtemp(dir="/private/tmp")).resolve()
+        home = Path(tempfile.mkdtemp()).resolve()
         self.addCleanup(shutil.rmtree, home, True)
         (home / "bin").mkdir()
         self.addCleanup(os.chdir, os.getcwd())
