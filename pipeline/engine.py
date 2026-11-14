@@ -268,17 +268,20 @@ TRUST_NAMES = {n.casefold() for n in ("CLAUDE.md", "CLAUDE.local.md", "AGENTS.md
 
 
 def easy(design, body):
-    """True only when every line of the approved design and of the PR body that names Door says exactly
-    Door: 되돌리기 쉬움 (a heading aside), there is one, and the body has exactly one line naming a trust boundary: 신뢰 경계: 없음.
-    Fails closed: list markers, emphasis or a second claim anywhere leave the PR a draft."""
-    def claims(raw, word, value):
+    """True only when every revert claim in the approved design and in the PR body says exactly 되돌리기: 쉬움
+    (or the old Door: 되돌리기 쉬움), there is one, and the body has exactly one sensitive-files line: 민감한 파일: 없음
+    (or the old 신뢰 경계: 없음). A claim is any line naming the old words, or a line with the new word and a colon
+    after it (되돌리기 판정: 어려움 and 참고: 되돌리기: 어려움 count): the new words are ordinary Korean that prose uses too. Fails closed:
+    list markers, emphasis or a second claim anywhere leave the PR not easy."""
+    def claims(raw, word, values):
         found = [l.strip() for l in unicodedata.normalize("NFKC", raw.decode("utf-8", "replace")).splitlines()
                  if re.search(word, l, re.I) and not re.match(r"\s*#+\s*\S+\s*$", l)]
-        return bool(found) and set(found) == {value}
-    door, trust = r"d\W*o\W*o\W*r", r"신뢰\W*경계"
-    return (claims(design, door, "Door: 되돌리기 쉬움") and claims(body, door, "Door: 되돌리기 쉬움")
-            and claims(body, trust, "신뢰 경계: 없음")
-            and sum(bool(re.search(trust, l)) for l in body.decode("utf-8", "replace").splitlines()) == 1)
+        return found if found and set(found) <= values else None
+    door = r"d\W*o\W*o\W*r|되\W*돌\W*리\W*기[^:]*:"
+    trust = r"신뢰\W*경계|민감한\W*파일[^:]*:"
+    easy_door = {"되돌리기: 쉬움", "Door: 되돌리기 쉬움"}
+    sensitive = claims(body, trust, {"민감한 파일: 없음", "신뢰 경계: 없음"})
+    return bool(claims(design, door, easy_door) and claims(body, door, easy_door) and sensitive and len(sensitive) == 1)
 
 
 def push_review(job, task):
@@ -355,10 +358,10 @@ def ask_bot(job, url, request, state):
 
 
 def review_says_easy(job):
-    """The review's 「리뷰한 head와 Door」 line says 되돌리기 쉬움; a missing or other line is hard (POLICY §3)."""
+    """The review's 「리뷰한 head와 되돌리기」 line (old: 「리뷰한 head와 Door」) says 쉬움; a missing or other line is hard (POLICY §3)."""
     review = (job / "review.md").read_text(encoding="utf-8", errors="replace") if (job / "review.md").exists() else ""
-    line = re.search(r"리뷰한 head와 Door:([^\n]*)", review)
-    return bool(line) and "되돌리기 쉬움" in line[1] and "어려움" not in line[1]
+    line = re.search(r"리뷰한 head와 (?:되돌리기|Door):([^\n]*)", review)
+    return bool(line) and "쉬움" in line[1] and "어려움" not in line[1]
 
 
 def write_report(job, task, state, flow):
@@ -371,7 +374,7 @@ def write_report(job, task, state, flow):
     head = head[1] if head else None
     counts = re.search(r"고친 것:[^\n]*?P0\s*(\d+)\D+P1\s*(\d+)\D+P2\s*(\d+)", review)
     left = re.search(r"남은 지적:[^\n]*", review)
-    door = [l.strip() for l in body.splitlines() if re.match(r"\s*(Door|신뢰 경계):", l)]
+    door = [l.strip() for l in body.splitlines() if re.match(r"\s*(되돌리기|민감한 파일|Door|신뢰 경계):", l)]
     easy_pr = proven_easy(state) and review_says_easy(job)
     models = "\n".join(f"- {m['stage']}: {m['model']}" + (" (haiku 실패 뒤 다시 돌림)" if m["rerun"] else "") for m in state.get("models", []))
     check = text("check.md").split("```")[0].strip()
@@ -383,7 +386,7 @@ def write_report(job, task, state, flow):
               + "- 리뷰가 고친 지적: " + (f"P0 {counts[1]}, P1 {counts[2]}, P2 {counts[3]}" if counts else "review.md에서 찾지 못함") + "\n"
               + f"- {left[0].strip() if left else '남은 지적: review.md에서 찾지 못함'}\n"
               + "".join(f"- {l}\n" for l in door)
-              + ("" if easy_pr else "- 되돌리기 어려움이거나 신뢰 경계를 건드린다(엔진이 쉬움을 확인하지 못했거나 리뷰가 어려움으로 봤다): 사람이 diff를 읽고 병합한다\n")
+              + ("" if easy_pr else "- 되돌리기 어려움이거나 민감한 파일을 건드린다(엔진이 쉬움을 확인하지 못했거나 리뷰가 어려움으로 봤다): 사람이 diff를 읽고 병합한다\n")
               + f"\n## 단계별 모델\n\n{models or '- 없음'}\n\n## 돌린 명령\n\n{setup or '- setup: 없음'}\n\n{check or '- check: 없음'}\n"
               + "\n## 확인하지 않은 것\n\n" + ("".join(f"- {l}\n" for l in unverified) or "- 리뷰 보고와 PR 본문에 적힌 것이 없다\n")
               + f"\n## 리뷰 보고\n\n{review.strip() or '없음'}\n")
@@ -507,7 +510,7 @@ def advance(job, name, runner):
                 if retry(error):
                     continue
                 return block(job, error)
-            # The review raised Door to hard: the bot the ready stage skipped reviews the head just pushed.
+            # The review raised the revert verdict to hard: the bot the ready stage skipped reviews the head just pushed.
             if not review_says_easy(job):
                 request = next((s.get("request") for s in flow if s.get("ready")), None)
                 url = (job / "pr.txt").read_text(encoding="utf-8").split()[0]

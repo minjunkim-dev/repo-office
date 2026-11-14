@@ -33,9 +33,9 @@
 - 이 PR이 만들지 않은 기존 문제(필요하면 "기존 문제"로 따로 표시한다).
 - 없음. 생성 파일과 vendor 경로가 없다(`jobs/`, `baseline.path`는 git이 무시한다).
 
-## 신뢰 경계
+## 민감한 파일
 
-Door가 되돌리기 어려움이거나 이 경로를 건드리면 보안 관점의 리뷰를 더한다: `.github/workflows/**`, 저장소·CI 설정, 의존성 manifest·lockfile, 하네스 설정(`.claude/`·`.agents/`·`.codex/`·`.cursor/` 같은 하네스 폴더와 그 안의 모든 파일, 하위 폴더에 있는 것 포함, `.mcp.json`), 작업자 권한·리뷰 고정(`pipeline/engine.py`, `pipeline/stages.json`, `pipeline/prompts/**`, `leader/**`).
+되돌리기 어려움이거나 이 경로를 건드리면 보안 관점의 리뷰를 더한다: `.github/workflows/**`, 저장소·CI 설정, 의존성 manifest·lockfile, 하네스 설정(`.claude/`·`.agents/`·`.codex/`·`.cursor/` 같은 하네스 폴더와 그 안의 모든 파일, 하위 폴더에 있는 것 포함, `.mcp.json`), 작업자 권한·리뷰 고정(`pipeline/engine.py`, `pipeline/stages.json`, `pipeline/prompts/**`, `leader/**`).
 
 ## 보고와 수정
 

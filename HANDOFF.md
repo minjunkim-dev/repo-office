@@ -21,7 +21,7 @@
 
 | 구성 요소 | 어디 | 맡는 층 | 지금 상태 |
 | --- | --- | --- | --- |
-| repo-baseline(원본) | `minjunkim-dev/repo-baseline`, 로컬 클론 경로는 `baseline.path` | PR이 `main`에 들어가는 조건: 완료 증거, 다른 컨텍스트 리뷰, Door, 사람 병합, GitHub 설정, 회고 | 코어 4파일 + 선택 프로필. 2026-11-12 `main` = `f6566c4` |
+| repo-baseline(원본) | `minjunkim-dev/repo-baseline`, 로컬 클론 경로는 `baseline.path` | PR이 `main`에 들어가는 조건: 완료 증거, 다른 컨텍스트 리뷰, 되돌리기 판정, 사람 병합, GitHub 설정, 회고 | 코어 4파일 + 선택 프로필. 2026-11-12 `main` = `f6566c4` |
 | repo-office(이 저장소) | `minjunkim-dev/repo-office`(공개). 2026-11-11에 repo-baseline-office의 `claude-office/`에서 git 기록째 옮겼다 | PR 전 작업을 단계로 돌리고, 초안 PR을 열고, 리뷰를 한 번 돌린다 | 엔진·스킬 연결·초안 PR까지 실측함 |
 | Matt Pocock 스킬 | 플러그인 `mattpocock-skills@mattpocock`(캐시 1.3.2). 사용자 설정에서는 꺼져 있고, office `.claude/settings.json`의 `enabledPlugins`가 작업자에게만 켠다 | 리뷰 두 축, TDD, 버그 진단, 설계([matt-skills 프로필](https://github.com/minjunkim-dev/repo-baseline/blob/main/profiles/matt-skills/README.md)) | 작업자에 실린다(§6) |
 | pstack | 플러그인 `pstack@cursor-plugins` 0.15.36. 사용자 설정에서 켜져 있고 office 설정에는 없다 | 설계 질문(`interrogate`), 영향 범위(`blast-radius`) | 사람이 부를 때만([pstack 프로필](https://github.com/minjunkim-dev/repo-baseline/blob/main/profiles/pstack/README.md)). leader가 권한다 |
@@ -44,7 +44,7 @@
 | --- | --- | --- |
 | 접수 | `grill-with-docs`, `ask-matt` | leader가 등록 전에 사람에게 권한다 |
 | design | `codebase-design`(인터페이스를 정해야 할 때) | 작업자 |
-| approve | `blast-radius`, Door가 어려움이면 `interrogate` | leader가 사람에게 권한다 |
+| approve | `blast-radius`, 되돌리기 어려움이면 `interrogate` | leader가 사람에게 권한다 |
 | implement | `tdd`, 버그면 먼저 `diagnosing-bugs` | 작업자 |
 | review | `code-review`(제품 `REVIEW.md`에 「스킬 위임」 절이 있을 때) | 리뷰 작업자 |
 | 병합 뒤 | `retro` | leader가 사람에게 권한다 |
@@ -64,8 +64,8 @@
 - 2026-11-12: 플러그인 판은 고정하지 않고 기록만 한다. 리뷰 보고 「확인한 것」의 `check_skills.py` 경로·sha256이 그 기록이다.
 - 2026-11-12: 검사가 통과하면 엔진이 초안 PR을 연다. 사람이 Ready로 바꾸기 전에는 리뷰가 돌지 않는다. 2026-11-14에 바꿨다: 엔진이 늘 Ready로 바꾼다.
 - 2026-11-14: office는 계속 쓴다. 계속 쓸지 판단하는 기준은 두지 않는다.
-- 2026-11-14: 엔진은 쉬움이 아닌 PR에만 리뷰 봇을 한 번 요청한다(POLICY §3, repo-baseline #130). 원본은 봇이 건너뛰었을 때만 요청하지만, Ready 직후에는 봇이 아직 돌지 않았을 수 있어 건너뜀을 기다리지 않는다. 리뷰가 Door를 어려움으로 올리면 엔진이 `post` 단계에서 한 번 요청한다.
-- 2026-11-14: 설계 단계는 opus로 돈다. 설계가 정한 난이도와 Door가 구현 모델과 리뷰 경로를 정한다.
+- 2026-11-14: 엔진은 쉬움이 아닌 PR에만 리뷰 봇을 한 번 요청한다(POLICY §3, repo-baseline #130). 원본은 봇이 건너뛰었을 때만 요청하지만, Ready 직후에는 봇이 아직 돌지 않았을 수 있어 건너뜀을 기다리지 않는다. 리뷰가 되돌리기 어려움으로 올리면 엔진이 `post` 단계에서 한 번 요청한다.
+- 2026-11-14: 설계 단계는 opus로 돈다. 설계가 정한 난이도와 되돌리기 판정이 구현 모델과 리뷰 경로를 정한다.
 
 남은 결정:
 
@@ -78,7 +78,7 @@
 - 1편(2026-10-24): 역할마다 폴더와 세션을 둔다. `INTENT.md`를 쓰고 설계를 승인받은 뒤 구현한다. 다섯 관문을 거치고 MEMORY→HANDBOOK으로 규칙을 올린다. 위험한 작업은 도구 권한으로 막는다.
 - 2편(2026-11-05): 상주 세션은 대장 하나만 둔다. 작업자는 단계표(`stages.json`)대로 그때그때 띄운다. 과제마다 세션 ID 하나로 앞 단계를 이어 써서 캐시를 쓴다. 단계마다 허용 명령을 따로 주고, 승인은 설계 파일 내용에 묶는다. 반복 실패하면 멈추고, `workers` 명령으로 현황을 본다.
 
-원본 repo-baseline은 PR이 `main`에 들어가는 조건을 정한다(완료 증거, 다른 컨텍스트 리뷰, Door, 병합). 영상은 PR 전의 작업 조율을 다룬다. 층이 달라 서로 보완한다. 부딪히는 곳은 모두 원본 쪽으로 정했다.
+원본 repo-baseline은 PR이 `main`에 들어가는 조건을 정한다(완료 증거, 다른 컨텍스트 리뷰, 되돌리기 판정, 병합). 영상은 PR 전의 작업 조율을 다룬다. 층이 달라 서로 보완한다. 부딪히는 곳은 모두 원본 쪽으로 정했다.
 
 | 영상 | 원본과의 관계 | 정한 것 |
 | --- | --- | --- |
@@ -122,7 +122,7 @@
   - 첫 실행은 작업자 CLI 계정의 5시간 한도에 걸려 첫 응답 전에 끝났고, 엔진은 「review.md 없음」 두 번으로 `BLOCKED.md`를 썼다. 한도 오류와 작업 실패를 구별하지 못한다. 2026-11-14부터 엔진은 턴이 끝난 뒤 `hc get`의 상태가 `error`면(실제 메시지: `You've hit your 5-hour limit · resets 12:10am (Asia/Seoul)`) 그 메시지로 `BLOCKED.md`를 쓰고, 실패로 세지 않는다.
 - 2026-11-12, leader 수동 스킬 요청 실측(Claude Code 2.1.322, Opus 5.5 medium): `hc`로 `leader/`에 대화형 Claude Code를 띄우고, 장난감 저장소에 막연한 요청("계산 기능을 좀 더, 뭘 넣을지는 모르겠다")을 줬다.
   - 처음 규칙("요청이 막연하면 `grill-with-docs`를 권한다")으로는 leader가 방향 세 가지를 묻고, 과제를 등록하고, 엔진을 돌린 뒤에야 "다음에는 `grill-with-docs`로" 권했다. 그래서 규칙에 "방향을 묻기 전에, 등록하기 전에 권한다"를 더했다. 고친 뒤 새 leader 세션은 방향 질문 안에 `grill-with-docs` 권유를 함께 넣었다.
-  - 설계 승인 대기(종료 코드 3): 작업자 설계의 Door가 되돌리기 쉬움이라 leader가 "`interrogate`·`blast-radius`는 권하지 않는다"고 밝히고 승인을 요청했다. Door가 어려움인 설계와 병합 뒤 `retro` 권유는 돌려 보지 않았다.
+  - 설계 승인 대기(종료 코드 3): 작업자 설계가 되돌리기 쉬움이라 leader가 "`interrogate`·`blast-radius`는 권하지 않는다"고 밝히고 승인을 요청했다. 되돌리기 어려움인 설계와 병합 뒤 `retro` 권유는 돌려 보지 않았다.
 - 2026-11-12, 설계·구현 스킬 실측(Claude Code 2.1.322): 로컬 장난감 과제 `toy-tdd`(calc.py에 `multiply`)를 설계 → 승인 → 구현 → 검사까지 엔진으로 돌렸다.
   - 설계 작업자는 지시대로 `design.md`에 「테스트할 seam」 목록(공개 인터페이스 하나, 경우 다섯)을 적었다. `codebase-design`은 부르지 않았다(인터페이스가 정해진 과제라 지시서상 부를 때가 아니다).
   - 구현 작업자는 `mattpocock-skills:tdd`를 불렀고, 테스트를 먼저 쓰고 `engine.py test`로 실패를 본 뒤 구현해 통과시켰다(빨강 → 초록). seam을 사용자에게 묻지 않고 승인된 목록을 따랐다. 커밋 하나, 테스트 5개 통과.
@@ -137,7 +137,7 @@
 
 - 2026-11-12, leader부터 리뷰까지 한 번에(Claude Code 2.1.322, 작업자·leader 모두 sonnet): `minjunkim-dev/office-toy`에 `toy-rename`(`mean`을 `arithmetic_mean`으로, 옛 이름 없앰)을 leader 세션에 사람 역할로 주고 끝까지 돌렸다(PR #4, 종료 코드 0).
   - 접수: leader는 등록 전에 이름 후보 세 가지를 물었다. 요청이 막연하지 않다며 `grill-with-docs`는 권하지 않았다. 고른 뒤 `--base origin/main`으로 등록하고 `INTENT.md`의 「하지 않을 것」에 옛 이름을 남기지 않는다고 적었다.
-  - 승인 대기: leader가 `blast-radius`를 실행 폴더·금지 폴더와 함께 권했다. 설계 작업자는 Door를 쉬움으로 봤다(외부 호출자 없음). 그래서 `interrogate` 권유와 어려운 PR의 봇 리뷰 요청(§4 남은 결정)은 이번에 돌지 않았다.
+  - 승인 대기: leader가 `blast-radius`를 실행 폴더·금지 폴더와 함께 권했다. 설계 작업자는 되돌리기 쉬움으로 봤다(외부 호출자 없음). 그래서 `interrogate` 권유와 어려운 PR의 봇 리뷰 요청(§4 남은 결정)은 이번에 돌지 않았다.
   - 구현 작업자는 `mattpocock-skills:tdd`로 빨강(`ImportError`) → 초록. 검사 통과, 엔진이 초안 PR을 열고 Ready를 기다렸다. 사람이 Ready로 바꾼 뒤 리뷰 작업자가 `engine.py skills` 종료 코드 0을 받고 `mattpocock-skills:code-review`를 불렀다. diff가 작아 축별 하위 에이전트는 띄우지 않고 두 축을 직접 봤다. CodeRabbit 건너뜀은 「없음(건너뜀)」으로 판정했다(repo-baseline #129 규칙대로).
 - 2026-11-14, 모델 배치: 작업자는 `--setting-sources project`로 hc에서 돌아 사용자의 모델 설정을 받지 않는다. 그래서 엔진이 단계마다 `--model`을 준다(`stage_model`). leader 폴더에서 `claude -p ... --output-format json`의 `modelUsage`는 `leader/.claude/settings.json`(`"model": "opus"`)이 있으면 `claude-opus-5-5`, 없으면 `claude-haiku-5-5`였다(Claude Code 2.1.323).
 - 2026-11-14, 사람 관문 둘: 설계 승인과 병합 말고는 엔진과 leader가 돈다. 엔진이 PR을 늘 Ready로 바꾸고, 쉬움이 아닌 PR이면 리뷰 봇에 한 번 요청한다. 다시 하면 풀릴 오류는 단계마다 한 번 다시 해 본다. 막힘의 답은 `INTENT.md` 결정 기록이고, 다시 띄운 작업자에게는 엔진이 첫 메시지로 다시 읽으라고 한다(지시서 문장만으로는 이어 받은 세션이 두 번 다시 읽지 않았다). 리뷰가 끝나면 `REPORT.md`를 쓴다. `new`는 `<base>`를 fetch하고, setup이 통과할 때까지 `BLOCKED.md`를 둔다(#33 리뷰의 P2 두 개).
