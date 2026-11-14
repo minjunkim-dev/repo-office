@@ -27,6 +27,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unicodedata
 import uuid
@@ -52,6 +53,7 @@ TRANSIENT = ("git push failed", "gh pr create failed", "gh pr edit failed", "gh 
 RETRY_WAIT = float(os.environ.get("OFFICE_RETRY_WAIT", "10"))
 # A worker turn longer than this is taken as hung: the engine closes it and blocks the task.
 WORKER_LIMIT = float(os.environ.get("OFFICE_WORKER_TIMEOUT", str(4 * 3600)))
+BOARD_EVERY = float(os.environ.get("OFFICE_BOARD_EVERY", "5"))  # seconds between board rewrites while a run goes
 # hc terminal names are global to the hc core; this tag keeps another checkout's jobs folder from sharing them.
 TAG = hashlib.sha256(str(JOBS.resolve()).encode()).hexdigest()[:4]
 
@@ -65,7 +67,9 @@ def load(path, default):
 
 
 def save(path, data):
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)  # the board reads state.json every few seconds: never let it see half a file
 
 
 def sha(path):
@@ -416,9 +420,22 @@ def run(name, runner=run_worker):
         except BlockingIOError:
             print(f"another engine.py run {name} is running", file=sys.stderr)
             return 2
+        # A stage can take hours: rewrite the board while this run goes, so minutes, last file and the time stay live.
+        # When the run ends or dies the rewrites stop, and the page sees its data grow old.
+        stop = threading.Event()
+
+        def keep():
+            while not stop.wait(BOARD_EVERY):
+                refresh_board()
+
+        keeper = threading.Thread(target=keep, daemon=True)
+        keeper.start()
         try:
             return advance(job, name, runner)
         finally:
+            stop.set()
+            keeper.join()
+            fcntl.flock(lock, fcntl.LOCK_UN)  # first, or the last board would still show this run in progress
             refresh_board()  # a block or a wait changes what the board shows
 
 
@@ -548,6 +565,8 @@ def advance(job, name, runner):
             again = any(m["stage"] == stage["id"] for m in state.get("models", [])) or "--resume" in argv
             message = (f"This stage runs again. Re-read {job / 'INTENT.md'} (its 결정 기록 may hold new answers) and {prompt}, "
                        f"then follow {prompt} exactly." if again else f"Read {prompt} and follow it exactly.")
+            state["working"] = model  # the board names the model of the worker now running, before models records it
+            save(state_path, state)
             error = runner(f"{TAG}-{name}-{stage['id']}"[:32], job, argv, message)
             if not isinstance(error, NotStarted):
                 if session_key(stage, state) not in state["sessions"]:
@@ -792,17 +811,37 @@ def job_status(job):
     """What workers and the board show for one task, from its files only."""
     state = load(job / "state.json", {"stage": "-", "since": time.time()})
     blocked = job / "BLOCKED.md"
-    files = [p for p in job.iterdir() if p.is_file() and p.name != "run.lock"]
-    last = max(files, key=lambda p: p.stat().st_mtime)
+    files = []
+    for p in job.iterdir():
+        try:  # a worker may delete a file between the listing and its stat
+            if p.is_file() and p.name != "run.lock" and not p.name.startswith("."):
+                files.append((p.stat().st_mtime, p.name))
+        except FileNotFoundError:
+            pass
+    when, last = max(files)
     if blocked.exists():
         note = next((l.strip() for l in blocked.read_text(encoding="utf-8", errors="replace").splitlines()
                      if l.strip() and not l.startswith("#")), "")[:60]  # block() writes a 「# 막힘」 heading first
     else:
         note = (job / "pr.txt").read_text(encoding="utf-8").strip() if (job / "pr.txt").exists() else ""
+    # run() holds run.lock while it works (this process too, on another descriptor): a lock we cannot share means an engine runs.
+    running = 0
+    if (job / "run.lock").exists():
+        with open(job / "run.lock") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                fcntl.flock(lock, fcntl.LOCK_UN)
+            except BlockingIOError:
+                running = 1
+    models = state.get("models") or [{"model": "-"}]
     return {"name": job.name, "stage": "blocked" if blocked.exists() else state["stage"], "at": state["stage"],
             "minutes": int((time.time() - state["since"]) // 60),
-            "model": (state.get("models") or [{"model": "-"}])[-1]["model"],
-            "last": f"{last.name} {datetime.fromtimestamp(last.stat().st_mtime):%H:%M}", "note": note}
+            "model": state.get("working") or models[-1]["model"],
+            # Every stage run, oldest first, as "stage=model" words; "+" marks the sonnet rerun after haiku gave up.
+            "ran": " ".join(f"{m.get('stage', '-')}={m.get('model', '-')}{'+' if m.get('rerun') else ''}"
+                            for m in state.get("models", [])),
+            "running": running, "worker": f"{TAG}-{job.name}-{state['stage']}"[:32],  # the hc name run_worker gives
+            "last": f"{last} {datetime.fromtimestamp(when):%H:%M}", "note": note}
 
 
 def tasks():
@@ -813,7 +852,7 @@ def tasks():
             rows.append({k: v if type(v) is int else str(v) for k, v in job_status(job).items()})  # not isinstance: bool must become text
         except Exception as error:  # one hand-edited state.json (since not a number, a key missing) must not hide the rest
             rows.append({"name": job.name, "stage": "unreadable", "at": "-", "minutes": 0, "model": "-", "last": "-",
-                         "note": f"state.json을 읽지 못함: {type(error).__name__}"})
+                         "ran": "", "running": 0, "worker": "", "note": f"state.json을 읽지 못함: {type(error).__name__}"})
     return rows
 
 
@@ -827,9 +866,10 @@ def workers():
 
 def board():
     """Write jobs/board.html, one screen: the Pixel Agents office (OFFICE_PIXEL_AGENTS, a local address) beside
-    jobs/board-tasks.html, stage lanes and a card per task from files only, which reloads itself every 5 seconds."""
+    jobs/board-tasks.html, stage lanes and a card per task from files only, which reloads itself every 5 seconds.
+    run() rewrites both every BOARD_EVERY seconds while it goes; "stamp" lets the page tell data no engine rewrites."""
     flow = [{"id": s["id"], "by": s["by"]} for s in load(STAGES, {"flow": []})["flow"]]
-    data = json.dumps({"time": f"{datetime.now():%H:%M:%S}", "flow": flow, "tasks": tasks()}, ensure_ascii=False)
+    data = json.dumps({"time": f"{datetime.now():%H:%M:%S}", "stamp": int(time.time()), "flow": flow, "tasks": tasks()}, ensure_ascii=False)
     # Inside <script>, a worker's text must not close the tag: escape <, > and & as JSON \u escapes.
     data = data.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     # Only a local http address without a query: the token URL would hand the page the right to install hooks.
@@ -839,7 +879,7 @@ def board():
              "board.html": (PIPELINE / "board.html").read_text(encoding="utf-8").replace("/*PIXEL*/", pixel)}
     JOBS.mkdir(parents=True, exist_ok=True)
     for name, page in pages.items():
-        tmp = JOBS / f".{name}.{os.getpid()}.tmp"  # runs of other tasks write the board at the same time
+        tmp = JOBS / f".{name}.{os.getpid()}.{threading.get_ident()}.tmp"  # other runs and this run's keeper write too
         tmp.write_text(page, encoding="utf-8")
         tmp.replace(JOBS / name)  # a reload never reads half a page
     return JOBS / "board.html"

@@ -7,35 +7,37 @@
 <style>
 :root {
   --bg: #1b1d2a; --panel: #262938; --line: #3a3e55; --fg: #eef0f7; --mute: #9aa0b8;
-  --work: #5ad1a0; --wait: #ffc857; --bad: #ff6b6b; --done: #7aa7ff;
+  --work: #5ad1a0; --wait: #ffc857; --bad: #ff6b6b; --done: #7aa7ff; --idle: #8a90a8;
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 -apple-system, system-ui, "Apple SD Gothic Neo", sans-serif; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.55 -apple-system, system-ui, "Apple SD Gothic Neo", sans-serif; word-break: keep-all; }
 main { max-width: 1100px; margin: 0 auto; padding: 16px; }
-header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
-h1 { font-size: 18px; margin: 0; letter-spacing: .02em; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; margin-bottom: 12px; }
+h1 { font-size: 18px; margin: 0; }
 .meta { color: var(--mute); font-size: 13px; }
-.lanes { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
-.lane { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; min-height: 92px; min-width: 0; }
-.lane h3 { font-size: 13px; margin: 0 0 2px; display: flex; justify-content: space-between; }
+h2.sec { font-size: 13px; color: var(--mute); font-weight: 600; margin: 0 0 8px; }
+.lanes { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 6px; }
+.lane { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; min-height: 76px; min-width: 0; }
+.lane h3 { font-size: 13px; margin: 0; display: flex; justify-content: space-between; gap: 6px; }
 .lane h3 b { color: var(--mute); font-weight: 600; }
-.lane small { display: block; color: var(--mute); font-size: 11px; margin-bottom: 8px; }
-.chip { display: block; border-radius: 6px; padding: 4px 8px; margin-top: 6px; font-size: 13px; font-weight: 600; color: #15161f; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 10px 2px 18px; color: var(--mute); font-size: 13px; }
-.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
-.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; min-width: 0; }
-.card h2 { font-size: 15px; margin: 0 0 6px; display: flex; justify-content: space-between; gap: 8px; }
-.pill { font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 99px; color: #15161f; white-space: nowrap; }
-.track { display: flex; gap: 3px; margin: 8px 0; }
-.track span { flex: 1; height: 6px; border-radius: 2px; background: var(--line); }
-.track span.past { background: #6b7194; }
-.track span.now { background: var(--c); box-shadow: 0 0 6px var(--c); }
-.steps { display: flex; justify-content: space-between; font-size: 11px; color: var(--mute); }
-.row { color: var(--mute); font-size: 13px; margin-top: 6px; overflow-wrap: anywhere; }
-.note { color: var(--fg); font-size: 13px; margin-top: 6px; overflow-wrap: anywhere; }
+.lane small { display: block; color: var(--mute); font-size: 11px; margin-bottom: 6px; }
+.chip { display: block; border-radius: 5px; padding: 2px 7px; margin-top: 4px; font-size: 12px; font-weight: 600; color: #15161f; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 10px 2px 18px; color: var(--mute); font-size: 12px; }
+.legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--c); border-radius: 10px; padding: 12px 14px; min-width: 0; }
+.card h3 { font-size: 15px; margin: 0; display: flex; justify-content: space-between; align-items: center; gap: 8px; overflow-wrap: anywhere; }
+.pill { font-size: 12px; font-weight: 700; padding: 1px 9px; border-radius: 99px; color: #15161f; white-space: nowrap; }
+.now { margin: 6px 0 0; font-size: 14px; }
+.todo { margin: 6px 0 0; font-size: 13px; color: var(--c); overflow-wrap: anywhere; }
+.flow { display: flex; flex-wrap: wrap; gap: 4px; margin: 10px 0 2px; padding: 0; list-style: none; }
+.step { font-size: 12px; padding: 2px 7px; border-radius: 5px; border: 1px solid var(--line); color: var(--mute); white-space: nowrap; }
+.step.past { color: var(--fg); background: #303447; }
+.step.here { color: #15161f; background: var(--c); border-color: var(--c); font-weight: 700; }
+.row { color: var(--mute); font-size: 12px; margin-top: 6px; overflow-wrap: anywhere; }
+code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--fg); }
 a { color: var(--done); }
-.empty { color: var(--mute); padding: 24px 0; }
+.empty { color: var(--mute); padding: 20px 0; margin: 0; }
 </style>
 </head>
 <body>
@@ -44,13 +46,16 @@ a { color: var(--done); }
     <h1>office 상태판</h1>
     <span class="meta" id="meta"></span>
   </header>
+  <h2 class="sec">단계별 과제</h2>
   <section class="lanes" id="lanes" aria-label="단계마다 지금 있는 과제"></section>
   <div class="legend">
-    <span><i style="background:var(--work)"></i>작업 중</span>
-    <span><i style="background:var(--wait)"></i>사람 차례(승인·병합)</span>
+    <span><i style="background:var(--work)"></i>진행 중</span>
+    <span><i style="background:var(--wait)"></i>사람 차례</span>
+    <span><i style="background:var(--done)"></i>병합 대기</span>
+    <span><i style="background:var(--idle)"></i>멈춤(엔진 꺼짐)</span>
     <span><i style="background:var(--bad)"></i>막힘</span>
-    <span>작업자 화면: <code>hc attach &lt;이름&gt;</code> · 도트 사무실: Pixel Agents(README)</span>
   </div>
+  <h2 class="sec">과제</h2>
   <section class="cards" id="cards"></section>
 </main>
 <script type="application/json" id="data">/*DATA*/</script>
@@ -60,31 +65,52 @@ setTimeout(() => location.reload(), 5000);  // first, so a drawing error never s
 // Data comes from the JSON above and is set only through textContent.
 const D = JSON.parse(document.getElementById("data").textContent);
 
-// Lanes in pipeline order. Each stage of stages.json falls into one; a person acts in 승인 and 병합.
-const LANES = [["design", "설계", "opus"], ["approve", "설계 승인", "사람"], ["implement", "구현", "haiku·sonnet"],
-               ["check", "검사", "스크립트"], ["pr", "PR·리뷰", "엔진·다른 세션"], ["done", "병합 대기", "사람"]];
+// Lanes in pipeline order. Each stage of stages.json falls into one; a person acts in 설계 승인 and 병합 대기.
+const LANES = [["design", "설계", "opus 작업자"], ["approve", "설계 승인", "사람"], ["implement", "구현", "haiku·sonnet 작업자"],
+               ["check", "검사", "엔진(테스트)"], ["pr", "PR·리뷰", "엔진·리뷰 작업자"], ["done", "병합 대기", "사람"]];
 const LANE_OF = { design: "design", approve: "approve", implement: "implement", check: "check",
                   draft: "pr", ready: "pr", review: "pr", post: "pr", done: "done" };
 const STAGE_NAME = { design: "설계", approve: "설계 승인", implement: "구현", check: "검사", draft: "초안 PR",
-                     ready: "Ready·봇", review: "리뷰", post: "본문 올리기", done: "병합 대기" };
-const human = new Set(D.flow.filter(s => s.by === "human").map(s => s.id).concat(["done"]));
+                     ready: "Ready·봇 요청", review: "리뷰", post: "PR 본문 올리기", done: "병합 대기" };
+const BY = Object.fromEntries(D.flow.map(s => [s.id, s.by]));
+const COLOR = { work: "#5ad1a0", wait: "#ffc857", bad: "#ff6b6b", done: "#7aa7ff", idle: "#8a90a8" };
+const name = id => STAGE_NAME[id] || id;
+const IDS = D.flow.map(s => s.id).concat(["done"]);
+// No state.json yet: the engine has just started the first stage.
+D.tasks.forEach(t => { if (t.stage !== "unreadable" && !IDS.includes(t.at)) t.at = IDS[0]; });
+// A running engine rewrites this data every 5 seconds. Older data means no engine runs: nothing is in progress.
+const age = Math.max(0, Math.round(Date.now() / 1000 - D.stamp));
+const live = age < 20;
 
 function status(t) {
   if (t.stage === "blocked") return { key: "bad", text: "막힘" };
   if (t.stage === "unreadable") return { key: "bad", text: "읽기 실패" };
   if (t.at === "done") return { key: "done", text: "병합 대기" };
-  if (human.has(t.at)) return { key: "wait", text: "사람 차례" };
-  return { key: "work", text: "작업 중" };
+  if (BY[t.at] === "human") return { key: "wait", text: "사람 차례" };
+  if (!t.running || !live) return { key: "idle", text: "멈춤" };
+  return { key: "work", text: "진행 중" };
 }
-const COLOR = { work: "#5ad1a0", wait: "#ffc857", bad: "#ff6b6b", done: "#7aa7ff" };
+
+// One line on what is happening now, and one on what a person should do, if anything.
+function now(t, st) {
+  const by = BY[t.at];
+  if (t.stage === "unreadable") return ["state.json을 읽지 못했습니다.", "파일을 고치면 다음 새로 고침에 다시 보입니다."];
+  if (st.key === "bad") return [`${name(t.at)} 단계에서 막혔습니다.`, "아래 이유와 BLOCKED.md를 보고 leader에게 답을 주세요."];
+  if (st.key === "done") return ["리뷰까지 끝났습니다.", "REPORT.md와 PR diff를 읽고 병합해 주세요."];
+  if (st.key === "wait") return [`${name(t.at)} 대기 중 (${t.minutes}분째)`, t.at === "approve"
+    ? `design.md를 읽고 승인해 주세요: engine.py approve ${t.name}` : "사람이 처리할 차례입니다."];
+  if (st.key === "idle") return [`${name(t.at)} 단계에서 엔진이 돌고 있지 않습니다.`, `이어서 돌리려면: engine.py run ${t.name}`];
+  const who = by === "claude" ? `${t.model} 작업자가 ${name(t.at)} 중` : `엔진이 ${name(t.at)} 중`;
+  return [`${who} (${t.minutes}분째)`, ""];
+}
 
 function lanes() {
   const box = document.getElementById("lanes");
-  LANES.forEach(([key, name, who]) => {
+  LANES.forEach(([key, title, who]) => {
     const here = D.tasks.filter(t => (LANE_OF[t.at] || "design") === key);
     const lane = document.createElement("div"); lane.className = "lane";
     const h = document.createElement("h3");
-    const n = document.createElement("span"); n.textContent = name;
+    const n = document.createElement("span"); n.textContent = title;
     const c = document.createElement("b"); c.textContent = here.length;
     h.append(n, c);
     const w = document.createElement("small"); w.textContent = who;
@@ -99,43 +125,71 @@ function lanes() {
   });
 }
 
-function cards() {
-  const box = document.getElementById("cards");
-  const ids = D.flow.map(s => s.id).concat(["done"]);
-  if (!D.tasks.length) { box.innerHTML = '<p class="empty">등록된 과제가 없다</p>'; return; }
-  D.tasks.forEach(t => {
-    const st = status(t);
-    const c = document.createElement("article");
-    c.className = "card";
-    c.style.setProperty("--c", COLOR[st.key]);
-    const h = document.createElement("h2");
-    const n = document.createElement("span"); n.textContent = t.name;
-    const p = document.createElement("span"); p.className = "pill"; p.style.background = COLOR[st.key]; p.textContent = st.text;
-    h.append(n, p); c.append(h);
-    const track = document.createElement("div"); track.className = "track";
-    const i = ids.indexOf(t.at);
-    ids.forEach((id, k) => { const s = document.createElement("span"); s.className = k < i ? "past" : k === i ? "now" : ""; s.title = STAGE_NAME[id] || id; track.append(s); });
-    c.append(track);
-    const steps = document.createElement("div"); steps.className = "steps";
-    const a = document.createElement("span"); a.textContent = "설계";
-    const b = document.createElement("span"); b.textContent = `지금: ${STAGE_NAME[t.at] || t.at}`;
-    const e = document.createElement("span"); e.textContent = "병합";
-    steps.append(a, b, e); c.append(steps);
-    const row = document.createElement("div"); row.className = "row";
-    row.textContent = `${t.minutes}분째 · 모델 ${t.model} · 마지막 파일 ${t.last}`;
-    c.append(row);
-    if (t.note) {
-      const note = document.createElement("div"); note.className = "note";
-      if (/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/.test(t.note)) {
-        const link = document.createElement("a"); link.href = t.note; link.textContent = t.note; note.append(link);
-      } else note.textContent = t.note;
-      c.append(note);
-    }
-    box.append(c);
+function card(t) {
+  const st = status(t);
+  const c = document.createElement("article"); c.className = "card";
+  c.style.setProperty("--c", COLOR[st.key]);
+  const h = document.createElement("h3");
+  const n = document.createElement("span"); n.textContent = t.name;
+  const p = document.createElement("span"); p.className = "pill"; p.style.background = COLOR[st.key]; p.textContent = st.text;
+  h.append(n, p); c.append(h);
+  const [line, todo] = now(t, st);
+  const a = document.createElement("p"); a.className = "now"; a.textContent = line; c.append(a);
+  if (todo) { const b = document.createElement("p"); b.className = "todo"; b.textContent = todo; c.append(b); }
+
+  // Every stage in order: done ones show the model that ran them, so a skipped or repeated stage is visible.
+  const ran = {};
+  String(t.ran).split(" ").filter(Boolean).forEach(w => {
+    const [id, model] = w.split("=");
+    (ran[id] = ran[id] || []).push((model || "-").replace(/\+$/, ""));
   });
+  const ids = IDS;
+  const at = ids.indexOf(t.at);
+  const flow = document.createElement("ol"); flow.className = "flow";
+  ids.forEach((id, k) => {
+    const s = document.createElement("li");
+    s.className = "step" + (k < at ? " past" : k === at ? " here" : "");
+    const mark = k < at ? "✓ " : k === at ? "▶ " : "";
+    s.textContent = mark + name(id) + (ran[id] ? ` · ${ran[id].join("→")}` : "");
+    flow.append(s);
+  });
+  c.append(flow);
+
+  if (st.key === "work" && BY[t.at] === "claude") {
+    const tail = t.name.split(/[^A-Za-z0-9]/).filter(Boolean).pop() || t.name;
+    const w = document.createElement("div"); w.className = "row";
+    w.textContent = `작업자 터미널: hc attach ${t.worker} · 사무실 캐릭터 이름: ${tail}`;
+    c.append(w);
+  }
+  if (t.note) {
+    const note = document.createElement("div"); note.className = "row";
+    if (/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/.test(t.note)) {
+      const link = document.createElement("a"); link.href = t.note; link.textContent = t.note;
+      note.append("PR: ", link);
+    } else note.textContent = t.note;
+    c.append(note);
+  }
+  const last = document.createElement("div"); last.className = "row";
+  last.textContent = `마지막으로 바뀐 파일: ${t.last}`;
+  c.append(last);
+  return c;
 }
 
-document.getElementById("meta").textContent = `${D.time} 기준 · 5초마다 다시 읽는다 · 토큰을 쓰지 않는다`;
+function cards() {
+  const box = document.getElementById("cards");
+  if (!D.tasks.length) {
+    const e = document.createElement("p"); e.className = "empty";
+    e.textContent = "등록된 과제가 없습니다. leader에게 과제를 말하거나 engine.py new <과제> --repo <경로>로 등록하세요.";
+    box.append(e);
+    return;
+  }
+  D.tasks.forEach(t => box.append(card(t)));
+}
+
+const count = k => D.tasks.filter(t => status(t).key === k).length;
+document.getElementById("meta").textContent =
+  `과제 ${D.tasks.length}개 · 진행 중 ${count("work")} · 사람 차례 ${count("wait") + count("done")} · 멈춤 ${count("idle")} · 막힘 ${count("bad")}`
+  + (live ? ` · ${D.time} 기준 (엔진이 5초마다 갱신)` : ` · ${D.time} 뒤로 바뀐 것 없음 (도는 엔진 없음)`);
 lanes();
 cards();
 </script>

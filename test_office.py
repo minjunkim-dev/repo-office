@@ -1,6 +1,7 @@
 """The office pipeline: stage order, sessions, permissions, approvals and stops, with a fake worker."""
 
 import contextlib
+import fcntl
 import importlib.util
 import io
 import hashlib
@@ -1291,8 +1292,8 @@ new Function(script)();
 console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.href}))));
 """
 
-    def run_page(self):
-        """Every element the page script made, as {tag, text, href}."""
+    def run_page(self, age=0):
+        """Every element the page script made, as {tag, text, href}; age makes the data that many seconds old."""
         node = shutil.which("node")
         if not node:
             self.skipTest("node is not installed")
@@ -1300,6 +1301,8 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         page = (self.engine.JOBS / "board-tasks.html").read_text(encoding="utf-8")
         start = page.index('id="data">') + len('id="data">')
         data = page[start:page.index("</script>", start)]
+        if age:
+            data = json.dumps(dict(json.loads(data), stamp=json.loads(data)["stamp"] - age))
         body = page.index("<script>", start) + len("<script>")
         script = page[body:page.index("</script>", body)]
         ran = subprocess.run([node, "-e", self.PAGE_HARNESS], input=json.dumps({"data": data, "script": script}),
@@ -1317,6 +1320,45 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         self.assertIn(evil, [e["text"] for e in made])  # shown as the very text, through textContent
         self.assertFalse([e for e in made if e["tag"] == "innerHTML" and "onerror" in e["text"]])
         self.assertIn("막힘", [e["text"] for e in made])
+
+    def test_the_board_shows_progress_only_while_an_engine_holds_the_task(self):
+        self.engine.save(self.job / "state.json", {"stage": "implement", "since": 0, "models": [
+            {"stage": "design", "model": "opus", "rerun": False}, {"stage": "implement", "model": "haiku", "rerun": False},
+            {"stage": "implement", "model": "sonnet", "rerun": True}]})
+        row = self.engine.tasks()[0]
+        self.assertEqual((row["running"], row["ran"]), (0, "design=opus implement=haiku implement=sonnet+"))
+        self.assertTrue(row["worker"].endswith("-search-implement"))
+        texts = " ".join(e["text"] for e in self.run_page())
+        self.assertIn("멈춤", texts)  # no engine: the stage is not moving, whatever state.json says
+        self.assertIn("engine.py run search", texts)
+        self.assertIn("구현 · haiku→sonnet", texts)
+        with open(self.job / "run.lock", "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)  # what engine.py run holds
+            self.assertEqual(self.engine.tasks()[0]["running"], 1)
+            texts = " ".join(e["text"] for e in self.run_page())
+            self.assertIn("진행 중", texts)
+            self.assertIn("hc attach", texts)
+            self.assertIn("멈춤", " ".join(e["text"] for e in self.run_page(age=60)))  # data no engine rewrote lately
+        self.assertEqual(self.engine.tasks()[0]["running"], 0)
+
+    def test_a_run_rewrites_the_board_while_a_worker_works(self):
+        self.engine.BOARD_EVERY = 0.05
+        seen = []
+
+        def slow(name, cwd, argv, message):
+            board = self.engine.JOBS / "board-tasks.html"
+            time.sleep(0.2)  # the keeper writes the board within BOARD_EVERY even before any stage moves
+            before = board.stat().st_mtime_ns
+            time.sleep(0.3)
+            seen.append(board.stat().st_mtime_ns > before)
+            (self.job / "design.md").write_text("d\n", encoding="utf-8")
+            return None
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.engine.run("search", slow)
+        self.assertEqual(seen, [True])
+        page = (self.engine.JOBS / "board-tasks.html").read_text(encoding="utf-8")
+        self.assertEqual([t["running"] for t in self.board_data(page)["tasks"]], [0])  # the run ended: no one holds the lock
 
     def test_the_board_links_only_github_pull_requests(self):
         with contextlib.redirect_stdout(io.StringIO()):
