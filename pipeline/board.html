@@ -9,15 +9,16 @@
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body { margin: 0; background: var(--bg); color: #eef0f7; font: 14px/1.5 -apple-system, system-ui, "Apple SD Gothic Neo", sans-serif;
-       display: grid; grid-template-columns: minmax(0, 11fr) minmax(0, 9fr); }
+       display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
 body.solo { grid-template-columns: minmax(0, 1fr); }
 section { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .office { border-right: 1px solid var(--line); }
 .office p { margin: 0; padding: 8px 14px; color: var(--mute); font-size: 12px; border-top: 1px solid var(--line); }
 iframe { flex: 1; width: 100%; border: 0; display: block; background: var(--bg); }
 @media (max-width: 900px) {
-  body { grid-template-columns: minmax(0, 1fr); grid-template-rows: 60vh auto; height: auto; }
-  .office { border-right: 0; border-bottom: 1px solid var(--line); }
+  body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 60vh; height: auto; }
+  .tasks { order: -1; border-bottom: 1px solid var(--line); }  /* the pipeline first: it is what tells whether work moves */
+  .office { border-right: 0; }
   .tasks iframe { height: 100vh; }
 }
 </style>
@@ -25,9 +26,9 @@ iframe { flex: 1; width: 100%; border: 0; display: block; background: var(--bg);
 <body>
 <!-- One screen. Left: the Pixel Agents office (live, never reloaded, so its animation keeps going).
      Right: board-tasks.html, the pipeline's stages and cards, which reloads itself every 5 seconds. -->
-<section class="office" id="office">
+<section class="office" id="office" aria-label="도트 사무실">
   <iframe title="Pixel Agents 사무실" id="pixel"></iframe>
-  <p>도트 사무실: Pixel Agents(<span id="where"></span>). 비어 있으면 README의 「도트 사무실」대로 띄운다.</p>
+  <p>도트 사무실(Pixel Agents, <span id="where"></span>)은 이 Mac의 Claude 세션을 모두 보여 줍니다. office 작업자는 과제 카드의 「사무실 캐릭터 이름」으로 찾습니다. 화면이 비어 있으면 README의 「도트 사무실」대로 띄우세요.</p>
 </section>
 <section class="tasks"><iframe title="단계와 과제" src="board-tasks.html"></iframe></section>
 <script>
