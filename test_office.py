@@ -142,7 +142,7 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("@coderabbitai review", next(c for c in gh() if c[:2] == ["pr", "comment"]))
         report = (self.job / "REPORT.md").read_text()
         head = subprocess.run(["git", "-C", str(self.job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-        for part in ("https://github.com/O/R/pull/7", f"gh pr merge https://github.com/O/R/pull/7 --squash --match-head-commit {head}", "- design: sonnet",
+        for part in ("https://github.com/O/R/pull/7", f"gh pr merge https://github.com/O/R/pull/7 --squash --match-head-commit {head}", "- design: opus",
                      "- implement: sonnet", "- review: opus", "사람이 diff를 읽고 병합한다", "exit 0",
                      "리뷰가 고친 지적: P0 0, P1 1, P2 0", "남은 지적: [Spec] P1 y, a.py:3"):
             self.assertIn(part, report)
@@ -590,6 +590,7 @@ class PipelineTests(unittest.TestCase):
                                                    "approved": {"approve": self.engine.sha(self.job / "design.md")}})
         tip = lambda ref="refs/heads/office/search": subprocess.run(  # noqa: E731
             ["git", "-C", str(bare), "rev-parse", "-q", "--verify", ref], capture_output=True, text=True).stdout.strip()
+        self.gh_calls = gh
         return tip, lambda: [c for c in gh() if c[:2] == ["pr", "edit"]]
 
     def review_commit(self, *files):
@@ -612,6 +613,32 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.post(), self.engine.DONE)
         self.assertEqual(tip(), head)
         self.assertEqual(len(edits()), 1)
+
+    def test_a_review_that_raises_door_asks_the_bot_once_after_the_body(self):
+        # The ready stage skipped the bot for a PR it proved easy; the review saw it hard (FakeWorker writes 어려움).
+        tip, edits = self.at_post()
+        (self.job / "review.md").write_text("리뷰한 head와 Door: " + "a" * 40 + ", 되돌리기 어려움\n", encoding="utf-8")
+        self.assertEqual(self.post(), self.engine.DONE)
+        calls = [c[:2] for c in self.gh_calls()]
+        self.assertEqual(calls.count(["pr", "comment"]), 1)
+        self.assertLess(calls.index(["pr", "edit"]), calls.index(["pr", "comment"]))
+        self.assertIn("사람이 diff를 읽고 병합한다", (self.job / "REPORT.md").read_text())
+        self.engine.save(self.job / "state.json", {**self.state(), "stage": "post"})
+        self.post()  # a second post never asks again
+        self.assertEqual([c[:2] for c in self.gh_calls()].count(["pr", "comment"]), 1)
+
+    def test_a_review_that_keeps_door_easy_asks_no_bot(self):
+        tip, edits = self.at_post()
+        self.engine.save(self.job / "state.json", {**self.state(), "easy_pr": "x", "checked": "x"})
+        (self.job / "review.md").write_text("리뷰한 head와 Door: " + "a" * 40 + ", 되돌리기 쉬움\n", encoding="utf-8")
+
+        class Easy(FakeWorker):
+            def __call__(w, *a):
+                return None
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.engine.run("search", Easy(self.job)), self.engine.DONE)
+        self.assertNotIn(["pr", "comment"], [c[:2] for c in self.gh_calls()])
+        self.assertNotIn("사람이 diff를 읽고 병합한다", (self.job / "REPORT.md").read_text())
 
     def test_a_review_without_commits_posts_the_body_only(self):
         tip, edits = self.at_post()
@@ -1025,8 +1052,8 @@ class PipelineTests(unittest.TestCase):
 
     def test_each_stage_gets_its_model_from_the_approved_difficulty(self):
         work = self.engine.session_id("search", "work")
-        self.assertEqual(self.routed("# d\n\n난이도: 쉬움\n"), [("design", "sonnet", work), ("implement", "haiku", work)])
-        self.assertEqual(self.state()["models"], [{"stage": "design", "model": "sonnet", "rerun": False},
+        self.assertEqual(self.routed("# d\n\n난이도: 쉬움\n"), [("design", "opus", work), ("implement", "haiku", work)])
+        self.assertEqual(self.state()["models"], [{"stage": "design", "model": "opus", "rerun": False},
                                                   {"stage": "implement", "model": "haiku", "rerun": False}])
         for text in ("# d\n", "난이도: 보통\n", "난이도: 어려움\n", "난이도: easy\n", "난이도: 쉬움\n난이도: 보통\n", "- 난이도: 쉬움\n"):
             with self.subTest(text=text):
@@ -1039,7 +1066,7 @@ class PipelineTests(unittest.TestCase):
                     subprocess.run(["git", "-C", str(self.job / "repo"), *args], check=True)
                 (self.job / "repo/.git/info/exclude").write_text("pass\n")
                 (self.job / "repo/pass").write_text("")
-                self.assertEqual([m for _, m, _ in self.routed(text)], ["sonnet", "sonnet"])
+                self.assertEqual([m for _, m, _ in self.routed(text)], ["opus", "sonnet"])
 
     def test_the_review_runs_on_opus_unless_the_pr_proved_easy(self):
         stage = next(s for s in json.loads(self.engine.STAGES.read_text())["flow"] if s["id"] == "review")
@@ -1056,7 +1083,7 @@ class PipelineTests(unittest.TestCase):
                 if mode != "silent":
                     self.setUp()
                 calls = self.routed("난이도: 쉬움\n", fail_haiku=mode)
-                self.assertEqual(calls, [("design", "sonnet", work), ("implement", "haiku", work), ("implement", "sonnet", fresh)])
+                self.assertEqual(calls, [("design", "opus", work), ("implement", "haiku", work), ("implement", "sonnet", fresh)])
                 self.assertEqual(self.state()["models"][-1], {"stage": "implement", "model": "sonnet", "rerun": True})
                 self.assertIn("exit 0", (self.job / "check.md").read_text())  # the sonnet run passed the check
                 self.assertNotIn("gave up", (self.job / "BLOCKED.md").read_text() if (self.job / "BLOCKED.md").exists() else "")
@@ -1166,8 +1193,15 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual([c[0] for c in worker.calls], ["design"])
 
     def test_workers_reads_files_only(self):
-        self.engine.run("search", FakeWorker(self.job))
-        self.assertEqual(self.engine.workers(), 0)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.engine.run("search", FakeWorker(self.job))
+        (self.job / "BLOCKED.md").write_text("\nsetup failed: x\n", encoding="utf-8")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(self.engine.workers(), 0)
+        self.assertIn("blocked", out.getvalue())
+        self.assertIn("opus", out.getvalue())  # the design ran last
+        self.assertIn("setup failed: x", out.getvalue())
 
 
 class LayoutTests(unittest.TestCase):

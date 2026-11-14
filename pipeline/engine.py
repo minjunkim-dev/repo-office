@@ -2,7 +2,7 @@
 """Move office tasks through stages.json. Workers run in hc terminals; this script only reads and writes files.
 
   engine.py doctor <repo>     check that a product repository can connect (AGENTS.md cells pass on main, protection, gh)
-  engine.py new <task> --repo PATH [--base main]   test = the product AGENTS.md check && test cells; runs setup once
+  engine.py new <task> --repo PATH [--base origin/main]  test = the product AGENTS.md check && test cells; runs setup once
   engine.py run <task>        advance until a person is needed, the task is blocked, or it is done
   engine.py approve <task>    a person approves the current design file (bound to its sha256)
   engine.py workers           show every task's stage from files only
@@ -325,12 +325,27 @@ def make_ready(job, stage, state):
         ready = subprocess.run(["gh", "pr", "ready", *url], cwd=job, capture_output=True, text=True)
         if ready.returncode:
             return f"gh pr ready failed: {(ready.stderr or ready.stdout).strip()}"
-    if stage.get("request") and state.get("requested") != url[0] and not proven_easy(state):
-        asked = subprocess.run(["gh", "pr", "comment", *url, "--body", stage["request"]], cwd=job, capture_output=True, text=True)
-        if asked.returncode:
-            return f"gh pr comment failed: {(asked.stderr or asked.stdout).strip()}"
-        state["requested"] = url[0]
+    if not proven_easy(state):
+        return ask_bot(job, url[0], stage.get("request"), state)
     return None
+
+
+def ask_bot(job, url, request, state):
+    """Ask the review bot once per PR, else why not."""
+    if not request or state.get("requested") == url:
+        return None
+    asked = subprocess.run(["gh", "pr", "comment", url, "--body", request], cwd=job, capture_output=True, text=True)
+    if asked.returncode:
+        return f"gh pr comment failed: {(asked.stderr or asked.stdout).strip()}"
+    state["requested"] = url
+    return None
+
+
+def review_says_easy(job):
+    """The review's 「리뷰한 head와 Door」 line says 되돌리기 쉬움; a missing or other line is hard (POLICY §3)."""
+    review = (job / "review.md").read_text(encoding="utf-8", errors="replace") if (job / "review.md").exists() else ""
+    line = re.search(r"리뷰한 head와 Door:([^\n]*)", review)
+    return bool(line) and "되돌리기 쉬움" in line[1] and "어려움" not in line[1]
 
 
 def write_report(job, task, state, flow):
@@ -344,7 +359,7 @@ def write_report(job, task, state, flow):
     counts = re.search(r"고친 것:[^\n]*?P0\s*(\d+)\D+P1\s*(\d+)\D+P2\s*(\d+)", review)
     left = re.search(r"남은 지적:[^\n]*", review)
     door = [l.strip() for l in body.splitlines() if re.match(r"\s*(Door|신뢰 경계):", l)]
-    easy_pr = proven_easy(state)
+    easy_pr = proven_easy(state) and review_says_easy(job)
     models = "\n".join(f"- {m['stage']}: {m['model']}" + (" (haiku 실패 뒤 다시 돌림)" if m["rerun"] else "") for m in state.get("models", []))
     check = text("check.md").split("```")[0].strip()
     setup = text("setup.md").split("```")[0].strip()
@@ -355,7 +370,7 @@ def write_report(job, task, state, flow):
               + "- 리뷰가 고친 지적: " + (f"P0 {counts[1]}, P1 {counts[2]}, P2 {counts[3]}" if counts else "review.md에서 찾지 못함") + "\n"
               + f"- {left[0].strip() if left else '남은 지적: review.md에서 찾지 못함'}\n"
               + "".join(f"- {l}\n" for l in door)
-              + ("" if easy_pr else "- 되돌리기 어려움이거나 신뢰 경계를 건드린다(엔진이 쉬움을 확인하지 못했다): 사람이 diff를 읽고 병합한다\n")
+              + ("" if easy_pr else "- 되돌리기 어려움이거나 신뢰 경계를 건드린다(엔진이 쉬움을 확인하지 못했거나 리뷰가 어려움으로 봤다): 사람이 diff를 읽고 병합한다\n")
               + f"\n## 단계별 모델\n\n{models or '- 없음'}\n\n## 돌린 명령\n\n{setup or '- setup: 없음'}\n\n{check or '- check: 없음'}\n"
               + "\n## 확인하지 않은 것\n\n" + ("".join(f"- {l}\n" for l in unverified) or "- 리뷰 보고와 PR 본문에 적힌 것이 없다\n")
               + f"\n## 리뷰 보고\n\n{review.strip() or '없음'}\n")
@@ -475,6 +490,15 @@ def advance(job, name, runner):
                 if retry(error):
                     continue
                 return block(job, error)
+            # The review raised Door to hard: the bot the ready stage skipped reviews the head just pushed.
+            if not review_says_easy(job):
+                request = next((s.get("request") for s in flow if s.get("ready")), None)
+                url = (job / "pr.txt").read_text(encoding="utf-8").split()[0]
+                if error := ask_bot(job, url, request, state):
+                    if retry(error):
+                        continue
+                    return block(job, error)
+                save(state_path, state)
             write_report(job, task, state, flow)
         elif stage["by"] == "script":
             git = lambda *a: subprocess.run(["git", *a], cwd=job / "repo", capture_output=True, text=True).stdout.strip()  # noqa: E731
@@ -746,14 +770,21 @@ def doctor(repo):
 
 
 def workers():
-    print(f"{'과제':<24} {'단계':<10} {'단계 경과':>9}  마지막 파일")
+    print(f"{'과제':<24} {'단계':<10} {'단계 경과':>9}  {'모델':<7} 마지막 파일 · PR 또는 막힌 이유")
     for job in sorted(p for p in JOBS.glob("*") if (p / "task.json").exists()):
         state = load(job / "state.json", {"stage": "-", "since": time.time()})
-        stage = "blocked" if (job / "BLOCKED.md").exists() else state["stage"]
+        blocked = job / "BLOCKED.md"
+        stage = "blocked" if blocked.exists() else state["stage"]
         files = [p for p in job.iterdir() if p.is_file() and p.name != "run.lock"]
         last = max(files, key=lambda p: p.stat().st_mtime)
         minutes = int((time.time() - state["since"]) // 60)
-        print(f"{job.name:<24} {stage:<10} {minutes:>7}분  {last.name} {datetime.fromtimestamp(last.stat().st_mtime):%H:%M}")
+        model = (state.get("models") or [{"model": "-"}])[-1]["model"]
+        if blocked.exists():
+            note = next((l.strip() for l in blocked.read_text(encoding="utf-8", errors="replace").splitlines() if l.strip()), "")[:60]
+        else:
+            note = (job / "pr.txt").read_text(encoding="utf-8").strip() if (job / "pr.txt").exists() else ""
+        print(f"{job.name:<24} {stage:<10} {minutes:>7}분  {model:<7} {last.name} {datetime.fromtimestamp(last.stat().st_mtime):%H:%M}"
+              + (f" · {note}" if note else ""))
     return 0
 
 
@@ -763,7 +794,7 @@ def main(argv=None):
     created = sub.add_parser("new")
     created.add_argument("task")
     created.add_argument("--repo", required=True)
-    created.add_argument("--base", default="main")
+    created.add_argument("--base", default="origin/main")
     sub.add_parser("doctor").add_argument("repo")
     for command in ("run", "approve", "test", "preflight"):
         sub.add_parser(command).add_argument("task")
