@@ -107,12 +107,14 @@ PR을 열기 전의 작업을 단계로 나눠 돌리는 실험 파이프라인�
 
 ### 쉬움 판정
 
-쉬움 판정(단계표 `easy`)은 리뷰 모델, 봇 요청, 보고를 정한다. 판정 코드는 `pipeline/engine.py`의 `easy`와 `proven_easy`다.
+쉬움 판정(단계표 `easy`)은 리뷰 모델, 봇 요청, 보고를 정한다. 판정 코드는 `pipeline/engine.py`에 있다. `open_draft`가 sha256과 바뀐 경로(`TRUST_NAMES`)를 보고 `easy`로 문구를 본다. `proven_easy`는 그 판정이 검사한 커밋의 것인지 본다.
 
 - 사람이 승인한 `design.md`와 PR 본문이 둘 다 `되돌리기: 쉬움`이라고 쓰고, 본문이 `민감한 파일: 없음`이라고 써야 쉬움이다. 옛 `Door: 되돌리기 쉬움`·`신뢰 경계: 없음`도 받는다.
 - 엔진은 승인 때의 sha256과 같은 `design.md`만 믿는다.
 - 줄이 없거나 다르면 쉬움이 아니다. `되돌리기`·`민감한 파일` 뒤에 콜론이 있는 줄(예: `되돌리기 판정:`)과 옛 말 `Door`·`신뢰 경계`가 들어간 줄은 모두 정확히 그 문구여야 한다(제목 줄 제외).
-- 브랜치가 에이전트 설정 폴더(`.claude/`·`.agents/`·`.codex/`·`.cursor/`)나 `.mcp.json`, 지시 파일(`.github`, `AGENTS.md`, `CLAUDE.md`, `CLAUDE.local.md`, `REVIEW.md`, `.envrc`)을 바꾸거나 이름을 바꿔 옮기면 본문과 관계없이 쉬움이 아니다(`TRUST_NAMES`).
+- 브랜치가 다음 경로를 바꾸거나 이름을 바꿔 옮기면 본문과 관계없이 쉬움이 아니다(`TRUST_NAMES`). 이름은 경로의 어느 단계에 있어도 대소문자 없이 본다(예: `docs/AGENTS.md`).
+  - 폴더: 에이전트 설정 폴더(`.claude/`·`.agents/`·`.codex/`·`.cursor/`), `.github/`.
+  - 파일: `.mcp.json`, 지시 파일(`AGENTS.md`, `CLAUDE.md`, `CLAUDE.local.md`, `REVIEW.md`), `.envrc`.
 - 쉬움이 아니면 엔진이 `REPORT.md`에 사람이 diff를 읽고 병합한다고 적는다.
 
 ### 리뷰 뒤 push와 REPORT
