@@ -26,6 +26,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import unicodedata
 import uuid
@@ -54,9 +55,8 @@ _SAFE = {"core.fsmonitor": "false", "diff.ignoreSubmodules": "all", "core.hooksP
          "push.followTags": "false", "push.recurseSubmodules": "no"}
 SAFE_GIT = {**os.environ, "GIT_NO_REPLACE_OBJECTS": "1", "GIT_CONFIG_COUNT": str(len(_SAFE)),
             **{f"GIT_CONFIG_{kind}_{i}": v for i, kv in enumerate(_SAFE.items()) for kind, v in zip(("KEY", "VALUE"), kv)}}
-# Toolchains the check stage may read and run, never write: mise's installs and rustup's proxies and toolchains.
-# Not the rest of ~/.cargo: it holds credentials.toml.
-TOOLCHAINS = [Path.home() / p for p in (".local/share/mise/installs", ".cargo/bin", ".rustup")]
+# What the sandbox tells a test it refused; the engine then points at the contract in AGENTS.md.
+REFUSED = "Operation not permitted"
 # hc terminal names are global to the hc core; this tag keeps another checkout's jobs folder from sharing them.
 TAG = hashlib.sha256(str(JOBS.resolve()).encode()).hexdigest()[:4]
 
@@ -474,9 +474,10 @@ def advance(job, name, runner):
             # The engine posts the PR body right after this stage, outside any sandbox: the tested code must not write it.
             # Nor the approved files: the draft stage reads them to decide the Ready.
             approves = [s["approve"] for s in flow if s.get("approve")]
-            result = run_test(job, task, sandboxed=True, protect=[*bodies, *approves], capture_output=True, text=True)
+            result = run_test(job, task, protect=[*bodies, *approves], capture_output=True, text=True)
+            refused = f"- {refused_note()}\n" if result.returncode and REFUSED in result.stdout + result.stderr else ""
             (job / stage["out"]).write_text(
-                f"# {stage['id']}\n\n- 명령: `{task['test']}`\n- 커밋: `{head}`\n- exit {result.returncode}\n"
+                f"# {stage['id']}\n\n- 명령: `{task['test']}`\n- 커밋: `{head}`\n- exit {result.returncode}\n{refused}"
                 f"- 커밋하지 않은 변경: {dirty or '없음'}\n\n```\n{(result.stdout + result.stderr)[-4000:]}\n```\n", encoding="utf-8")
             if result.returncode or dirty:
                 failed = f"`{task['test']}` exit {result.returncode}" + (", uncommitted changes" if dirty else "")
@@ -520,66 +521,110 @@ def advance(job, name, runner):
 CONTROL = ("task.json", "state.json", "pr.txt", "pr.diff", "run.lock", "repo/.git", ".git", *INSTRUCTIONS)
 
 
-def check_profile(job, protect=()):
-    """Seatbelt rules for the check stage, the same writes the worker's sandbox allows: the task folder, minus its
-    control files. No network but localhost and unix sockets in the task folder. No reads in the home folder (credentials) but the task folder, this
-    checkout, the product's git data and TOOLCHAINS, like blockReadsOutsideWorkingDirectories for the worker. /bin/ps alone runs outside it. The worker's own `engine.py test` already runs in Claude Code's
-    sandbox, which refuses a sandbox inside it, so only the engine's check stage uses this."""
+def user_dir(name):
+    """macOS's per-user temp (DARWIN_USER_TEMP_DIR) or cache (DARWIN_USER_CACHE_DIR) folder.
+
+    mktemp and clang's module cache use it whatever TMPDIR says, so a test needs to write there."""
+    found = subprocess.run(["getconf", name], capture_output=True, text=True).stdout.strip() if shutil.which("getconf") else ""
+    return Path(found).resolve() if found else None
+
+
+def toolchain_reads(path=None):
+    """The real folders of PATH entries inside the home folder, never the home folder itself.
+
+    A test may read and run the tools there; a toolchain home that is not on PATH (~/.rustup) is a `new --read`."""
+    home, found = Path.home().resolve(), []
+    for entry in (os.environ.get("PATH", "") if path is None else path).split(os.pathsep):
+        real = Path(entry).expanduser().resolve() if entry else None
+        if real and real.is_dir() and home in real.parents and real not in found:
+            found.append(real)
+    return [str(p) for p in found]
+
+
+def scratch(job):
+    """TMPDIR and HOME for a test: outside every git tree (the task folder is inside the office checkout) and per task."""
+    root = (user_dir("DARWIN_USER_TEMP_DIR") or Path(tempfile.gettempdir()).resolve()) / f"repo-office-{TAG}" / job.name
+    for folder in (root / "tmp", root / "home"):
+        folder.mkdir(parents=True, exist_ok=True)
+    # The test may write the user temp folder, so it could leave a link here; the engine runs outside the sandbox.
+    if root.resolve() != root or any(f.is_symlink() for f in (root / "tmp", root / "home")):
+        raise SystemExit(f"{root} is not a plain folder; remove it")
+    return root
+
+
+def check_profile(job, task, protect=()):
+    """Seatbelt rules for every test run (AGENTS.md 「테스트 명령이 받는 것」): writes to the task folder minus its control
+    files and to the user temp and cache folders; no network but localhost and unix sockets in the task folder; no reads
+    in the home folder (credentials) but the task folder, this checkout, the product's git data and the task's toolchain
+    folders. /bin/ps alone runs outside it."""
     quote = json.dumps  # SBPL strings take the same escapes as JSON for quotes and backslashes
     real = job.resolve()
     deny = " ".join(f"(literal {quote(str(real / n))}) (subpath {quote(str(real / n))})" for n in (*CONTROL, *protect))
     deny += f" (literal {quote(str(real / 'repo'))})"  # renaming repo/ away and back would rewrite repo/.git
     common = subprocess.run(["git", "-C", str(job / "repo"), "rev-parse", "--path-format=absolute", "--git-common-dir"],
                             capture_output=True, text=True, env=SAFE_GIT).stdout.strip()
-    readable = " ".join(f"(subpath {quote(str(Path(p).resolve()))})" for p in (job, BASELINE, OFFICE, *([common] if common else []),
-                                                                         *(t for t in TOOLCHAINS if t.exists())))
+    reads = task.get("read", toolchain_reads())  # recorded by `new`; tasks registered before that use PATH now
+    readable = " ".join(f"(subpath {quote(str(Path(p).resolve()))})" for p in (job, BASELINE, OFFICE, *([common] if common else []), *reads))
+    # realpath and friends stat each parent of a read folder; stat only, not listing, inside the home folder.
+    home = Path.home().resolve()
+    parents = {q for r in reads for q in Path(r).resolve().parents if q == home or home in q.parents}
+    metadata = " ".join(f"(literal {quote(str(q))})" for q in sorted(parents))
+    writable = " ".join(f"(subpath {quote(str(d))})" for d in (real, *(user_dir(n) for n in ("DARWIN_USER_TEMP_DIR", "DARWIN_USER_CACHE_DIR"))) if d)
     return ("(version 1) (allow default)\n"
             # ps is setuid root, which macOS never starts inside a sandbox; it only reads process information.
             "(allow process-exec (literal \"/bin/ps\") (with no-sandbox))\n"
             # Unix sockets only in the task folder: one outside, such as /var/run/docker.sock, can start processes outside the sandbox.
             f"(deny network-outbound) (allow network-outbound (remote ip \"localhost:*\") (remote unix-socket (subpath {quote(str(real))})))\n"
-            f"(deny file-write*) (allow file-write* (subpath {quote(str(real))}) (subpath \"/dev\"))\n"
+            f"(deny file-write*) (allow file-write* {writable} (subpath \"/dev\"))\n"
             f"(deny file-write* {deny})\n"
-            f"(deny file-read* (subpath {quote(str(Path.home().resolve()))})) (allow file-read* {readable})\n")
+            f"(deny file-read* (subpath {quote(str(Path.home().resolve()))})) (allow file-read* {readable})\n"
+            + (f"(allow file-read-metadata {metadata})\n" if metadata else ""))
 
 
-def run_test(job, task, sandboxed=False, protect=(), **kwargs):
-    # The owner wrote this command (the product's AGENTS.md test cell) with `new`; workers cannot edit task.json.
+def run_test(job, task, protect=(), **kwargs):
+    """The one test environment (AGENTS.md 「테스트 명령이 받는 것」): the check stage and the worker's `engine.py test` both use it.
+
+    The owner wrote this command (the product's AGENTS.md test cell) with `new`; workers cannot edit task.json."""
+    # The real home is unreadable; tools that cache or read config there (Godot, git) need a writable one.
     # The check stage fails on untracked files, and a worker's earlier test run would leave __pycache__ in repo/.
     # shortcut: Python bytecode only; other tools' artifacts must be in the product's .gitignore.
-    tmp = job / "tmp"
-    # Both sandboxes (the worker's Claude Code one and the check stage's) block the real home;
-    # tools that cache or read config there (Godot, git) need a writable one.
-    home = tmp / "home"
-    home.mkdir(parents=True, exist_ok=True)
-    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "HOME": str(home), "GIT_CONFIG_GLOBAL": "/dev/null"}
-    if TOOLCHAINS[2].is_dir():
-        env.setdefault("RUSTUP_HOME", str(TOOLCHAINS[2]))  # rustup finds its toolchains from HOME otherwise
-    if not sandboxed:
-        # The worker's sandbox denies .git/config and .git/hooks under its folder, so a test's `git init` in tmp/
-        # failed; the sandbox's own TMPDIR allows them (seen 2026-11-14, Claude Code 2.1.323).
-        return subprocess.run(task["test"], shell=True, cwd=job / "repo", env=env, **kwargs)
-    env["TMPDIR"] = str(tmp)  # the one folder the check stage lets the test write
-    return subprocess.run(["sandbox-exec", "-p", check_profile(job, protect), "/bin/sh", "-c", task["test"]], cwd=job / "repo",
+    root = scratch(job)
+    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "TMPDIR": str(root / "tmp"), "HOME": str(root / "home"),
+           "GIT_CONFIG_GLOBAL": "/dev/null"}
+    return subprocess.run(["sandbox-exec", "-p", check_profile(job, task, protect), "/bin/sh", "-c", task["test"]], cwd=job / "repo",
                           env=env, **kwargs)
 
 
 def test(name):
     """A worker's Bash cd is refused while blockReadsOutsideWorkingDirectories is on, so the engine runs the test in repo/.
 
-    The worker's Bash output is cut in the middle, which lost the summary line: the full output goes to tmp/test.log."""
+    stages.json excludes this exact command from the worker's sandbox, which refuses a sandbox inside it, so the
+    engine runs the test in the check stage's sandbox instead. Any other form of the call stays in the worker's
+    sandbox, where sandbox-exec fails. The worker's Bash output is cut in the middle, which lost the summary line:
+    the full output goes to test.log."""
     job = JOBS / name
     error = missing(job, name, "task.json")
     if error:
         print(error, file=sys.stderr)
         return 2
-    log = job / "tmp/test.log"
-    log.parent.mkdir(exist_ok=True)
-    with open(log, "wb") as out:
+    if not shutil.which("sandbox-exec"):
+        print("sandbox-exec is missing: the test runs only inside a sandbox", file=sys.stderr)
+        return 2
+    log = job / "test.log"
+    # Outside the sandbox: a link left in the task folder must not send the log to another file.
+    with os.fdopen(os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644), "wb") as out:
         code = run_test(job, load(job / "task.json", None), stdout=out, stderr=subprocess.STDOUT).returncode
-    print(log.read_text(encoding="utf-8", errors="replace")[-4000:])
+    text = log.read_text(encoding="utf-8", errors="replace")
+    print(text[-4000:])
+    if code and REFUSED in text:
+        print(refused_note())
     print(f"exit {code}; full output: {log}")
     return code
+
+
+def refused_note():
+    return (f"note: the sandbox refused something ({REFUSED}). A test gets only what AGENTS.md 「테스트 명령이 받는 것」 lists; "
+            "a test that needs more is a product problem to fix there, or the owner registers the task with --read")
 
 
 def preflight(name):
@@ -694,7 +739,7 @@ def allow(name, rule):
     return 0
 
 
-def new(name, repo, test, allow, base):
+def new(name, repo, test, allow, base, read=()):
     # The name becomes a folder, a branch and an hc terminal name (a-z 0-9 - _ only).
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,23}", name):
         print("task name: a-z 0-9 - _, at most 24 characters", file=sys.stderr)
@@ -704,8 +749,16 @@ def new(name, repo, test, allow, base):
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 2
+    home, reads = Path.home().resolve(), toolchain_reads()
+    for extra in read:
+        real = Path(extra).expanduser().resolve()
+        if not real.is_dir() or real == home or real in home.parents:
+            print(f"--read {extra}: must be a folder, not the home folder or above it", file=sys.stderr)
+            return 2
+        reads.append(str(real))
     job.mkdir(parents=True)
-    save(job / "task.json", {"name": name, "repo": str(Path(repo).resolve()), "test": test, "allow": allow, "base": base})
+    save(job / "task.json", {"name": name, "repo": str(Path(repo).resolve()), "test": test, "allow": allow, "base": base,
+                             "read": reads})
     (job / "INTENT.md").write_text(
         f"# {name}\n\n## 목표\n\n## 지시 원문\n\n## 하지 않을 것\n\n## 결정 기록\n", encoding="utf-8")
     subprocess.run(["git", "-C", repo, "worktree", "add", "-b", f"office/{name}", str(job / "repo"), base], check=True)
@@ -734,6 +787,8 @@ def main(argv=None):
     created.add_argument("--test", required=True, help="the product's AGENTS.md test command")
     created.add_argument("--allow", action="append", default=[], help="extra tool rule run from the task folder, e.g. 'Bash(make -C repo lint)'")
     created.add_argument("--base", default="main")
+    created.add_argument("--read", action="append", default=[],
+                         help="a toolchain folder in the home folder that is not on PATH, e.g. ~/.rustup; the test may read it")
     for command in ("run", "approve", "test", "preflight"):
         sub.add_parser(command).add_argument("task")
     added = sub.add_parser("allow")
@@ -748,7 +803,7 @@ def main(argv=None):
         print(f"write the absolute path of the repo-baseline clone into {_PATH}", file=sys.stderr)
         return 2
     if args.command == "new":
-        return new(args.task, args.repo, args.test, args.allow, args.base)
+        return new(args.task, args.repo, args.test, args.allow, args.base, args.read)
     if args.command == "workers":
         return workers()
     if args.command == "allow":

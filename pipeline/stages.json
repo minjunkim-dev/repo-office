@@ -19,6 +19,7 @@
   "failIfUnavailable": true,
   "excludedCommands": [
    "python3 {office}/pipeline/engine.py preflight {name}",
+   "python3 {office}/pipeline/engine.py test {name}",
    "gh pr view*",
    "gh pr checks*",
    "gh api --paginate repos/*"

@@ -67,6 +67,9 @@ class PipelineTests(unittest.TestCase):
         self.baseline = Path(self.tmp.name) / "baseline"  # a repo-baseline clone outside the office checkout
         (self.baseline / "tools").mkdir(parents=True)
         self.engine.BASELINE = self.baseline
+        # Test runs get TMPDIR and HOME in the user temp folder, outside the task folder; remove this run's.
+        user_tmp = self.engine.user_dir("DARWIN_USER_TEMP_DIR") or Path(tempfile.gettempdir()).resolve()
+        self.addCleanup(shutil.rmtree, user_tmp / f"repo-office-{self.engine.TAG}", True)
         # The engine now runs gh writes itself: no test may reach the real gh. fake_gh() puts a recording one first.
         stub = Path(self.tmp.name) / "nogh"
         stub.mkdir()
@@ -804,7 +807,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(titles, ["fix: x", "fix: x", "fix: z"])
 
     def test_check_stage_reads_the_clone_and_the_office_checkout(self):
-        profile = self.engine.check_profile(self.job)
+        profile = self.engine.check_profile(self.job, {})
         for path in (self.baseline, self.engine.OFFICE):
             self.assertIn(json.dumps(str(path.resolve())), profile)
 
@@ -996,15 +999,33 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(self.engine.test("search"), 0)
             self.assertFalse((self.job / "repo/__pycache__").exists())
 
-    def test_a_worker_test_run_gets_the_same_home_as_the_check(self):
-        # The worker's Claude Code sandbox blocks writes to the real home; Godot failed writing its caches there.
-        # It keeps the sandbox's TMPDIR: that sandbox denies .git/config and hooks in the task folder, so `git init` failed in tmp/.
-        task = {"test": 'echo "$HOME"; echo "$TMPDIR"; echo "$GIT_CONFIG_GLOBAL"; echo x > "$HOME/c" && echo cache ok'}
-        sandbox_tmp = str(Path(self.tmp.name) / "sandbox-tmp")
-        with unittest.mock.patch.dict(os.environ, {"HOME": self.tmp.name, "TMPDIR": sandbox_tmp}):  # without the fix, write here, not the real home
-            result = self.engine.run_test(self.job, task, capture_output=True, text=True)
-        self.assertEqual(result.stdout.split("\n")[:-1],
-                         [str(self.job / "tmp/home"), sandbox_tmp, "/dev/null", "cache ok"], result.stderr)
+    @unittest.skipUnless(shutil.which("sandbox-exec"), "macOS sandbox-exec")
+    def test_a_worker_test_run_is_the_check_stage_environment(self):
+        # The worker's Claude Code sandbox and the check stage's differed (ps, /var/folders, git init in the task folder).
+        # Now `engine.py test` leaves the worker's sandbox (stages.json excludedCommands) and uses run_test like the check.
+        outside = Path(tempfile.mkdtemp(dir="/private/tmp"))  # the user can write here; the test may not
+        self.addCleanup(shutil.rmtree, outside, True)
+        task = json.loads((self.job / "task.json").read_text())
+        task["test"] = ('echo "$HOME"; echo "$TMPDIR"; echo "$GIT_CONFIG_GLOBAL"; '
+                        '(git -C "$TMPDIR" rev-parse 2>/dev/null && echo in git || echo outside git); '
+                        f'(echo x 2>/dev/null > {outside}/w && echo outside ok || echo outside denied)')
+        (self.job / "task.json").write_text(json.dumps(task))
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.engine.test("search")
+        root = self.engine.scratch(self.job)
+        self.assertEqual(out.getvalue().split("\n")[:5], [str(root / "home"), str(root / "tmp"), "/dev/null", "outside git", "outside denied"])
+        self.assertNotIn(self.job.resolve(), root.parents)
+        self.assertFalse((outside / "w").exists())
+
+    def test_the_excluded_test_command_is_exactly_the_one_workers_may_run(self):
+        # Claude Code takes a call out of the sandbox only when every command in it matches (2026-11-14 docs and
+        # probe: `cmd; true` and `FOO=1 cmd` stayed sandboxed, so sandbox-exec failed there). A wildcard would let more out.
+        config = json.loads((self.engine.STAGES).read_text())
+        rule = "python3 {office}/pipeline/engine.py test {name}"
+        self.assertIn(rule, config["sandbox"]["excludedCommands"])
+        self.assertTrue(all(f"Bash({rule})" in s["tools"] for s in config["flow"] if "{allow}" in s.get("tools", [])))
+        self.assertIn("runs outside the sandbox", self.engine.bad_rule(f"Bash(python3 {self.engine.OFFICE}/pipeline/engine.py test *)",
+                                                                         self.job, {"name": "search", "test": "x"}) or "")
 
     def test_a_worker_sees_the_end_of_the_test_output_and_the_full_log(self):
         # Claude Code cut a long output in the middle, so the worker never saw the summary line (2026-11-14).
@@ -1013,11 +1034,26 @@ class PipelineTests(unittest.TestCase):
         (self.job / "task.json").write_text(json.dumps(task))
         with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(self.engine.test("search"), 3)
-        log = self.job / "tmp/test.log"
+        log = self.job / "test.log"
         self.assertLess(len(out.getvalue()), 5000)
         self.assertIn("Ran 3 tests\nerr\n", out.getvalue())
         self.assertIn(f"exit 3; full output: {log}", out.getvalue())
         self.assertTrue(log.read_text().startswith("head\n" + "x" * 30000))
+
+    @unittest.skipUnless(shutil.which("sandbox-exec"), "macOS sandbox-exec")
+    def test_a_refused_test_points_at_the_contract(self):
+        task = json.loads((self.job / "task.json").read_text())
+        task["test"] = "echo x > /private/tmp/office-refused-$$"
+        (self.job / "task.json").write_text(json.dumps(task))
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertNotEqual(self.engine.test("search"), 0)
+        self.assertIn("테스트 명령이 받는 것", out.getvalue())
+
+    def test_new_refuses_a_read_of_the_home_folder(self):
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(self.engine.new("other", str(self.job / "repo"), "true", [], "main", [str(Path.home())]), 2)
+        self.assertIn("--read", err.getvalue())
+        self.assertFalse((self.engine.JOBS / "other").exists())
 
     def test_baseline_path_names_the_clone_else_commands_stop(self):
         office = Path(self.tmp.name) / "standalone"
@@ -1113,43 +1149,51 @@ class PipelineTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("sandbox-exec"), "macOS sandbox-exec")
     def test_check_stage_runs_the_test_where_it_writes_only_the_task_folder(self):
-        outside = Path(self.tmp.name) / "outside.txt"  # a sibling of the task folder, still in the temp folder
+        outside = Path(tempfile.mkdtemp(dir="/private/tmp")) / "outside.txt"  # the user can write here; the test may not
+        self.addCleanup(shutil.rmtree, outside.parent, True)
         script = "; ".join(f"(echo x >> {p} && echo {name} ok || echo {name} denied)" for name, p in (
             ("repo", "kept.txt"), ("outside", outside), ("task", self.job / "task.json"), ("pr", self.job / "pr.txt"),
-            ("gitfile", self.job / "repo/.git"), ("claude", self.job / "CLAUDE.md"), ("body", self.job / "pr-body.md"))) + f'; echo x > "$TMPDIR/t" && echo tmp ok; (ls {Path.home()} >/dev/null 2>&1 && echo home ok || echo home denied)'
+            ("gitfile", self.job / "repo/.git"), ("claude", self.job / "CLAUDE.md"), ("body", self.job / "pr-body.md"))) + f'; echo x > "$TMPDIR/t" && echo tmp ok; (env -i /usr/bin/mktemp -d >/dev/null && echo mktemp ok); (ls {Path.home()} >/dev/null 2>&1 && echo home ok || echo home denied)'
         script += f"; (mv {self.job / 'repo'} {self.job / 'moved'} 2>/dev/null && echo rename ok || echo rename denied)"
-        result = self.engine.run_test(self.job, {"test": script}, sandboxed=True, protect=["pr-body.md"], capture_output=True, text=True)
+        result = self.engine.run_test(self.job, {"test": script}, protect=["pr-body.md"], capture_output=True, text=True)
         self.assertEqual(result.stdout.split("\n")[:-1], ["repo ok", "outside denied", "task denied", "pr denied",
-                                                         "gitfile denied", "claude denied", "body denied", "tmp ok", "home denied",
+                                                         "gitfile denied", "claude denied", "body denied", "tmp ok", "mktemp ok", "home denied",
                                                          "rename denied"])
         self.assertFalse(outside.exists() or (self.job / "pr.txt").exists() or (self.job / "CLAUDE.md").exists())
 
     @unittest.skipUnless(shutil.which("sandbox-exec"), "macOS sandbox-exec")
-    def test_check_stage_gives_a_home_inside_the_task_folder(self):
+    def test_check_stage_gives_a_home_of_its_own(self):
         # The real home is unreadable there; without this HOME, git fails on ~/.gitconfig and tools fail writing their caches.
-        script = 'git rev-parse HEAD >/dev/null && echo git ok; echo "$HOME"; echo x > "$HOME/c" && echo cache ok'
-        result = self.engine.run_test(self.job, {"test": script}, sandboxed=True, capture_output=True, text=True)
-        self.assertEqual(result.stdout.split("\n")[:-1], ["git ok", str(self.job / "tmp/home"), "cache ok"], result.stderr)
+        script = 'git rev-parse HEAD >/dev/null && echo git ok; echo "$HOME"; echo x > "$HOME/c" && echo cache ok; git init -q "$TMPDIR/g" && echo init ok'
+        result = self.engine.run_test(self.job, {"test": script}, capture_output=True, text=True)
+        self.assertEqual(result.stdout.split("\n")[:-1], ["git ok", str(self.engine.scratch(self.job) / "home"), "cache ok", "init ok"], result.stderr)
 
     @unittest.skipUnless(shutil.which("sandbox-exec"), "macOS sandbox-exec")
     def test_check_stage_runs_ps_but_no_other_setuid_program(self):
         # macOS never starts a setuid program in a sandbox; smallnext and MobileEnvironment tests call ps.
         # sudo -V needs no password, so outside the sandbox it exits 0; `sudo -n true` failed there too and proved nothing.
         script = "(ps -p $$ -o pid= >/dev/null && echo ps ok); (/usr/bin/sudo -V >/dev/null 2>&1 && echo sudo ok || echo sudo denied)"
-        result = self.engine.run_test(self.job, {"test": script}, sandboxed=True, capture_output=True, text=True)
+        result = self.engine.run_test(self.job, {"test": script}, capture_output=True, text=True)
         self.assertEqual(result.stdout.split("\n")[:-1], ["ps ok", "sudo denied"], result.stderr)
 
-    @unittest.skipUnless(shutil.which("sandbox-exec") and (Path.home() / ".cargo/bin/rustc").exists(), "macOS, rustup")
-    def test_check_stage_runs_the_owners_toolchains_but_reads_no_other_home_file(self):
-        # smallnext's api-check runs rustc from rustup; the rest of ~/.cargo holds credentials.toml.
-        cargo = Path.home() / ".cargo"
-        script = (f"({cargo}/bin/rustc --version >/dev/null && echo rustc ok); (ls {cargo} >/dev/null 2>&1 && echo cargo ok || echo cargo denied); "
-                  f"(echo x > {cargo}/bin/planted 2>/dev/null && echo write ok || echo write denied)")
-        with unittest.mock.patch.dict(os.environ):
-            os.environ.pop("RUSTUP_HOME", None)  # rustup would look under the engine's HOME and try to download a toolchain
-            result = self.engine.run_test(self.job, {"test": script}, sandboxed=True, capture_output=True, text=True)
-        self.assertEqual(result.stdout.split("\n")[:-1], ["rustc ok", "cargo denied", "write denied"], result.stderr)
-        self.assertFalse((cargo / "bin/planted").exists())
+    @unittest.skipUnless(shutil.which("sandbox-exec"), "macOS sandbox-exec")
+    def test_check_stage_runs_toolchains_on_path_but_reads_no_other_home_file(self):
+        # A home folder of its own: tools on PATH there run, a secret beside them stays unreadable, nothing is written.
+        home = Path(tempfile.mkdtemp(dir="/private/tmp")).resolve()
+        self.addCleanup(shutil.rmtree, home, True)
+        (home / "tools/bin").mkdir(parents=True)
+        (home / "tools/bin/hello").write_text("#!/bin/sh\necho hello ok\n")
+        (home / "tools/bin/hello").chmod(0o755)
+        (home / "secret").write_text("s")
+        with unittest.mock.patch.dict(os.environ, {"HOME": str(home), "PATH": f"{home}/tools/bin{os.pathsep}{os.environ['PATH']}"}):
+            reads = self.engine.toolchain_reads()
+            script = (f"hello; (cd {home}/tools/bin && /bin/pwd -P >/dev/null && echo realpath ok); "
+                      f"(cat {home}/secret >/dev/null 2>&1 && echo secret ok || echo secret denied); "
+                      f"(ls {home} >/dev/null 2>&1 && echo list ok || echo list denied); "
+                      f"(echo x > {home}/tools/bin/planted 2>/dev/null && echo write ok || echo write denied)")
+            result = self.engine.run_test(self.job, {"test": script, "read": reads}, capture_output=True, text=True)
+        self.assertEqual(reads, [str(home / "tools/bin")])
+        self.assertEqual(result.stdout.split("\n")[:-1], ["hello ok", "realpath ok", "secret denied", "list denied", "write denied"], result.stderr)
 
     @unittest.skipUnless(shutil.which("sandbox-exec") and shutil.which("nc"), "macOS sandbox-exec")
     def test_check_stage_reaches_only_unix_sockets_in_the_task_folder(self):
@@ -1162,7 +1206,7 @@ class PipelineTests(unittest.TestCase):
             server.bind(str(path))
             server.listen()
         script = "; ".join(f"(nc -U -w 1 {p} </dev/null 2>/dev/null && echo {n} ok || echo {n} denied)" for n, p in paths.items())
-        result = self.engine.run_test(self.job, {"test": script}, sandboxed=True, capture_output=True, text=True)
+        result = self.engine.run_test(self.job, {"test": script}, capture_output=True, text=True)
         self.assertEqual(result.stdout.split("\n")[:-1], ["inside ok", "outside denied"])
 
     def test_workers_reads_files_only(self):
