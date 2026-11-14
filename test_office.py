@@ -1041,6 +1041,29 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(log.read_text().startswith("head\n" + "x" * 30000))
 
     @unittest.skipUnless(shutil.which("sandbox-exec"), "macOS sandbox-exec")
+    def test_a_test_that_swaps_its_log_for_a_link_does_not_print_the_link_target(self):
+        # The engine prints the log outside the sandbox; reopening it by name would follow a link the test left there.
+        target = Path(self.tmp.name) / "elsewhere"
+        target.write_text("NOT THE LOG\n")
+        task = json.loads((self.job / "task.json").read_text())
+        task["test"] = f"echo mine; mv ../test.log ../moved.log && ln -s {target} ../test.log; exit 1"
+        (self.job / "task.json").write_text(json.dumps(task))
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(self.engine.test("search"), 1)
+        self.assertTrue((self.job / "test.log").is_symlink())  # the swap ran
+        self.assertIn("mine", out.getvalue())
+        self.assertNotIn("NOT THE LOG", out.getvalue())
+
+    def test_a_relative_path_entry_is_no_toolchain(self):
+        cwd = os.getcwd()
+        self.addCleanup(os.chdir, cwd)
+        inside = Path(tempfile.mkdtemp(dir=Path.home())).resolve()
+        self.addCleanup(shutil.rmtree, inside, True)
+        (inside / "bin").mkdir()
+        os.chdir(inside)
+        self.assertEqual(self.engine.toolchain_reads(f".{os.pathsep}bin"), [])
+
+    @unittest.skipUnless(shutil.which("sandbox-exec"), "macOS sandbox-exec")
     def test_a_refused_test_points_at_the_contract(self):
         task = json.loads((self.job / "task.json").read_text())
         task["test"] = "echo x > /private/tmp/office-refused-$$"

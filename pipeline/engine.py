@@ -535,7 +535,8 @@ def toolchain_reads(path=None):
     A test may read and run the tools there; a toolchain home that is not on PATH (~/.rustup) is a `new --read`."""
     home, found = Path.home().resolve(), []
     for entry in (os.environ.get("PATH", "") if path is None else path).split(os.pathsep):
-        real = Path(entry).expanduser().resolve() if entry else None
+        # A relative entry ("." or "bin") names wherever `new` ran from, not a toolchain.
+        real = Path(entry).expanduser().resolve() if os.path.isabs(os.path.expanduser(entry)) else None
         if real and real.is_dir() and home in real.parents and real not in found:
             found.append(real)
     return [str(p) for p in found]
@@ -611,10 +612,12 @@ def test(name):
         print("sandbox-exec is missing: the test runs only inside a sandbox", file=sys.stderr)
         return 2
     log = job / "test.log"
-    # Outside the sandbox: a link left in the task folder must not send the log to another file.
-    with os.fdopen(os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644), "wb") as out:
+    # Outside the sandbox: a link left in the task folder must not send the log to another file. Read back through the
+    # same descriptor: the test may swap test.log for a link while it runs, and the engine would print what it names.
+    with os.fdopen(os.open(log, os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644), "w+b") as out:
         code = run_test(job, load(job / "task.json", None), stdout=out, stderr=subprocess.STDOUT).returncode
-    text = log.read_text(encoding="utf-8", errors="replace")
+        out.seek(0)
+        text = out.read().decode("utf-8", errors="replace")
     print(text[-4000:])
     if code and REFUSED in text:
         print(refused_note())
