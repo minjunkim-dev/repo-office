@@ -143,17 +143,19 @@
 
 ## 7. 다시 재현하는 법
 
-토큰을 적게 쓰려면 단계표를 복사해 각 claude 단계에 `"model": "sonnet"`을 넣고 `OFFICE_STAGES`로 지정한다. Haiku는 위 함정 때문에 Bash가 자주 막힌다.
+토큰을 적게 쓰려면 단계표를 복사해 각 claude 단계에 `"model": "sonnet"`을 넣고 `OFFICE_STAGES`로 지정한다. 
 
 ```bash
 # 장난감 제품 저장소
 mkdir -p /tmp/toy && cd /tmp/toy && git init -q -b main
 printf 'def add(a, b):\n    return a + b\n' > calc.py
 printf 'import unittest\nfrom calc import add\n\nclass T(unittest.TestCase):\n    def test_add(self):\n        self.assertEqual(add(1, 2), 3)\n' > test_calc.py
-printf '__pycache__/\n' > .gitignore && git add -A && git commit -qm init
+printf '__pycache__/\n' > .gitignore
+printf '# toy\n\n## 명령\n\n- setup: `N/A: 없음`\n- check: `N/A: 없음`\n- test: `python3 -m unittest`\n' > AGENTS.md
+git add -A && git commit -qm init
 
 # office 체크아웃 루트에서(이 폴더는 Claude Code에서 한 번 신뢰해 둔다. baseline.path를 먼저 적는다)
-python3 pipeline/engine.py new toy-subtract --repo /tmp/toy --test 'python3 -m unittest'
+python3 pipeline/engine.py new toy-subtract --repo /tmp/toy   # test 명령은 AGENTS.md 「명령」에서 읽는다
 # jobs/toy-subtract/INTENT.md에 목표를 쓴다. 예: calc.py에 subtract(a, b)와 테스트를 더한다
 OFFICE_STAGES=/tmp/stages-sonnet.json python3 pipeline/engine.py run toy-subtract   # exit 3: 설계 승인 대기
 python3 pipeline/engine.py approve toy-subtract                                       # 사람이 design.md를 읽은 뒤
