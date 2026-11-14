@@ -6,7 +6,7 @@
   engine.py run <task>        advance until a person is needed, the task is blocked, or it is done
   engine.py approve <task>    a person approves the current design file (bound to its sha256)
   engine.py workers           show every task's stage from files only
-  engine.py board             write jobs/board.html, the same view as a page that reloads itself (run also rewrites it)
+  engine.py board             write jobs/board.html: the Pixel Agents office beside the stages and task cards (run also rewrites it)
   engine.py test <task>       run the task's test command in its repo/, full output in test.log
   engine.py preflight <task>  run repo-baseline's review preflight for pr.txt in its repo/, diff into pr.diff
   engine.py skills <task> <base>  run matt-skills check_skills.py in its repo/ (exit 0 delegate, 1 missing, 2 do not)
@@ -806,7 +806,14 @@ def job_status(job):
 
 
 def tasks():
-    return [job_status(p) for p in sorted(JOBS.glob("*")) if (p / "task.json").exists()]
+    rows = []
+    for job in sorted(p for p in JOBS.glob("*") if (p / "task.json").exists()):
+        try:
+            rows.append(job_status(job))
+        except Exception as error:  # one hand-edited state.json (since not a number, a key missing) must not hide the rest
+            rows.append({"name": job.name, "stage": "unreadable", "at": "-", "minutes": 0, "model": "-", "last": "-",
+                         "note": f"state.json을 읽지 못함: {type(error).__name__}"})
+    return rows
 
 
 def workers():
@@ -818,21 +825,25 @@ def workers():
 
 
 def board():
-    """Write jobs/board.html: a pixel office where each task sits at its stage's desk, from files only.
-    The page draws itself from the JSON put into pipeline/board.html and reloads every 5 seconds."""
+    """Write jobs/board.html, one screen: the Pixel Agents office (OFFICE_PIXEL_AGENTS, a local address) beside
+    jobs/board-tasks.html, stage lanes and a card per task from files only, which reloads itself every 5 seconds."""
     flow = [{"id": s["id"], "by": s["by"]} for s in load(STAGES, {"flow": []})["flow"]]
     # state.json may hold any JSON (NaN, objects): give the page only text and whole numbers, so one task cannot break it.
     rows = [{k: v if isinstance(v, int) else str(v) for k, v in t.items()} for t in tasks()]
     data = json.dumps({"time": f"{datetime.now():%H:%M:%S}", "flow": flow, "tasks": rows}, ensure_ascii=False)
     # Inside <script>, a worker's text must not close the tag: escape <, > and & as JSON \u escapes.
     data = data.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
-    page = (PIPELINE / "board.html").read_text(encoding="utf-8").replace("/*DATA*/", data)
-    out = JOBS / "board.html"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_name(f".board.{os.getpid()}.tmp")  # runs of other tasks write the board at the same time
-    tmp.write_text(page, encoding="utf-8")
-    tmp.replace(out)  # a reload never reads half a page
-    return out
+    # Only a local http address without a query: the token URL would hand the page the right to install hooks.
+    pixel = os.environ.get("OFFICE_PIXEL_AGENTS", "http://127.0.0.1:3100").strip()
+    pixel = pixel if re.fullmatch(r"http://(127\.0\.0\.1|localhost):\d{1,5}/?", pixel) else ""
+    pages = {"board-tasks.html": (PIPELINE / "board-tasks.html").read_text(encoding="utf-8").replace("/*DATA*/", data),
+             "board.html": (PIPELINE / "board.html").read_text(encoding="utf-8").replace("/*PIXEL*/", pixel)}
+    JOBS.mkdir(parents=True, exist_ok=True)
+    for name, page in pages.items():
+        tmp = JOBS / f".{name}.{os.getpid()}.tmp"  # runs of other tasks write the board at the same time
+        tmp.write_text(page, encoding="utf-8")
+        tmp.replace(JOBS / name)  # a reload never reads half a page
+    return JOBS / "board.html"
 
 
 def refresh_board():
