@@ -287,6 +287,8 @@ class PipelineTests(unittest.TestCase):
                 self.engine.run("search", worker)
                 calls = [c[:2] for c in gh()]
                 self.assertEqual(calls.count(["pr", "ready"]), int(ready))
+                # The review's model follows the same proof: sonnet for this checked commit only when it was easy.
+                self.assertEqual(self.state().get("easy_pr") == self.state()["checked"], bool(ready))
                 if ready:
                     self.assertIn(["pr", "ready", "https://github.com/O/R/pull/7"], gh())
                     self.assertEqual(self.state()["stage"], "review")  # past the person's Ready
@@ -938,6 +940,77 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("pull_request_template.md", failed[0])
         self.assertIn("test passes on main: `exit 5`: exit 5", failed[1])
         self.assertEqual(subprocess.run(["git", "-C", str(repo), "worktree", "list"], capture_output=True, text=True).stdout.count("\n"), 1)
+
+    def routed(self, design_text, fail_haiku=None):
+        """Run to the draft wait with a design that says design_text; fail_haiku: "silent", "blocked" or "check" for a haiku implement."""
+        job = self.job
+
+        class Worker(FakeWorker):
+            def __call__(self, name, cwd, argv, message):
+                stage = name.rsplit("-", 1)[1]
+                model = argv[argv.index("--model") + 1]
+                if stage == "implement" and model == "haiku" and fail_haiku == "check":
+                    result = super().__call__(name, cwd, argv, message)
+                    (job / "repo/pass").unlink()  # writes its result but leaves a commit whose test fails
+                    return result
+                if stage == "implement" and model == "haiku" and fail_haiku:
+                    self.calls.append((stage, argv, message))
+                    if fail_haiku == "blocked":
+                        (job / "BLOCKED.md").write_text("gave up\n", encoding="utf-8")
+                    return None
+                result = super().__call__(name, cwd, argv, message)
+                if stage == "design":
+                    (job / "design.md").write_text(design_text, encoding="utf-8")
+                if stage == "implement":
+                    (job / "repo/pass").write_text("")
+                return result
+
+        worker = Worker(job)
+        self.engine.run("search", worker)
+        self.engine.approve("search")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.engine.run("search", worker)
+        return [(c[0], c[1][c[1].index("--model") + 1], c[1][c[1].index("--resume" if "--resume" in c[1] else "--session-id") + 1])
+                for c in worker.calls]
+
+    def test_each_stage_gets_its_model_from_the_approved_difficulty(self):
+        work = self.engine.session_id("search", "work")
+        self.assertEqual(self.routed("# d\n\n난이도: 쉬움\n"), [("design", "sonnet", work), ("implement", "haiku", work)])
+        self.assertEqual(self.state()["models"], [{"stage": "design", "model": "sonnet", "rerun": False},
+                                                  {"stage": "implement", "model": "haiku", "rerun": False}])
+        for text in ("# d\n", "난이도: 보통\n", "난이도: 어려움\n", "난이도: easy\n", "난이도: 쉬움\n난이도: 보통\n", "- 난이도: 쉬움\n"):
+            with self.subTest(text=text):
+                shutil.rmtree(self.job / "repo")
+                for f in self.job.iterdir():
+                    if f.is_file() and f.name not in ("task.json", "INTENT.md"):
+                        f.unlink()
+                subprocess.run(["git", "init", "-q", str(self.job / "repo")], check=True)
+                for args in (["config", "user.email", "t@example.com"], ["config", "user.name", "t"], ["commit", "-q", "--allow-empty", "-m", "i"]):
+                    subprocess.run(["git", "-C", str(self.job / "repo"), *args], check=True)
+                (self.job / "repo/.git/info/exclude").write_text("pass\n")
+                (self.job / "repo/pass").write_text("")
+                self.assertEqual([m for _, m, _ in self.routed(text)], ["sonnet", "sonnet"])
+
+    def test_the_review_runs_on_opus_unless_the_pr_proved_easy(self):
+        stage = next(s for s in json.loads(self.engine.STAGES.read_text())["flow"] if s["id"] == "review")
+        flow = json.loads(self.engine.STAGES.read_text())["flow"]
+        self.assertEqual(self.engine.stage_model(stage, self.job, {}, flow), "opus")
+        self.assertEqual(self.engine.stage_model(stage, self.job, {"easy_pr": "abc", "checked": "abc"}, flow), "sonnet")
+        self.assertEqual(self.engine.stage_model(stage, self.job, {"easy_pr": "abc", "checked": "def"}, flow), "opus")  # a later commit
+        self.assertNotIn("haiku", [self.engine.stage_model(stage, self.job, st, flow) for st in ({}, {"easy_pr": "a", "checked": "a"})])
+
+    def test_a_failed_haiku_implement_reruns_once_on_sonnet_in_a_new_session(self):
+        work, fresh = self.engine.session_id("search", "work"), self.engine.session_id("search", "work-sonnet")
+        for mode in ("silent", "check", "blocked"):
+            with self.subTest(mode=mode):
+                if mode != "silent":
+                    self.setUp()
+                calls = self.routed("난이도: 쉬움\n", fail_haiku=mode)
+                self.assertEqual(calls, [("design", "sonnet", work), ("implement", "haiku", work), ("implement", "sonnet", fresh)])
+                self.assertEqual(self.state()["models"][-1], {"stage": "implement", "model": "sonnet", "rerun": True})
+                self.assertIn("exit 0", (self.job / "check.md").read_text())  # the sonnet run passed the check
+                self.assertNotIn("gave up", (self.job / "BLOCKED.md").read_text() if (self.job / "BLOCKED.md").exists() else "")
+        self.assertTrue((self.job / "BLOCKED.haiku.md").exists())
 
     def test_workers_reads_files_only(self):
         self.engine.run("search", FakeWorker(self.job))
