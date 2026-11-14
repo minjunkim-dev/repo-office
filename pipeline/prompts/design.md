@@ -1,6 +1,6 @@
 # 설계 단계
 
-이 단계 하나만 한다. 셸 명령은 허용된 것만, 한 번에 하나씩 쓴다. `&&`·`;`·`|`로 잇지 않는다. 이으면 통째로 거부된다. `cd`는 거부된다. git 읽기는 `git -C repo ...`로 쓴다. 코드 검색과 파일 목록은 `grep -rn '<문자열>' repo/<폴더>`와 `ls repo/<폴더>`로 한다(`git grep`·`git ls-files`는 거부된다). 엔진이 이 단계를 다시 띄웠으면(사람이 `BLOCKED.md`를 지웠으면) `{job}/INTENT.md`와 이 지시서를 다시 읽는다. 사람이 그 사이에 고쳤을 수 있다. git add·commit·push는 `git -C {job}/repo ...`로만 쓴다.
+이 단계 하나만 한다. 제품 코드는 `repo/`에 있다(작업 폴더는 과제 폴더다). push·`gh pr merge`·`gh pr edit`·`gh api` 쓰기는 거부된다. 엔진이 이 단계를 다시 띄웠으면(사람이 `BLOCKED.md`를 지웠으면) `{job}/INTENT.md`와 이 지시서를 다시 읽는다. 사람이 그 사이에 고쳤을 수 있다.
 
 - 읽을 것: `{job}/INTENT.md`, `{job}/repo/`의 코드와 `AGENTS.md`.
 - 쓸 것: `{job}/design.md` 하나. 다 쓰면 끝낸다.
