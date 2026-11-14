@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>office 상태판</title>
+<style>
+:root {
+  --bg: #1b1d2a; --panel: #262938; --line: #3a3e55; --fg: #eef0f7; --mute: #9aa0b8;
+  --work: #5ad1a0; --wait: #ffc857; --bad: #ff6b6b; --done: #7aa7ff;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 -apple-system, system-ui, "Apple SD Gothic Neo", sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+h1 { font-size: 18px; margin: 0; letter-spacing: .02em; }
+.meta { color: var(--mute); font-size: 13px; }
+.scene { width: 100%; border-radius: 10px; border: 1px solid var(--line); background: #2b2440; display: block; image-rendering: pixelated; }
+.scene text { font-family: -apple-system, system-ui, "Apple SD Gothic Neo", sans-serif; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 10px 2px 18px; color: var(--mute); font-size: 13px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; min-width: 0; }
+.card h2 { font-size: 15px; margin: 0 0 6px; display: flex; justify-content: space-between; gap: 8px; }
+.pill { font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 99px; color: #15161f; white-space: nowrap; }
+.track { display: flex; gap: 3px; margin: 8px 0; }
+.track span { flex: 1; height: 6px; border-radius: 2px; background: var(--line); }
+.track span.past { background: #6b7194; }
+.track span.now { background: var(--c); box-shadow: 0 0 6px var(--c); }
+.steps { display: flex; justify-content: space-between; font-size: 11px; color: var(--mute); }
+.row { color: var(--mute); font-size: 13px; margin-top: 6px; overflow-wrap: anywhere; }
+.note { color: var(--fg); font-size: 13px; margin-top: 6px; overflow-wrap: anywhere; }
+a { color: var(--done); }
+.empty { color: var(--mute); padding: 24px 0; }
+@keyframes type { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1px); } }
+@keyframes glow { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+@keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
+.typing { animation: type .5s steps(2) infinite; }
+.screen { animation: glow 1.6s steps(3) infinite; }
+.bubble { animation: float 1.2s steps(2) infinite; }
+@media (prefers-reduced-motion: reduce) { .typing, .screen, .bubble { animation: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>office 상태판</h1>
+    <span class="meta" id="meta"></span>
+  </header>
+  <svg class="scene" id="scene" viewBox="0 0 384 200" role="img" aria-label="과제마다 지금 단계의 책상에 앉은 작업자"></svg>
+  <div class="legend">
+    <span><i style="background:var(--work)"></i>작업 중</span>
+    <span><i style="background:var(--wait)"></i>사람 차례(승인·병합)</span>
+    <span><i style="background:var(--bad)"></i>막힘</span>
+    <span>작업자 화면: <code>hc attach &lt;이름&gt;</code></span>
+  </div>
+  <section class="cards" id="cards"></section>
+</main>
+<script type="application/json" id="data">/*DATA*/</script>
+<script>
+"use strict";
+// Original pixel art drawn here; no outside images. Data comes from the JSON above, set only through textContent.
+const D = JSON.parse(document.getElementById("data").textContent);
+const NS = "http://www.w3.org/2000/svg";
+const svg = document.getElementById("scene");
+const el = (tag, attrs, parent) => {
+  const n = document.createElementNS(NS, tag);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  (parent || svg).appendChild(n);
+  return n;
+};
+const px = (x, y, w, h, fill, parent) => el("rect", { x, y, width: w, height: h, fill, "shape-rendering": "crispEdges" }, parent);
+const label = (x, y, text, fill, size, parent) => {
+  const t = el("text", { x, y, fill, "font-size": size || 6, "text-anchor": "middle" }, parent);
+  t.textContent = text;
+  return t;
+};
+
+// Rooms. Each stage of stages.json sits at one desk; people's turns go to the owner's desk.
+const ZONES = {
+  leader: { x: 8, y: 30, w: 84, title: "대장 · leader", rug: "#3b4a6b" },
+  design: { x: 100, y: 30, w: 84, title: "설계 · opus", rug: "#4b3b6b" },
+  implement: { x: 192, y: 30, w: 84, title: "구현 · haiku/sonnet", rug: "#3b5b55" },
+  check: { x: 284, y: 30, w: 92, title: "검사 · 스크립트", rug: "#4a4a4a", machine: true },
+  pr: { x: 8, y: 112, w: 120, title: "PR 창구 · 엔진", rug: "#5b4a3b", counter: true },
+  review: { x: 136, y: 112, w: 112, title: "리뷰 · 다른 세션", rug: "#3b4f6b" },
+  owner: { x: 256, y: 112, w: 120, title: "소유자 · 사람", rug: "#6b4a3b", boss: true },
+};
+const ZONE_OF = { design: "design", approve: "owner", implement: "implement", check: "check",
+                  draft: "pr", ready: "pr", review: "review", post: "pr", done: "owner" };
+const STAGE_NAME = { design: "설계", approve: "설계 승인", implement: "구현", check: "검사", draft: "초안 PR",
+                     ready: "Ready·봇", review: "리뷰", post: "본문 올리기", done: "병합 대기" };
+const human = new Set(D.flow.filter(s => s.by === "human").map(s => s.id).concat(["done"]));
+
+function status(t) {
+  if (t.stage === "blocked") return { key: "bad", text: "막힘" };
+  if (t.at === "done") return { key: "done", text: "병합 대기" };
+  if (human.has(t.at)) return { key: "wait", text: "사람 차례" };
+  return { key: "work", text: "작업 중" };
+}
+const COLOR = { work: "#5ad1a0", wait: "#ffc857", bad: "#ff6b6b", done: "#7aa7ff" };
+const SHIRTS = ["#e07a5f", "#81b29a", "#f2cc8f", "#6d9dc5", "#c77dff", "#f28482", "#84a59d", "#ffb4a2"];
+const hash = s => [...s].reduce((h, c) => (h * 31 + c.codePointAt(0)) >>> 0, 7);
+
+function room() {
+  px(0, 0, 384, 200, "#2b2440");
+  px(0, 0, 384, 22, "#3d3460");                 // wall
+  for (let x = 0; x < 384; x += 16) px(x, 22, 15, 1, "#4a3f73");
+  for (let y = 24; y < 200; y += 12)             // floor boards
+    for (let x = (y / 12) % 2 ? 0 : 12; x < 384; x += 24) px(x, y, 23, 11, "#352c52");
+  [[40, 4], [170, 4], [300, 4]].forEach(([x, y]) => {   // windows
+    px(x, y, 44, 14, "#5b8fd6"); px(x + 21, y, 2, 14, "#3d3460"); px(x, y + 6, 44, 2, "#3d3460");
+    px(x + 4, y + 2, 6, 2, "#9cc3f0");
+  });
+  const clock = label(130, 15, D.time, "#ffe6a7", 7);
+  clock.setAttribute("font-weight", "700");
+  [[12, 16], [372, 16]].forEach(([x, y]) => {   // plants
+    px(x - 3, y, 7, 6, "#a0522d"); px(x - 5, y - 6, 4, 6, "#4caf50"); px(x, y - 9, 4, 9, "#66bb6a"); px(x + 3, y - 5, 4, 5, "#4caf50");
+  });
+}
+
+function desk(z, slots) {
+  const g = el("g", {});
+  px(z.x + 2, z.y + 4, z.w - 4, 70, z.rug, g);                     // rug
+  px(z.x + 4, z.y + 6, z.w - 8, 66, "rgba(255,255,255,.04)", g);
+  px(z.x + z.w / 2 - 34, z.y - 9, 68, 10, "#1e1a30", g);         // name plaque
+  px(z.x + z.w / 2 - 33, z.y - 8, 66, 8, "#2e2748", g);
+  label(z.x + z.w / 2, z.y - 2, z.title, "#e8e2ff", 5.5, g);
+  if (z.machine) {                                                  // the check stage is a script: a server rack
+    const x = z.x + z.w - 22;
+    px(x, z.y + 12, 16, 50, "#37474f", g); px(x + 1, z.y + 13, 14, 48, "#263238", g);
+    for (let i = 0; i < 5; i++) {
+      px(x + 2, z.y + 15 + i * 9, 12, 6, "#455a64", g);
+      px(x + 3, z.y + 17 + i * 9, 2, 2, i % 2 ? "#5ad1a0" : "#ffc857", g).setAttribute("class", "screen");
+    }
+  }
+  if (z.counter) {                                                  // the engine's PR counter with an in-tray
+    px(z.x + 6, z.y + 40, 16, 22, "#6d4c41", g); px(z.x + 6, z.y + 38, 16, 3, "#a1887f", g);
+    px(z.x + 8, z.y + 33, 12, 5, "#eceff1", g); px(z.x + 9, z.y + 31, 10, 2, "#cfd8dc", g);
+    label(z.x + 14, z.y + 54, "PR", "#ffe6a7", 5, g);
+  }
+  if (z.boss) {                                                     // the owner's desk: a wide wooden desk and a lamp
+    px(z.x + z.w - 18, z.y + 30, 2, 14, "#cfd8dc", g); px(z.x + z.w - 22, z.y + 27, 10, 4, "#ffe082", g);
+  }
+  const n = Math.max(1, slots);
+  for (let i = 0; i < n; i++) {
+    const cx = z.x + (z.w / n) * (i + .5);
+    px(cx - 14, z.y + 44, 28, 5, z.boss ? "#a1673f" : "#8d6e63", g);    // desk top
+    px(cx - 13, z.y + 49, 2, 12, "#5d4037", g); px(cx + 11, z.y + 49, 2, 12, "#5d4037", g);
+    px(cx - 7, z.y + 32, 14, 11, "#263238", g);    // monitor
+    px(cx - 1, z.y + 43, 2, 1, "#263238", g);
+  }
+  return g;
+}
+
+function person(cx, y, shirt, st, name) {
+  const g = el("g", {});
+  const body = el("g", { class: st.key === "work" ? "typing" : "" }, g);
+  px(cx - 3, y + 14, 6, 6, "#f1c27d", body);       // head
+  px(cx - 3, y + 13, 6, 2, "#3e2723", body);       // hair
+  px(cx - 5, y + 20, 10, 9, shirt, body);          // shirt
+  px(cx - 6, y + 22, 2, 5, shirt, body); px(cx + 4, y + 22, 2, 5, shirt, body);
+  const screen = px(cx - 6, y + 33, 12, 9, st.key === "bad" ? "#7a2e2e" : st.key === "work" ? "#4dd0e1" : "#455a64", g);
+  if (st.key === "work") screen.setAttribute("class", "screen");
+  px(cx - 6, y + 45, 12, 1, "#cfd8dc", g);         // keyboard
+  if (st.key !== "work") {                         // a speech bubble: ! blocked, ? a person's turn
+    const b = el("g", { class: "bubble" }, g);
+    px(cx + 4, y + 2, 11, 9, "#ffffff", b); px(cx + 5, y + 11, 2, 2, "#ffffff", b);
+    label(cx + 9.5, y + 9, st.key === "bad" ? "!" : st.key === "done" ? "✓" : "?", COLOR[st.key], 8, b).setAttribute("font-weight", "800");
+  }
+  const tag = name.length > 12 ? name.slice(0, 11) + "…" : name;
+  px(cx - 20, y + 64, 40, 9, "rgba(0,0,0,.45)", g);
+  label(cx, y + 71, tag, COLOR[st.key], 6, g);
+  const tip = el("title", {}, g);
+  tip.textContent = `${name} · ${st.text}`;
+}
+
+function scene() {
+  room();
+  const at = {};
+  D.tasks.forEach(t => { const z = ZONE_OF[t.at] || "leader"; (at[z] = at[z] || []).push(t); });
+  for (const [key, z] of Object.entries(ZONES)) {
+    const here = (at[key] || []).slice(0, 3);
+    desk(z, key === "leader" ? 1 : Math.max(1, here.length));
+    if (key === "leader") {
+      person(z.x + z.w / 2, z.y, "#3f51b5", { key: "work" }, "leader");
+      px(z.x + z.w / 2 - 4, z.y + 13, 1, 5, "#212121"); px(z.x + z.w / 2 + 3, z.y + 13, 1, 5, "#212121");  // headset
+      continue;
+    }
+    here.forEach((t, i) => person(z.x + (z.w / here.length) * (i + .5), z.y, SHIRTS[hash(t.name) % SHIRTS.length], status(t), t.name));
+    const more = (at[key] || []).length - here.length;
+    if (more > 0) label(z.x + z.w - 8, z.y + 6, `+${more}`, "#c9cde0", 7);
+  }
+}
+
+function cards() {
+  const box = document.getElementById("cards");
+  const ids = D.flow.map(s => s.id).concat(["done"]);
+  if (!D.tasks.length) { box.innerHTML = '<p class="empty">등록된 과제가 없다</p>'; return; }
+  D.tasks.forEach(t => {
+    const st = status(t);
+    const c = document.createElement("article");
+    c.className = "card";
+    c.style.setProperty("--c", COLOR[st.key]);
+    const h = document.createElement("h2");
+    const n = document.createElement("span"); n.textContent = t.name;
+    const p = document.createElement("span"); p.className = "pill"; p.style.background = COLOR[st.key]; p.textContent = st.text;
+    h.append(n, p); c.append(h);
+    const track = document.createElement("div"); track.className = "track";
+    const i = ids.indexOf(t.at);
+    ids.forEach((id, k) => { const s = document.createElement("span"); s.className = k < i ? "past" : k === i ? "now" : ""; s.title = STAGE_NAME[id] || id; track.append(s); });
+    c.append(track);
+    const steps = document.createElement("div"); steps.className = "steps";
+    const a = document.createElement("span"); a.textContent = "설계";
+    const b = document.createElement("span"); b.textContent = `지금: ${STAGE_NAME[t.at] || t.at}`;
+    const e = document.createElement("span"); e.textContent = "병합";
+    steps.append(a, b, e); c.append(steps);
+    const row = document.createElement("div"); row.className = "row";
+    row.textContent = `${t.minutes}분째 · 모델 ${t.model} · 마지막 파일 ${t.last}`;
+    c.append(row);
+    if (t.note) {
+      const note = document.createElement("div"); note.className = "note";
+      if (/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/.test(t.note)) {
+        const link = document.createElement("a"); link.href = t.note; link.textContent = t.note; note.append(link);
+      } else note.textContent = t.note;
+      c.append(note);
+    }
+    box.append(c);
+  });
+}
+
+document.getElementById("meta").textContent = `${D.time} 기준 · 5초마다 다시 읽는다 · 토큰을 쓰지 않는다`;
+scene();
+cards();
+setTimeout(() => location.reload(), 5000);
+</script>
+</body>
+</html>

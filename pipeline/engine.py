@@ -20,7 +20,6 @@ Exit codes for run: 0 done, 2 no such task or another run of it is going, 3 wait
 import argparse
 import fcntl
 import hashlib
-import html
 import json
 import os
 import re
@@ -819,35 +818,13 @@ def workers():
 
 
 def board():
-    """Write jobs/board.html: every task's stages, from files only. The page reloads itself every 5 seconds."""
-    esc = html.escape
-    ids = [s["id"] for s in load(STAGES, {"flow": []})["flow"]] + ["done"]
-    rows = []
-    for t in tasks():
-        at = ids.index(t["at"]) if t["at"] in ids else -1
-        chips = "".join(
-            f'<li class="{"now" if i == at else "past" if i < at else ""}{" blocked" if i == at and t["stage"] == "blocked" else ""}">{esc(s)}</li>'
-            for i, s in enumerate(ids))
-        note = esc(t["note"])
-        if t["note"].startswith("https://github.com/"):
-            note = f'<a href="{esc(t["note"], quote=True)}">{note}</a>'
-        rows.append(f'<section><h2>{esc(t["name"])}</h2><ol>{chips}</ol>'
-                    f'<p>{esc(t["stage"])} · {t["minutes"]}분 · {esc(t["model"])} · {esc(t["last"])}</p>'
-                    + (f'<p class="note">{note}</p>' if note else "") + "</section>")
-    page = f"""<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta http-equiv="refresh" content="5">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>office 상태판</title><style>
-:root{{--bg:#fff;--fg:#1d1d1f;--mute:#6e6e73;--line:#d2d2d7;--now:#0a63c9;--bad:#c62828}}
-@media (prefers-color-scheme:dark){{:root{{--bg:#161618;--fg:#f2f2f2;--mute:#9a9aa0;--line:#3a3a3e;--now:#5aa2ff;--bad:#ff6b6b}}}}
-body{{margin:0;padding:16px;background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,system-ui,sans-serif}}
-section{{border-bottom:1px solid var(--line);padding:12px 0}} h2{{font-size:16px;margin:0 0 8px}}
-ol{{display:flex;flex-wrap:wrap;gap:6px;list-style:none;margin:0;padding:0}}
-li{{border:1px solid var(--line);border-radius:6px;padding:2px 8px;color:var(--mute)}}
-li.past{{color:var(--fg)}} li.now{{border-color:var(--now);color:var(--now);font-weight:600}}
-li.blocked{{border-color:var(--bad);color:var(--bad)}} p{{margin:6px 0 0;color:var(--mute)}} .note{{color:var(--fg);overflow-wrap:anywhere}}
-a{{color:var(--now)}}</style></head><body><h1 style="font-size:18px;margin:0">office 상태판</h1>
-<p>{datetime.now():%H:%M:%S} 기준 · 5초마다 다시 읽는다 · 작업자 화면은 <code>hc attach &lt;이름&gt;</code></p>
-{"".join(rows) or "<p>등록된 과제가 없다</p>"}</body></html>
-"""
+    """Write jobs/board.html: a pixel office where each task sits at its stage's desk, from files only.
+    The page draws itself from the JSON put into pipeline/board.html and reloads every 5 seconds."""
+    flow = [{"id": s["id"], "by": s["by"]} for s in load(STAGES, {"flow": []})["flow"]]
+    data = json.dumps({"time": f"{datetime.now():%H:%M:%S}", "flow": flow, "tasks": tasks()}, ensure_ascii=False)
+    # Inside <script>, a worker's text must not close the tag: escape <, > and & as JSON \u escapes.
+    data = data.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    page = (PIPELINE / "board.html").read_text(encoding="utf-8").replace("/*DATA*/", data)
     out = JOBS / "board.html"
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_name(f".board.{os.getpid()}.tmp")  # runs of other tasks write the board at the same time

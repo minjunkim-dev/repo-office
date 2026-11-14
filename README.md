@@ -33,7 +33,7 @@ macOS에서만 돌려 봤다.
 ## 진행 보기
 
 - `python3 pipeline/engine.py workers`: 과제마다 단계, 경과, 모델, PR 또는 막힌 이유를 표로 보여 준다.
-- `jobs/board.html`: 같은 내용을 단계 흐름으로 그린 페이지다. `engine.py run`이 단계를 옮길 때마다 다시 쓰고, 페이지는 5초마다 다시 읽는다. `python3 pipeline/engine.py board`로 바로 만들 수도 있다. 파일만 읽으므로 토큰을 쓰지 않는다.
+- `jobs/board.html`: 같은 내용을 픽셀 사무실로 그린 페이지다. 과제마다 작업자가 지금 단계의 책상에 앉고, 막히면 「!」, 사람 차례면 「?」 말풍선을 띄운다. 아래 카드에 단계 진행, 모델, PR 또는 막힌 이유가 있다. `engine.py run`이 단계를 옮길 때마다 다시 쓰고, 페이지는 5초마다 다시 읽는다. `python3 pipeline/engine.py board`로 바로 만들 수도 있다. 파일만 읽으므로 토큰을 쓰지 않는다.
 - 작업자 화면은 `hc ls`로 이름을 찾고 `hc attach <이름>`으로 본다(`ctrl+\`로 빠진다). 작업자는 hc 터미널이라 Claude 데스크탑 앱의 세션 목록에는 나오지 않는다.
 
 작업자가 사용량 한도에 걸리면 엔진은 그 메시지(예: `resets 12:10am`)를 `BLOCKED.md`에 적고 멈춘다. 한 턴이 4시간(`OFFICE_WORKER_TIMEOUT`, 초)을 넘어도 작업자를 닫고 멈춘다.

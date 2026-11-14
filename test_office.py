@@ -1267,27 +1267,27 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("setup failed: x", out.getvalue())
 
 
+    def board_data(self, page):
+        """The JSON the page draws from: the only place worker text goes into the page."""
+        start = page.index('<script type="application/json" id="data">') + len('<script type="application/json" id="data">')
+        return json.loads(page[start:page.index("</script>", start)])
+
     def test_board_is_a_page_of_the_same_files_that_escapes_what_workers_wrote(self):
         with contextlib.redirect_stdout(io.StringIO()):
             self.engine.run("search", FakeWorker(self.job))  # run rewrites the board
         page = (self.engine.JOBS / "board.html").read_text(encoding="utf-8")
-        self.assertIn('http-equiv="refresh"', page)
-        self.assertIn('class="now"', page)
-        (self.job / "BLOCKED.md").write_text("<script>x</script>\n", encoding="utf-8")
+        self.assertIn("location.reload()", page)
+        self.assertEqual([t["name"] for t in self.board_data(page)["tasks"]], ["search"])
+        (self.job / "BLOCKED.md").write_text("</script><script>alert(1)</script>&\n", encoding="utf-8")
         page = self.engine.board().read_text(encoding="utf-8")
-        self.assertNotIn("<script>", page)
-        self.assertIn("&lt;script&gt;", page)
-        self.assertIn('class="now blocked"', page)
+        self.assertEqual(page.count("</script>"), 2)  # the data block's and the page script's, none from the worker
+        task = self.board_data(page)["tasks"][0]
+        self.assertEqual((task["stage"], task["note"]), ("blocked", "</script><script>alert(1)</script>&"))
+        self.assertNotIn("innerHTML = t", page)  # worker text is set only through textContent
 
-    def test_the_board_links_only_github_urls(self):
-        with contextlib.redirect_stdout(io.StringIO()):
-            self.engine.run("search", FakeWorker(self.job))
-        for line in ("javascript:alert(1)", 'https://x" onmouseover="alert(1)', "https://github.com.evil.example/x"):
-            (self.job / "BLOCKED.md").write_text(f"# 막힘\n\n{line}\n", encoding="utf-8")
-            self.assertNotIn("href", self.engine.board().read_text(encoding="utf-8"), line)
-        (self.job / "BLOCKED.md").unlink()
-        (self.job / "pr.txt").write_text("https://github.com/O/R/pull/7\n", encoding="utf-8")
-        self.assertIn('href="https://github.com/O/R/pull/7"', self.engine.board().read_text(encoding="utf-8"))
+    def test_the_board_links_only_github_pull_requests(self):
+        page = (OFFICE / "pipeline/board.html").read_text(encoding="utf-8")
+        self.assertIn(r"/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/.test(t.note)", page)
 
     def test_a_board_that_cannot_be_written_leaves_the_run_exit_code(self):
         def broken():
