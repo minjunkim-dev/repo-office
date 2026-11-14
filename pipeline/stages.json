@@ -30,6 +30,8 @@
   "Bash(gh pr edit*)",
   "Bash(gh api *-X*)",
   "Bash(gh api *--method*)",
+  "Bash(gh api -f*)",
+  "Bash(gh api -F*)",
   "Bash(gh api * -f*)",
   "Bash(gh api * -F*)",
   "Bash(gh api *--field*)",
