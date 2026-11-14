@@ -177,7 +177,7 @@ python3 pipeline/engine.py workers
 아래를 그대로 붙여 넣는다.
 
 ```text
-repo-office의 개발 하네스 작업을 이어받아 줘.
+repo-office의 개발 파이프라인 작업을 이어받아 줘.
 
 1. 먼저 읽을 것(이 순서): HANDOFF.md, AGENTS.md, 원본 repo-baseline의 POLICY.md.
    원본 로컬 클론 경로는 baseline.path에 있다.
