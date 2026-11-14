@@ -147,9 +147,11 @@ class PipelineTests(unittest.TestCase):
                      "리뷰가 고친 지적: P0 0, P1 1, P2 0", "남은 지적: [Spec] P1 y, a.py:3"):
             self.assertIn(part, report)
         # Without the reviewed head in review.md there is no merge command: never a SHA read from repo/.
-        (self.job / "review.md").write_text("리뷰한 head와 Door: abc1234, 되돌리기 어려움\n", encoding="utf-8")
+        (self.job / "review.md").write_text("리뷰한 head와 Door: abc1234, 되돌리기 어려움\n- 확인하지 않은 범위: z\n", encoding="utf-8")
         self.engine.write_report(self.job, json.loads((self.job / "task.json").read_text()), self.state(), [])
-        self.assertNotIn("gh pr merge", (self.job / "REPORT.md").read_text())
+        report = (self.job / "REPORT.md").read_text()
+        self.assertNotIn("gh pr merge", report)
+        self.assertIn("\n- 확인하지 않은 범위: z\n", report)  # a bullet line keeps one bullet
         self.engine.save(self.job / "state.json", {**self.state(), "stage": "ready"})  # the ready stage runs again
         self.assertEqual(self.engine.run("search", worker), self.engine.DONE)
         self.assertEqual([c[:2] for c in gh()].count(["pr", "comment"]), 1)  # asked once
