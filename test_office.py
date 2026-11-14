@@ -12,6 +12,7 @@ import shutil
 import socket
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 import unittest.mock
@@ -1351,14 +1352,25 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
             before = board.stat().st_mtime_ns
             time.sleep(0.3)
             seen.append(board.stat().st_mtime_ns > before)
+            # The model of the worker now running, though models records it only when the worker ends.
+            task = self.board_data(board.read_text(encoding="utf-8"))["tasks"][0]
+            seen.append((task["at"], task["model"], task["running"]))
             (self.job / "design.md").write_text("d\n", encoding="utf-8")
             return None
 
         with contextlib.redirect_stdout(io.StringIO()):
             self.engine.run("search", slow)
-        self.assertEqual(seen, [True])
+        self.assertEqual(seen, [True, ("design", "opus", 1)])
         page = (self.engine.JOBS / "board-tasks.html").read_text(encoding="utf-8")
         self.assertEqual([t["running"] for t in self.board_data(page)["tasks"]], [0])  # the run ended: no one holds the lock
+
+    def test_a_board_probe_does_not_turn_a_run_away(self):
+        probe = open(self.job / "run.lock", "a")
+        fcntl.flock(probe, fcntl.LOCK_SH)  # what job_status holds for a moment while it writes the board
+        threading.Timer(0.03, probe.close).start()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertNotEqual(self.engine.run("search", FakeWorker(self.job)), 2)
+        self.assertNotIn("is running", err.getvalue())
 
     def test_the_board_links_only_github_pull_requests(self):
         with contextlib.redirect_stdout(io.StringIO()):

@@ -415,11 +415,15 @@ def run(name, runner=run_worker):
         return 2
     # Held until run returns or the process dies (kill -9 included). "a" leaves the mtime that workers shows alone.
     with open(job / "run.lock", "a") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            print(f"another engine.py run {name} is running", file=sys.stderr)
-            return 2
+        for wait in (0.05, 0.2, None):  # the board's probe holds a shared lock for a moment: try again before giving up
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if wait is None:
+                    print(f"another engine.py run {name} is running", file=sys.stderr)
+                    return 2
+                time.sleep(wait)
         # A stage can take hours: rewrite the board while this run goes, so minutes, last file and the time stay live.
         # When the run ends or dies the rewrites stop, and the page sees its data grow old.
         stop = threading.Event()
