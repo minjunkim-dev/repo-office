@@ -85,12 +85,13 @@ function place() {
     const fresh = here.filter(t => !kept.includes(t)).slice(0, free.length);
     for (const t of kept.concat(fresh)) {
       const k = kept.includes(t) ? people[t.name].k : free.shift(), to = slot(id, k);
-      const p = people[t.name] || (people[t.name] = { x: to.x, y: to.y, sprite: look(t.name) });
+      const p = people[t.name] || (people[t.name] = { x: to.x, y: to.y, sprite: -1 });
       Object.assign(p, { tx: to.x, ty: to.y, lane: id, k, task: t });
       seen.add(t.name);
     }
   }
   for (const n of Object.keys(people)) if (!seen.has(n)) delete people[n];
+  for (const [n, p] of Object.entries(people)) if (p.sprite < 0) p.sprite = look(n);  // after leavers go, so their looks are free
 }
 
 const canvas = document.getElementById("scene"), ctx = canvas.getContext("2d");
