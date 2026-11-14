@@ -884,9 +884,15 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(self.engine.new("connect", str(repo), "origin/main"), 0)
         job = self.engine.JOBS / "connect"
         task = json.loads((job / "task.json").read_text())
-        self.assertEqual((task["test"], task["setup"]), ("make lint && make test", "echo s >> setup-ran"))
+        self.assertEqual((task["test"], task["setup"]), ("( make lint ) && ( make test )", "echo s >> setup-ran"))
         self.assertEqual((job / "repo/setup-ran").read_text(), "s\n")  # in repo/, once
         self.assertFalse((job / "BLOCKED.md").exists())
+
+    def test_a_failing_check_cell_fails_the_task_test_even_if_the_test_cell_has_a_semicolon(self):
+        repo = self.product(check="false", test="true; true")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.engine.new("connect", str(repo), "main"), 0)
+            self.assertNotEqual(self.engine.test("connect"), 0)
 
     def test_new_refuses_a_product_without_command_cells(self):
         repo = self.product()

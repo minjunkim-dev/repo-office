@@ -4,7 +4,7 @@
 
 ## 1. repo-baseline을 적용한다
 
-repo-baseline의 [`prompts/setup.md`](https://github.com/minjunkim-dev/repo-baseline/blob/main/prompts/setup.md)를 코딩 에이전트에게 주고 따르게 한다. 그러면 `AGENTS.md`, `.github/pull_request_template.md`, `main` 브랜치 보호가 생긴다. 이미 적용한 저장소는 이 단계를 건너뛴다.
+repo-baseline의 [`prompts/setup.md`](https://github.com/minjunkim-dev/repo-baseline/blob/main/prompts/setup.md)를 코딩 에이전트에게 주고 따르게 한다. 그러면 `AGENTS.md`와 `.github/pull_request_template.md`가 생긴다. 그 프롬프트는 서버 설정을 쓰지 않는다. `main` 브랜치 보호는 소유자가 자기 기기에서 repo-baseline `tools/apply_github_settings.py`로 켠다. 이미 적용한 저장소는 이 단계를 건너뛴다.
 
 ## 2. 명령 칸을 채운다
 
@@ -40,6 +40,7 @@ python3 pipeline/engine.py doctor <제품 저장소 경로>
 | PR template on main | `.github/pull_request_template.md`를 둔다(repo-baseline `templates/core/`) |
 | gh is logged in | `gh auth login` |
 | main is protected | 브랜치 보호나 ruleset을 켠다(repo-baseline `tools/apply_github_settings.py`) |
+| a fresh checkout of origin/main | 출력된 git 오류를 고친다(예: 남은 worktree는 `git worktree prune`) |
 | setup·check·test passes on main | origin/main의 새 체크아웃에서 그 명령이 통과하게 제품을 고친다 |
 
 doctor는 origin/main을 임시 worktree로 받아 setup → check → test 순서로 돌리고, 끝나면 그 worktree를 지운다.
