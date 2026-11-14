@@ -197,7 +197,7 @@ if (typeof window !== "undefined" && window.parent !== window) {
     const st = status(t);
     return { name: t.name, lane: LANE_OF[t.at] || "design", stage: name(t.at), key: st.key, text: st.text,
              model: BY[t.at] === "claude" ? t.model : "", by: BY[t.at] || "" };
-  }) }, "*");  // board.html checks the sender is its own frame; file:// pages have no origin to name here
+  }) }, location.protocol === "file:" ? "*" : location.origin);  // over http only our own origin gets the rows; file:// has no origin to name
 }
 </script>
 </body>
