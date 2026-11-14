@@ -10,7 +10,7 @@
   engine.py preflight <task>  run repo-baseline's review preflight for pr.txt in its repo/, diff into pr.diff
   engine.py skills <task> <base>  run matt-skills check_skills.py in its repo/ (exit 0 delegate, 1 missing, 2 do not)
 
-After the check passes, run pushes the task branch, opens a PR from pr-body.md, marks it ready and asks the review bot once.
+After the check passes, run pushes the task branch, opens a PR from pr-body.md, marks it ready and, unless it proved easy, asks the review bot once.
 After the review, run replaces the PR body with review-body.md and writes REPORT.md. People act only to approve the design and to merge.
 
 Exit codes for run: 0 done, 2 no such task or another run of it is going, 3 waiting for a person, 4 blocked.
@@ -97,6 +97,11 @@ def difficulty(job, state, flow):
     return found.pop() if len(found) == 1 and None not in found else None
 
 
+def proven_easy(state):
+    """The draft stage proved the PR easy for the commit that was checked and pushed: a later commit or a rerun of the check drops it."""
+    return bool(state.get("easy_pr")) and state.get("easy_pr") == state.get("checked")
+
+
 def stage_model(stage, job, state, flow):
     """The model a worker stage runs on. Workers get --setting-sources project, so the user's model setting never reaches them.
     implement: haiku for 쉬움, else sonnet, and sonnet after a failed haiku run. review: opus unless the PR is provably easy."""
@@ -104,8 +109,7 @@ def stage_model(stage, job, state, flow):
     if route == "difficulty":
         return "sonnet" if stage["id"] in state.get("escalated", []) or difficulty(job, state, flow) != "쉬움" else "haiku"
     if route == "door":
-        # Proven easy for the commit that was checked and pushed: a later commit or a rerun of the check drops it.
-        return "sonnet" if state.get("easy_pr") and state.get("easy_pr") == state.get("checked") else "opus"
+        return "sonnet" if proven_easy(state) else "opus"
     return route
 
 
@@ -308,7 +312,8 @@ def post_body(job, task, stage):
 
 
 def make_ready(job, stage, state):
-    """Mark the PR in pr.txt ready and ask the review bot once (POLICY §3), else why not."""
+    """Mark the PR in pr.txt ready and, unless it proved easy, ask the review bot once (POLICY §3), else why not.
+    POLICY asks only when the bot skipped a hard PR; the bot may not have run yet here, so every hard PR asks once."""
     pr_file = job / stage["ready"]
     if not pr_file.exists():
         return f"{pr_file} is missing: the draft stage did not open a PR"
@@ -320,7 +325,7 @@ def make_ready(job, stage, state):
         ready = subprocess.run(["gh", "pr", "ready", *url], cwd=job, capture_output=True, text=True)
         if ready.returncode:
             return f"gh pr ready failed: {(ready.stderr or ready.stdout).strip()}"
-    if stage.get("request") and state.get("requested") != url[0]:
+    if stage.get("request") and state.get("requested") != url[0] and not proven_easy(state):
         asked = subprocess.run(["gh", "pr", "comment", *url, "--body", stage["request"]], cwd=job, capture_output=True, text=True)
         if asked.returncode:
             return f"gh pr comment failed: {(asked.stderr or asked.stdout).strip()}"
@@ -338,15 +343,14 @@ def write_report(job, task, state, flow):
     head = head[1] if head else None
     counts = re.search(r"고친 것:[^\n]*?P0\s*(\d+)\D+P1\s*(\d+)\D+P2\s*(\d+)", review)
     left = re.search(r"남은 지적:[^\n]*", review)
-    number = url.rstrip("/").rsplit("/", 1)[-1]
     door = [l.strip() for l in body.splitlines() if re.match(r"\s*(Door|신뢰 경계):", l)]
-    easy_pr = state.get("easy_pr") and state.get("easy_pr") == state.get("checked")
+    easy_pr = proven_easy(state)
     models = "\n".join(f"- {m['stage']}: {m['model']}" + (" (haiku 실패 뒤 다시 돌림)" if m["rerun"] else "") for m in state.get("models", []))
     check = text("check.md").split("```")[0].strip()
     setup = text("setup.md").split("```")[0].strip()
     unverified = [l.strip().removeprefix("- ") for l in (review + "\n" + body).splitlines() if "확인하지 않" in l or "미확인" in l]
     report = (f"# {task['name']} 결과\n\n- PR: {url}\n"
-              + (f"- 리뷰한 head: `{head}`\n- 병합: `gh pr merge {number} --squash --match-head-commit {head}`\n" if head
+              + (f"- 리뷰한 head: `{head}`\n- 병합: `gh pr merge {url} --squash --match-head-commit {head}`\n" if head
                  else "- 리뷰한 head: review.md에서 40자 SHA를 찾지 못함. 병합 명령을 만들지 않는다\n")
               + "- 리뷰가 고친 지적: " + (f"P0 {counts[1]}, P1 {counts[2]}, P2 {counts[3]}" if counts else "review.md에서 찾지 못함") + "\n"
               + f"- {left[0].strip() if left else '남은 지적: review.md에서 찾지 못함'}\n"
@@ -625,6 +629,7 @@ def approve(name):
         print(f"nothing to approve at stage {state['stage']}", file=sys.stderr)
         return 2
     state.setdefault("approved", {})[stage["id"]] = sha(job / stage["approve"])
+    state.pop("easy_pr", None)  # proven for the design approved before; an open PR is never proven again
     save(state_path, state)
     print(f"approved {stage['approve']} {state['approved'][stage['id']]}")
     return 0

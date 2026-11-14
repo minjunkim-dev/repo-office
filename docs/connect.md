@@ -53,4 +53,4 @@ leader가 등록한다(`leader/AGENTS.md`). 손으로 하면 office 체크아웃
 python3 pipeline/engine.py new <과제> --repo <제품 저장소 경로> --base origin/main
 ```
 
-엔진이 `<base>`의 `AGENTS.md`에서 setup·check·test 칸을 읽어 `jobs/<과제>/task.json`에 적고, `repo/`를 만들고, setup을 한 번 돈다. setup이 실패하면 `BLOCKED.md`에 출력을 남긴다. 그 다음은 `jobs/<과제>/INTENT.md`를 채우고 `engine.py run <과제>`이다. 그 뒤 사람이 할 일은 설계 승인과 PR 병합 둘뿐이다. 엔진이 PR을 Ready로 바꾸고, 리뷰 봇에 한 번 요청하고, 다른 세션이 리뷰한 뒤 `jobs/<과제>/REPORT.md`에 결과와 병합 명령을 남긴다. setup이 중간에 끊기면 `BLOCKED.md`가 남는다.
+엔진이 `<base>`의 `AGENTS.md`에서 setup·check·test 칸을 읽어 `jobs/<과제>/task.json`에 적고, `repo/`를 만들고, setup을 한 번 돈다. setup이 실패하면 `BLOCKED.md`에 출력을 남긴다. 그 다음은 `jobs/<과제>/INTENT.md`를 채우고 `engine.py run <과제>`이다. 그 뒤 사람이 할 일은 설계 승인과 PR 병합 둘뿐이다. 엔진이 PR을 Ready로 바꾸고, 쉬움이 아닌 PR이면 리뷰 봇에 한 번 요청하고, 다른 세션이 리뷰한 뒤 `jobs/<과제>/REPORT.md`에 결과와 병합 명령을 남긴다. setup이 중간에 끊기면 `BLOCKED.md`가 남는다.

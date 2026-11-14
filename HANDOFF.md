@@ -8,13 +8,13 @@
 
 - 소유자가 이슈나 개발 요청 하나를 던지면, 정해진 파이프라인이 그것을 리뷰를 마친 PR까지 끌고 간다. 병합은 사람이 한다.
 - 모델이 부를 수 있는 스킬(`tdd`, `diagnosing-bugs`, `codebase-design`, `code-review`)은 단계마다 작업자가 부른다. 사람만 부를 수 있는 스킬(Matt 뼈대, pstack 대부분, §3)은 알맞은 때에 leader가 사람에게 실행을 권한다.
-- 기계로 막을 수 있는 규칙(push·병합 금지, 완료 증거)은 지시가 아니라 거부 규칙·엔진·CI로 지킨다. 판단이 필요한 것(설계 승인, Ready, 병합)은 사람이 한다.
+- 기계로 막을 수 있는 규칙(push·병합 금지, 완료 증거)은 지시가 아니라 거부 규칙·엔진·CI로 지킨다. 판단이 필요한 것(설계 승인, 병합)은 사람이 한다. 2026-11-14부터 거부 규칙은 push·`gh pr merge`·`gh pr edit`·`gh api` 쓰기만 막고, 작업자에게 Bash가 열려 있어 `bash -c` 같은 우회는 막지 못한다. 그 밖의 것은 지시로만 지킨다(§6).
 - repo-baseline 규칙이 바닥이다. office, 스킬 묶음, 개인 도구는 그 위의 선택 층이고, 하나가 빠져도 나머지가 돈다.
 
 지금 상태(2026-11-12):
 
-- 흐름: 접수(leader) → 설계 → 사람 승인(`design.md` sha256) → 구현 → 검사(test 명령, 커밋하지 않은 변경) → 엔진이 push하고 PR을 열어 Ready, 리뷰 봇 요청 → 리뷰(다른 세션) → 엔진이 리뷰 커밋을 push하고 리뷰 본문을 PR에 올리고 REPORT.md → 사람이 병합.
-- 이 흐름 전체를 장난감 저장소에서 엔진과 실제 작업자로 끝까지 돌렸다(leader 접수는 따로 돌렸다)(§6의 2026-11-12 항목). 단위 테스트는 60개다.
+- 흐름: 접수(leader) → 설계 → 사람 승인(`design.md` sha256) → 구현 → 검사(test 명령, 커밋하지 않은 변경) → 엔진이 push하고 PR을 열어 Ready, 쉬움이 아니면 리뷰 봇 요청 → 리뷰(다른 세션) → 엔진이 리뷰 커밋을 push하고 리뷰 본문을 PR에 올리고 REPORT.md → 사람이 병합.
+- 이 흐름 전체를 장난감 저장소에서 엔진과 실제 작업자로 끝까지 돌렸다(leader 접수는 따로 돌렸다)(§6의 2026-11-12 항목). 단위 테스트는 59개다(2026-11-14).
 - 열린 이슈는 없다. 남은 결정은 §4에 있다.
 
 ## 2. 구성 요소
@@ -64,13 +64,14 @@
 - 2026-11-12: 플러그인 판은 고정하지 않고 기록만 한다. 리뷰 보고 「확인한 것」의 `check_skills.py` 경로·sha256이 그 기록이다.
 - 2026-11-12: 검사가 통과하면 엔진이 초안 PR을 연다. 사람이 Ready로 바꾸기 전에는 리뷰가 돌지 않는다. 2026-11-14에 바꿨다: 엔진이 늘 Ready로 바꾼다.
 - 2026-11-14: office는 계속 쓴다. 계속 쓸지 판단하는 기준은 두지 않는다.
+- 2026-11-14: 엔진은 쉬움이 아닌 PR에만 리뷰 봇을 한 번 요청한다(POLICY §3, repo-baseline #130). 원본은 봇이 건너뛰었을 때만 요청하지만, Ready 직후에는 봇이 아직 돌지 않았을 수 있어 건너뜀을 기다리지 않는다.
 
 남은 결정:
 
-- repo-baseline #130의 두 규칙에 office의 주인이 없다. office에서는 엔진이 PR을 연다.
-  - 되돌리기 어려움이거나 신뢰 경계를 건드린 PR에서 리뷰 봇이 건너뛰면, PR을 연 쪽이 봇에 리뷰를 한 번 요청한다. 리뷰어가 Door를 어려움으로 올렸으면 리뷰어가 요청한다. 엔진도 리뷰 지시서도 지금 요청하지 않는다. 사람이 Ready로 바꿀 때 직접 요청해야 한다.
+- repo-baseline #130의 규칙 중 둘에 office의 주인이 없다.
+  - 리뷰어가 Door를 어려움으로 올렸으면 리뷰어가 봇에 요청한다. 엔진은 쉬움으로 판정한 PR에 요청하지 않았고, 리뷰 지시서도 이 요청을 시키지 않는다.
   - 같은 PR에 다른 모델 패밀리 리뷰(Codex, Cursor agent)를 권장한다. 엔진의 리뷰 단계는 Claude 하나다. 리뷰 작업자는 원본 `prompts/review.md`대로 받지 못한 사실을 「남은 지적」에 적는다.
-  - 둘 다 엔진·단계표·leader 규칙을 바꾸는 일이라 소유자 승인과 사람 병합이 필요하다.
+  - 둘 다 엔진·단계표·지시서를 바꾸는 일이라 소유자 승인과 사람 병합이 필요하다.
 
 ## 5. 왜 이렇게 지었나
 
@@ -104,7 +105,7 @@
 - 이 저장소 자신을 제품으로 삼으면 `jobs/<과제>/repo/`가 office 체크아웃 안에 생긴다. 원본의 `tools/test_distribution.py` 링크 검사는 git이 무시하는 폴더도 훑어서, 과제가 남아 있는 동안 office 체크아웃의 test 명령이 실패한다. 깨끗한 체크아웃이나 CI에서는 통과한다.
 - leader는 방향을 묻지 않고 등록하거나, `INTENT.md`를 채우지 않고 `run`을 돌리려 한 적이 있다(#13 첫 시도). leader 규칙에 순서를 적은 뒤에는 지켰다. leader가 `engine.py` 명령 뒤에 `; echo`나 `>`를 붙이면 허용한 명령도 사람 확인을 받는다.
 - leader 규칙에 `--base origin/main`이 없을 때는 로컬 `main`에서 worktree가 만들어졌다. 로컬 `main`은 낡았을 수 있다.
-- 제품 저장소가 mise를 쓰면 새 과제 worktree의 `.mise.toml`이 신뢰되지 않아 shim으로 잡힌 도구(cargo 등)가 실패한다(smallnext PR #389). 사람이 `mise trust <job>/repo/.mise.toml`을 한 번 한다. 신뢰된 설정을 작업자가 고치지 못하게 거부 목록에 넣었다.
+- 제품 저장소가 mise를 쓰면 새 과제 worktree의 `.mise.toml`이 신뢰되지 않아 shim으로 잡힌 도구(cargo 등)가 실패한다(smallnext PR #389). 사람이 `mise trust <job>/repo/.mise.toml`을 한 번 한다. 신뢰된 설정을 작업자가 고치지 못하게 거부 목록에 넣었으나, 2026-11-14에 거부 목록을 줄이면서 지웠다. 지금은 막는 장치가 없다.
 - #14(2026-11-11, Claude Code 2.1.322, sonnet): 같은 장난감 저장소에 과제 둘을 등록하고 `run`을 동시에 돌렸다. 설계·구현·검사 단계가 모두 끝났고, hc 터미널 이름(`<과제>-<단계>`)과 `jobs/` 파일은 섞이지 않았다. 구현 단계 도중 한쪽 엔진을 `kill -9`하자 작업자 터미널이 남았다. 엔진의 hc 터미널은 엔진의 자식이 아니라서 함께 끝나지 않는다. 다시 `run`하면 같은 이름의 `hc run`이 실패해 traceback과 종료 코드 1로 끝났다. 그래서 `run`은 과제마다 `run.lock`을 잡아 같은 과제의 엔진이 둘 돌지 못하게 하고, 작업자를 띄우기 전에 같은 이름의 남은 터미널을 닫는다. hc 터미널 이름은 hc 전체에서 하나이므로, 이름 앞에 jobs 폴더 경로의 해시 4자를 붙여 다른 체크아웃의 작업자를 닫지 않는다(`<해시>-<과제>-<단계>`). `hc run`이 실패하면 `BLOCKED.md`를 쓰고, 작업자가 시작하지 않았으므로 세션을 쓴 것으로 기록하지 않는다. 고친 뒤 남은 터미널이 있는 과제를 다시 돌려 PR 대기까지 갔다. 첫 세션(설계) 도중 엔진을 죽여 `state.json`이 없는 과제도 다시 돌리니 같은 세션 ID로 설계를 다시 하고 승인 대기까지 갔다. 180초를 넘는 단계는 `run_worker`로 작업자에게 200초 걸리는 명령을 시켜 봤다. `hc send --wait`가 180초에 timeout을 내고 `hc wait` 반복으로 넘어가, 턴이 끝난 208초에 돌아왔다. Claude Code는 단독 `sleep 200`을 막는다. 긴 테스트는 그런 명령으로 쓰지 않는다.
 - 2026-11-14: 소유자 결정으로 작업자 sandbox, 검사 단계 `sandbox-exec`, `SAFE_GIT`, 단계별 허용 목록, `engine.py allow`, 읽기 제한과 판 검사, PR 본문 파일의 링크·sha 검사를 지웠다. 작업자는 `dontAsk`에서 일반 개발 도구를 쓰고, 거부 규칙은 push·`gh pr merge`·`gh pr edit`·`gh api` 쓰기만 남는다. 지운 장치의 실측과 함정은 52f77a1의 이 파일에 있다.
 - 2026-11-12, 스킬 실측(Claude Code 2.1.322): 엔진의 `claude_argv`로 리뷰 단계 인자를 그대로 만들어 `hc`로 작업자를 띄웠다. 과제 폴더 `jobs/skill-probe-*`에 빈 제품 저장소를 두고, 작업자에게 스킬 목록을 파일로 옮겨 적고 이름마다 `Skill` 도구를 한 번씩 부르게 했다. 세 번 돌렸다.
@@ -141,7 +142,7 @@
   - 승인 대기: leader가 `blast-radius`를 실행 폴더·금지 폴더와 함께 권했다. 설계 작업자는 Door를 쉬움으로 봤다(외부 호출자 없음). 그래서 `interrogate` 권유와 어려운 PR의 봇 리뷰 요청(§4 남은 결정)은 이번에 돌지 않았다.
   - 구현 작업자는 `mattpocock-skills:tdd`로 빨강(`ImportError`) → 초록. 검사 통과, 엔진이 초안 PR을 열고 Ready를 기다렸다. 사람이 Ready로 바꾼 뒤 리뷰 작업자가 `engine.py skills` 종료 코드 0을 받고 `mattpocock-skills:code-review`를 불렀다. diff가 작아 축별 하위 에이전트는 띄우지 않고 두 축을 직접 봤다. CodeRabbit 건너뜀은 「없음(건너뜀)」으로 판정했다(repo-baseline #129 규칙대로).
 - 2026-11-14, 모델 배치: 작업자는 `--setting-sources project`로 hc에서 돌아 사용자의 모델 설정을 받지 않는다. 그래서 엔진이 단계마다 `--model`을 준다(`stage_model`). leader 폴더에서 `claude -p ... --output-format json`의 `modelUsage`는 `leader/.claude/settings.json`(`"model": "opus"`)이 있으면 `claude-opus-5-5`, 없으면 `claude-haiku-5-5`였다(Claude Code 2.1.323).
-- 2026-11-14, 사람 관문 둘: 설계 승인과 병합 말고는 엔진과 leader가 돈다. 엔진이 PR을 늘 Ready로 바꾸고 리뷰 봇에 한 번 요청한다. 다시 하면 풀릴 오류는 단계마다 한 번 다시 해 본다. 막힘의 답은 `INTENT.md` 결정 기록이고, 다시 띄운 작업자에게는 엔진이 첫 메시지로 다시 읽으라고 한다(지시서 문장만으로는 이어 받은 세션이 두 번 다시 읽지 않았다). 리뷰가 끝나면 `REPORT.md`를 쓴다. `new`는 `<base>`를 fetch하고, setup이 통과할 때까지 `BLOCKED.md`를 둔다(#33 리뷰의 P2 두 개).
+- 2026-11-14, 사람 관문 둘: 설계 승인과 병합 말고는 엔진과 leader가 돈다. 엔진이 PR을 늘 Ready로 바꾸고, 쉬움이 아닌 PR이면 리뷰 봇에 한 번 요청한다. 다시 하면 풀릴 오류는 단계마다 한 번 다시 해 본다. 막힘의 답은 `INTENT.md` 결정 기록이고, 다시 띄운 작업자에게는 엔진이 첫 메시지로 다시 읽으라고 한다(지시서 문장만으로는 이어 받은 세션이 두 번 다시 읽지 않았다). 리뷰가 끝나면 `REPORT.md`를 쓴다. `new`는 `<base>`를 fetch하고, setup이 통과할 때까지 `BLOCKED.md`를 둔다(#33 리뷰의 P2 두 개).
 
 ## 7. 다시 재현하는 법
 
@@ -161,7 +162,7 @@ python3 pipeline/engine.py new toy-subtract --repo /tmp/toy   # test 명령은 A
 # jobs/toy-subtract/INTENT.md에 목표를 쓴다. 예: calc.py에 subtract(a, b)와 테스트를 더한다
 OFFICE_STAGES=/tmp/stages-sonnet.json python3 pipeline/engine.py run toy-subtract   # exit 3: 설계 승인 대기
 python3 pipeline/engine.py approve toy-subtract                                       # 사람이 design.md를 읽은 뒤
-OFFICE_STAGES=/tmp/stages-sonnet.json python3 pipeline/engine.py run toy-subtract   # exit 4: origin이 GitHub이 아니라 초안 PR을 못 연다. GitHub 저장소면 exit 3: 초안 PR 대기
+OFFICE_STAGES=/tmp/stages-sonnet.json python3 pipeline/engine.py run toy-subtract   # exit 4: origin이 GitHub이 아니라 초안 PR을 못 연다. GitHub 저장소면 리뷰까지 돌고 exit 0
 python3 pipeline/engine.py workers
 ```
 
