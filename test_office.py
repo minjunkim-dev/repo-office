@@ -942,13 +942,17 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(subprocess.run(["git", "-C", str(repo), "worktree", "list"], capture_output=True, text=True).stdout.count("\n"), 1)
 
     def routed(self, design_text, fail_haiku=None):
-        """Run to the draft wait with a design that says design_text; fail_haiku: "silent" or "blocked" for a haiku implement."""
+        """Run to the draft wait with a design that says design_text; fail_haiku: "silent", "blocked" or "check" for a haiku implement."""
         job = self.job
 
         class Worker(FakeWorker):
             def __call__(self, name, cwd, argv, message):
                 stage = name.rsplit("-", 1)[1]
                 model = argv[argv.index("--model") + 1]
+                if stage == "implement" and model == "haiku" and fail_haiku == "check":
+                    result = super().__call__(name, cwd, argv, message)
+                    (job / "repo/pass").unlink()  # writes its result but leaves a commit whose test fails
+                    return result
                 if stage == "implement" and model == "haiku" and fail_haiku:
                     self.calls.append((stage, argv, message))
                     if fail_haiku == "blocked":
@@ -957,6 +961,8 @@ class PipelineTests(unittest.TestCase):
                 result = super().__call__(name, cwd, argv, message)
                 if stage == "design":
                     (job / "design.md").write_text(design_text, encoding="utf-8")
+                if stage == "implement":
+                    (job / "repo/pass").write_text("")
                 return result
 
         worker = Worker(job)
@@ -995,9 +1001,9 @@ class PipelineTests(unittest.TestCase):
 
     def test_a_failed_haiku_implement_reruns_once_on_sonnet_in_a_new_session(self):
         work, fresh = self.engine.session_id("search", "work"), self.engine.session_id("search", "work-sonnet")
-        for mode in ("silent", "blocked"):
+        for mode in ("silent", "check", "blocked"):
             with self.subTest(mode=mode):
-                if mode == "blocked":
+                if mode != "silent":
                     self.setUp()
                 calls = self.routed("난이도: 쉬움\n", fail_haiku=mode)
                 self.assertEqual(calls, [("design", "sonnet", work), ("implement", "haiku", work), ("implement", "sonnet", fresh)])

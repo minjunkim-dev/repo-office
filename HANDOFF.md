@@ -144,7 +144,7 @@
 
 ## 7. 다시 재현하는 법
 
-토큰을 적게 쓰려면 단계표를 복사해 각 claude 단계에 `"model": "sonnet"`을 넣고 `OFFICE_STAGES`로 지정한다. 
+단계마다 모델은 단계표의 `model`이 정한다(설계 `sonnet`, 구현 `difficulty`, 리뷰 `door`). 토큰을 더 적게 쓰려면 단계표를 복사해 리뷰 단계의 `model`을 `sonnet`으로 바꾸고 `OFFICE_STAGES`로 지정한다. 구현 단계까지 `sonnet`으로 바꾸면 쉬운 과제의 haiku가 사라진다.
 
 ```bash
 # 장난감 제품 저장소
