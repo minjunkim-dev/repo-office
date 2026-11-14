@@ -45,7 +45,8 @@
    "by": "claude",
    "session": "work",
    "prompt": "prompts/design.md",
-   "out": "design.md"
+   "out": "design.md",
+   "model": "sonnet"
   },
   {
    "id": "approve",
@@ -57,7 +58,8 @@
    "by": "claude",
    "session": "work",
    "prompt": "prompts/implement.md",
-   "out": "implement.md"
+   "out": "implement.md",
+   "model": "difficulty"
   },
   {
    "id": "check",
@@ -82,7 +84,8 @@
    "by": "claude",
    "session": "review",
    "prompt": "prompts/review.md",
-   "out": "review.md"
+   "out": "review.md",
+   "model": "door"
   },
   {
    "id": "post",

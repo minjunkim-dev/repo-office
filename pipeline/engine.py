@@ -77,13 +77,39 @@ def fill(text, job, task):
     return text
 
 
+def session_key(stage, state):
+    """A stage rerun with sonnet after haiku failed starts a session of its own: the failed one's context stays behind."""
+    return stage["session"] + ("-sonnet" if stage["id"] in state.get("escalated", []) else "")
+
+
+def difficulty(job, state, flow):
+    """쉬움, 보통 or 어려움 from the approved design's one `난이도:` line, else None (missing, invalid, or not the approved bytes)."""
+    stage = next((s for s in flow if s.get("approve")), None)
+    if not stage or sha(job / stage["approve"]) != state.get("approved", {}).get(stage["id"]):
+        return None
+    lines = [l.strip() for l in unicodedata.normalize("NFKC", (job / stage["approve"]).read_text(encoding="utf-8", errors="replace")).splitlines()
+             if "난이도" in l and not re.match(r"\s*#+\s*\S+\s*$", l)]
+    found = {re.fullmatch(r"난이도: (쉬움|보통|어려움)", l) and l.split(": ")[1] for l in lines}
+    return found.pop() if len(found) == 1 and None not in found else None
+
+
+def stage_model(stage, job, state, flow):
+    """The model a worker stage runs on. Workers get --setting-sources project, so the user's model setting never reaches them.
+    implement: haiku for 쉬움, else sonnet, and sonnet after a failed haiku run. review: opus unless the PR is provably easy."""
+    route = stage.get("model", "sonnet")
+    if route == "difficulty":
+        return "sonnet" if stage["id"] in state.get("escalated", []) or difficulty(job, state, flow) != "쉬움" else "haiku"
+    if route == "door":
+        return "sonnet" if state.get("easy_pr") else "opus"
+    return route
+
+
 def claude_argv(config, stage, job, task, state):
     """The worker command: a new session for the first use of a session key, --resume after that."""
-    key = stage["session"]
+    key = session_key(stage, state)
     flag = "--resume" if key in state["sessions"] else "--session-id"
-    argv = [*(fill(arg, job, task) for arg in config["runner"]), flag, session_id(task["name"], key)]
-    if stage.get("model"):
-        argv += ["--model", stage["model"]]
+    argv = [*(fill(arg, job, task) for arg in config["runner"]), flag, session_id(task["name"], key),
+            "--model", stage_model(stage, job, state, config["flow"])]
     # Normal development tools; deny rules hold in every permission mode, so only the engine pushes or edits the PR.
     return argv + ["--allowedTools", *config["allow"], "--disallowedTools", *config["deny"]]
 
@@ -161,10 +187,10 @@ def read_body(body):
     return body.read_bytes() if body.is_file() and body.stat().st_size <= 60000 else b""
 
 
-def open_draft(job, task, stage, raw, head, approved=None):
+def open_draft(job, task, stage, raw, head, approved=None, seen=None):
     """Push the task branch and open a draft PR with the body the implement worker wrote, else why not.
     raw and head are what the caller already checked (the body's bytes, the tested commit): nothing here reads them again.
-    approved is the sha256 a person approved for the stage's easy file."""
+    approved is the sha256 a person approved for the stage's easy file. seen["easy"] says whether the PR proved easy."""
     pr_file = job / stage["out"]
     if pr_file.exists():  # an earlier run opened it, or a person did and wrote the URL
         return None
@@ -209,6 +235,8 @@ def open_draft(job, task, stage, raw, head, approved=None):
         names = git("diff", "--name-only", "-z", "--no-renames", f"{remote[0]}...{head}")
         guarded = names.returncode or any(part.casefold() in TRUST_NAMES for n in names.stdout.split("\0") for part in n.split("/"))
         if approved and hashlib.sha256(design).hexdigest() == approved and easy(design, raw) and not guarded:
+            if seen is not None:
+                seen["easy"] = True
             subprocess.run(["gh", "pr", "ready", url], cwd=job, capture_output=True)
     return None
 
@@ -362,8 +390,12 @@ def advance(job, name, runner):
             raw = read_body(job / stage["body"])
             # The commit compared above, not HEAD again: HEAD can move between here and the push.
             approved = next((state.get("approved", {}).get(s["id"]) for s in flow if stage.get("easy") and s.get("approve") == stage["easy"]), None)
-            if error := open_draft(job, task, stage, raw, state["checked"], approved):
+            seen = {}
+            if error := open_draft(job, task, stage, raw, state["checked"], approved, seen):
                 return block(job, error)
+            if seen:  # the review runs on sonnet only for a PR proven easy here; a PR opened elsewhere gets opus
+                state["easy_pr"] = True
+                save(state_path, state)
         elif stage["by"] == "script" and stage.get("edit"):
             if error := post_body(job, task, stage):
                 return block(job, error)
@@ -390,17 +422,31 @@ def advance(job, name, runner):
             prompt = job / f"{stage['id']}.prompt.md"
             prompt.write_text(fill((PIPELINE / stage["prompt"]).read_text(encoding="utf-8"), job, task), encoding="utf-8")
             # The task folder sits inside the trusted office checkout; a fresh worktree would show the trust dialog.
-            error = runner(f"{TAG}-{name}-{stage['id']}"[:32], job, claude_argv(config, stage, job, task, state), f"Read {prompt} and follow it exactly.")
-            if stage["session"] not in state["sessions"] and not isinstance(error, NotStarted):
-                state["sessions"].append(stage["session"])
+            argv = claude_argv(config, stage, job, task, state)
+            model = argv[argv.index("--model") + 1]
+            error = runner(f"{TAG}-{name}-{stage['id']}"[:32], job, argv, f"Read {prompt} and follow it exactly.")
+            if not isinstance(error, NotStarted):
+                if session_key(stage, state) not in state["sessions"]:
+                    state["sessions"].append(session_key(stage, state))
+                state.setdefault("models", []).append({"stage": stage["id"], "model": model,
+                                                       "rerun": stage["id"] in state.get("escalated", [])})
                 save(state_path, state)  # a blocked stage returns below; the next run must still --resume
             if error:
                 return block(job, error)
             if (job / "BLOCKED.md").exists():
+                if model == "haiku":  # a haiku worker that gave up: sonnet tries once in a new session
+                    (job / "BLOCKED.md").replace(job / "BLOCKED.haiku.md")
+                    state.setdefault("escalated", []).append(stage["id"])
+                    save(state_path, state)
                 continue
             if not out.exists():
                 failed = f"{stage['id']} ended without writing {out.name}"
         if failed:
+            # A failed haiku run (no result file, or a failed check of its commit): sonnet reruns it once, in a new session.
+            target = stage.get("retry", stage["id"])
+            ran = [m["model"] for m in state.get("models", []) if m["stage"] == target]
+            if ran[-1:] == ["haiku"] and target not in state.get("escalated", []):
+                state.setdefault("escalated", []).append(target)
             state["fails"][stage["id"]] = state["fails"].get(stage["id"], 0) + 1
             save(state_path, state)
             if state["fails"][stage["id"]] >= 2:
