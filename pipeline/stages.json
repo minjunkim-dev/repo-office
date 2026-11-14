@@ -116,6 +116,7 @@
   {
    "id": "design",
    "by": "claude",
+   "model": "opus",
    "session": "work",
    "prompt": "prompts/design.md",
    "out": "design.md",
@@ -136,6 +137,7 @@
   {
    "id": "implement",
    "by": "claude",
+   "model": "opus",
    "session": "work",
    "prompt": "prompts/implement.md",
    "out": "implement.md",
@@ -180,6 +182,7 @@
   {
    "id": "review",
    "by": "claude",
+   "model": "opus",
    "session": "review",
    "prompt": "prompts/review.md",
    "out": "review.md",

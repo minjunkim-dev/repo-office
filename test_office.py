@@ -259,6 +259,16 @@ class PipelineTests(unittest.TestCase):
         stage = next(s for s in config["flow"] if s["id"] == "implement")
         self.assertIn(rule, self.engine.claude_argv(config, stage, self.job, task, {"sessions": []}))
 
+    def test_every_claude_stage_pins_its_model(self):
+        # Workers read no user settings and get no leader env through hc, so an unpinned stage runs the account default.
+        config = self.engine.load(self.engine.STAGES, None)
+        task = json.loads((self.job / "task.json").read_text())
+        stages = [s for s in config["flow"] if s["by"] == "claude"]
+        self.assertTrue(stages)
+        for stage in stages:
+            argv = self.engine.claude_argv(config, stage, self.job, task, {"sessions": []})
+            self.assertEqual(argv[argv.index("--model") + 1], "opus", stage["id"])
+
     def test_extra_rules_are_bash_only_and_never_run_outside_the_sandbox(self):
         # excludedCommands run outside the sandbox with the owner's gh and git login, whichever rule allowed them.
         refused = ["Read(**)", "Bash(*)", "Bash(gh *)", "Bash(gh pr view 7)", "Bash(gh api --paginate repos/o/r)",

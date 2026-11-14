@@ -172,7 +172,7 @@
 
 ## 7. 다시 재현하는 법
 
-토큰을 적게 쓰려면 단계표를 복사해 각 claude 단계에 `"model": "sonnet"`을 넣고 `OFFICE_STAGES`로 지정한다. Haiku는 위 함정 때문에 Bash가 자주 막힌다.
+단계표의 claude 단계는 `"model": "opus"`로 고정한다. 고정하지 않으면 작업자는 계정의 기본 모델로 돈다. 작업자는 `--setting-sources project`라 사용자 설정의 모델을 읽지 않고, `hc run`으로 떠서 leader의 `ANTHROPIC_MODEL`도 받지 않는다. 2026-11-14 BGLike `archer-oil`·`rock-stun`이 이렇게 Haiku 5.5로 돌았다. 그 리뷰 작업자는 `engine.py preflight archer-oil; echo "EXIT=$?"`처럼 명령을 이어 써서 허용 규칙에 맞지 않아 거부됐고, 구현 작업자는 `engine.py test`를 백그라운드로 돌리고 턴을 끝내 두 번 실패했다. 지시서는 둘 다 이미 금지한다. 토큰을 적게 쓰려면 단계표를 복사해 `"model": "sonnet"`으로 바꾸고 `OFFICE_STAGES`로 지정한다. Haiku는 위 함정 때문에 Bash가 자주 막힌다.
 
 ```bash
 # 장난감 제품 저장소
