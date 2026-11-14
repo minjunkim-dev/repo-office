@@ -473,8 +473,7 @@ def advance(job, name, runner):
                 return block(job, "sandbox-exec is missing: the check stage runs the worker's code only inside a sandbox")
             # The engine posts the PR body right after this stage, outside any sandbox: the tested code must not write it.
             # Nor the approved files: the draft stage reads them to decide the Ready.
-            approves = [s["approve"] for s in flow if s.get("approve")]
-            result = run_test(job, task, protect=[*bodies, *approves], capture_output=True, text=True)
+            result = run_test(job, task, protect=protected(flow), capture_output=True, text=True)
             refused = f"- {refused_note()}\n" if result.returncode and REFUSED in result.stdout + result.stderr else ""
             (job / stage["out"]).write_text(
                 f"# {stage['id']}\n\n- 명령: `{task['test']}`\n- 커밋: `{head}`\n- exit {result.returncode}\n{refused}"
@@ -615,7 +614,8 @@ def test(name):
     # Outside the sandbox: a link left in the task folder must not send the log to another file. Read back through the
     # same descriptor: the test may swap test.log for a link while it runs, and the engine would print what it names.
     with os.fdopen(os.open(log, os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644), "w+b") as out:
-        code = run_test(job, load(job / "task.json", None), stdout=out, stderr=subprocess.STDOUT).returncode
+        code = run_test(job, load(job / "task.json", None), protect=protected(load(STAGES, None)["flow"]),
+                        stdout=out, stderr=subprocess.STDOUT).returncode
         out.seek(0)
         text = out.read().decode("utf-8", errors="replace")
     print(text[-4000:])
@@ -623,6 +623,11 @@ def test(name):
         print(refused_note())
     print(f"exit {code}; full output: {log}")
     return code
+
+
+def protected(flow):
+    """The PR bodies and approved files: a test, in the check stage or the worker's `engine.py test`, never writes them."""
+    return [s[key] for s in flow for key in ("body", "approve") if s.get(key)]
 
 
 def refused_note():

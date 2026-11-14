@@ -1054,14 +1054,25 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("mine", out.getvalue())
         self.assertNotIn("NOT THE LOG", out.getvalue())
 
+    @unittest.skipUnless(shutil.which("sandbox-exec"), "macOS sandbox-exec")
+    def test_a_worker_test_run_writes_neither_the_pr_body_nor_the_approved_design(self):
+        # AGENTS.md 「테스트 명령이 받는 것」: the same writes as the check stage, which the draft stage relies on.
+        task = json.loads((self.job / "task.json").read_text())
+        task["test"] = ("for f in pr-body.md design.md; do (echo x > ../$f) 2>/dev/null && echo $f written || echo $f denied; done")
+        (self.job / "task.json").write_text(json.dumps(task))
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.engine.test("search")
+        self.assertIn("pr-body.md denied\ndesign.md denied", out.getvalue())
+
     def test_a_relative_path_entry_is_no_toolchain(self):
-        cwd = os.getcwd()
-        self.addCleanup(os.chdir, cwd)
-        inside = Path(tempfile.mkdtemp(dir=Path.home())).resolve()
-        self.addCleanup(shutil.rmtree, inside, True)
-        (inside / "bin").mkdir()
-        os.chdir(inside)
-        self.assertEqual(self.engine.toolchain_reads(f".{os.pathsep}bin"), [])
+        # A relative entry would name the folder `new` ran from; here that folder is inside a home of its own.
+        home = Path(tempfile.mkdtemp(dir="/private/tmp")).resolve()
+        self.addCleanup(shutil.rmtree, home, True)
+        (home / "bin").mkdir()
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(home)
+        with unittest.mock.patch.dict(os.environ, {"HOME": str(home)}):
+            self.assertEqual(self.engine.toolchain_reads(f".{os.pathsep}bin"), [])
 
     @unittest.skipUnless(shutil.which("sandbox-exec"), "macOS sandbox-exec")
     def test_a_refused_test_points_at_the_contract(self):
