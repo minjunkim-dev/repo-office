@@ -533,7 +533,8 @@ def new(name, repo, base):
     job = JOBS / name
     job.mkdir(parents=True)
     # Each cell in its own subshell: a test cell like `cd app; make test` must not hide a failing check.
-    test = " && ".join(f"( {c} )" for c in (cells["check"], cells["test"]) if c)
+    # The newlines keep a trailing `# comment` in a cell from swallowing the closing parenthesis.
+    test = " && ".join(f"(\n{c}\n)" for c in (cells["check"], cells["test"]) if c)
     save(job / "task.json", {"name": name, "repo": str(Path(repo).resolve()), "test": test, "setup": cells["setup"], "base": base})
     (job / "INTENT.md").write_text(
         f"# {name}\n\n## 목표\n\n## 지시 원문\n\n## 하지 않을 것\n\n## 결정 기록\n", encoding="utf-8")
