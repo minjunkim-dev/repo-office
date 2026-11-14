@@ -467,12 +467,22 @@ def advance(job, name, runner):
             if not shutil.which("sandbox-exec"):
                 return block(job, "sandbox-exec is missing: setup runs the product's code only inside a sandbox")
             if task.get("setup"):
-                result = run_test(job, task, command=task["setup"], network=True, capture_output=True, text=True)
+                result = run_test(job, task, protect=protected(flow), command=task["setup"], network=True, capture_output=True, text=True)
                 code, tail = result.returncode, (result.stdout + result.stderr)[-4000:]
             else:
                 code, tail = 0, "no setup command registered"
-            (job / stage["out"]).write_text(f"# {stage['id']}\n\n- 명령: `{task.get('setup', '없음')}`\n- exit {code}\n\n```\n{tail}\n```\n",
-                                            encoding="utf-8")
+            # Files setup left in repo/ would fail the check later as the worker's uncommitted changes.
+            dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=job / "repo", capture_output=True,
+                                   text=True, env=SAFE_GIT).stdout.strip()
+            report = (f"# {stage['id']}\n\n- 명령: `{task.get('setup', '없음')}`\n- exit {code}\n"
+                      f"- repo/의 커밋하지 않은 변경: {dirty or '없음'}\n\n```\n{tail}\n```\n")
+            # Outside the sandbox, right after the setup code ran: a link it left must not send this to another file.
+            try:
+                with os.fdopen(os.open(job / stage["out"], os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644), "w",
+                               encoding="utf-8") as out:
+                    out.write(report)
+            except OSError as error:
+                return block(job, f"{stage['out']} is not a plain file: {error}")
             if code:
                 failed = f"`{task['setup']}` exit {code}"
         elif stage["by"] == "script":

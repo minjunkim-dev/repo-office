@@ -174,6 +174,13 @@
   - `TMPDIR`·`HOME`은 `getconf DARWIN_USER_TEMP_DIR` 안의 `repo-office-<TAG>/<과제>`다. macOS 27.2의 `mktemp`는 `TMPDIR`과 관계없이 그 폴더에, clang 모듈 캐시는 `DARWIN_USER_CACHE_DIR`에 써서 두 폴더 쓰기를 연다. `realpath`는 읽는 폴더의 상위 폴더를 stat하므로 그 상위 폴더에 `file-read-metadata`만 준다(`~/.local/bin/python3`가 `realpath: Operation not permitted`로 실패했다).
   - 결과(`run_test`, 세 과제): BGLike 문서상 명령 전체가 exit 0(`make repository-check` 145개 OK, `make godot-check` 포함). MobileEnvironment Python 두 명령 47개·16개 OK. smallnext 420개 중 failures 2(`work/launch-model.lock`, 제품 쪽). `test_backup_ai_budget`은 `TMPDIR`이 git 밖이 되어 통과한다.
   - SwiftPM은 manifest를 컴파일할 때 스스로 `sandbox-exec`를 써서, sandbox 안에서 `sandbox_apply: Operation not permitted`로 실패한다. 처음 보는 SwiftPM 프로젝트도 같으므로 제품의 test 명령에 `swift test --disable-sandbox`를 쓴다. 그러면 manifest는 컴파일되고, 의존성 clone(github.com)에서 멈춘다. 테스트 환경에는 네트워크가 없으므로 의존성은 그 전에 받아 두어야 한다.
+- 2026-11-14, setup 단계: 테스트 환경에 네트워크가 없어 의존성을 받는 제품이 처음부터 실패했다. 그래서 승인과 구현 사이에 setup 단계를 더하고, 같은 profile에서 네트워크만 연다.
+  - 처음에는 setup에서 `Could not resolve host: github.com`이었다. macOS의 이름 찾기는 `/var/run/mDNSResponder` unix socket을 거치는데, 밖의 socket을 모두 막았기 때문이다. 그 socket만 연다.
+  - Seatbelt의 `(remote ip "localhost:*")`는 이 기기 자신의 LAN 주소도 허용한다. 기본 게이트웨이와 `1.1.1.1:443`은 막힌다(sandbox 밖에서는 닿는다).
+  - SwiftPM의 build manifest 쓰기가 과제 폴더 안에서 `Operation not permitted`였다. Foundation의 원자적 저장은 시동 디스크가 아닌 볼륨에서 `<볼륨>/.TemporaryItems/folders.<uid>`에 임시 파일을 만든다. 그 폴더 쓰기를 연다.
+  - 상속받은 `CARGO_HOME=~/.cargo`는 읽지 못하는 폴더라 cargo가 실패한다. 홈 폴더 안을 가리키는데 읽지 못하는 변수는 넘기지 않는다. 그러면 cargo가 과제의 `HOME/.cargo`를 쓰고, setup의 `cargo fetch`가 받은 crate를 검사가 오프라인으로 쓴다.
+  - 결과: smallnext `cargo fetch --locked` 뒤 `make api-check`가 오프라인에서 exit 0이다(`--read ~/.rustup`, `RUSTUP_TOOLCHAIN` 없이). MobileEnvironment `swift package resolve --disable-sandbox` 뒤 `swift test --disable-sandbox`: manifest 컴파일·의존성·빌드가 오프라인에서 된다. 테스트는 481개 통과, 149개 실패이고, 한 테스트가 10분 넘게 멈춰 중단했다. 실패는 제품 쪽이다. 제품 코드가 스스로 `sandbox-exec`를 띄우고(sandbox 안에서 거부), 실제 홈의 `~/Library/Caches/dev.runstir`에 쓰고(`HOME`을 따르지 않는다), 도구 실행(`gzip`, `java` 등)이 `Failed to launch the new process ... Operation not permitted`로 실패한다(마지막 원인은 확인하지 않았다).
+  - 제품이 맞출 것: smallnext의 setup 칸 `mise install && make api-setup`은 홈 폴더에 툴체인을 설치해서 이 환경에서 쓰지 못한다. 의존성 받기(`cargo fetch`)를 따로 둔다. SwiftPM 제품은 `--disable-sandbox`를 쓴다.
 
 ## 7. 다시 재현하는 법
 

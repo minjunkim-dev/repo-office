@@ -342,6 +342,25 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("`exit 3` exit 3, twice in a row", (self.job / "BLOCKED.md").read_text())
         self.assertEqual([c[0] for c in worker.calls], ["design"])
 
+    @unittest.skipUnless(shutil.which("sandbox-exec"), "macOS sandbox-exec")
+    def test_setup_writes_neither_the_pr_body_nor_the_approved_design_nor_through_a_link(self):
+        # Setup runs the product's code with network; the engine writes setup.md outside the sandbox right after it.
+        outside = Path(self.tmp.name) / "user-file"
+        outside.write_text("keep\n")
+        task = json.loads((self.job / "task.json").read_text())
+        task["setup"] = (f'(echo x > "{self.job}/pr-body.md") 2>/dev/null; (echo x >> "{self.job}/design.md") 2>/dev/null; '
+                         f'ln -s "{outside}" "{self.job}/setup.md"')
+        (self.job / "task.json").write_text(json.dumps(task))
+        worker = FakeWorker(self.job)
+        self.engine.run("search", worker)
+        design = (self.job / "design.md").read_text()
+        self.engine.approve("search")
+        self.assertEqual(self.engine.run("search", worker), self.engine.BLOCKED)
+        self.assertIn("setup.md is not a plain file", (self.job / "BLOCKED.md").read_text())
+        self.assertEqual(outside.read_text(), "keep\n")
+        self.assertEqual((self.job / "design.md").read_text(), design)
+        self.assertFalse((self.job / "pr-body.md").exists())
+
     def test_uncommitted_changes_fail_the_check(self):
         worker = FakeWorker(self.job)
         self.engine.run("search", worker)
