@@ -809,7 +809,8 @@ def tasks():
     rows = []
     for job in sorted(p for p in JOBS.glob("*") if (p / "task.json").exists()):
         try:
-            rows.append(job_status(job))
+            # state.json may hold any JSON (NaN, objects): give the views only text and whole numbers
+            rows.append({k: v if isinstance(v, int) else str(v) for k, v in job_status(job).items()})
         except Exception as error:  # one hand-edited state.json (since not a number, a key missing) must not hide the rest
             rows.append({"name": job.name, "stage": "unreadable", "at": "-", "minutes": 0, "model": "-", "last": "-",
                          "note": f"state.json을 읽지 못함: {type(error).__name__}"})
@@ -828,9 +829,7 @@ def board():
     """Write jobs/board.html, one screen: the Pixel Agents office (OFFICE_PIXEL_AGENTS, a local address) beside
     jobs/board-tasks.html, stage lanes and a card per task from files only, which reloads itself every 5 seconds."""
     flow = [{"id": s["id"], "by": s["by"]} for s in load(STAGES, {"flow": []})["flow"]]
-    # state.json may hold any JSON (NaN, objects): give the page only text and whole numbers, so one task cannot break it.
-    rows = [{k: v if isinstance(v, int) else str(v) for k, v in t.items()} for t in tasks()]
-    data = json.dumps({"time": f"{datetime.now():%H:%M:%S}", "flow": flow, "tasks": rows}, ensure_ascii=False)
+    data = json.dumps({"time": f"{datetime.now():%H:%M:%S}", "flow": flow, "tasks": tasks()}, ensure_ascii=False)
     # Inside <script>, a worker's text must not close the tag: escape <, > and & as JSON \u escapes.
     data = data.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     # Only a local http address without a query: the token URL would hand the page the right to install hooks.

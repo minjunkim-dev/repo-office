@@ -1347,6 +1347,10 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         self.assertNotEqual(stages["search"], "unreadable")
         for task in data["tasks"]:
             self.assertTrue(all(isinstance(v, (str, int)) for v in task.values()), task)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(self.engine.workers(), 0)  # the table view lists every task too
+        self.assertTrue(all(name in out.getvalue() for name in ("nan", "text", "bare", "search")), out.getvalue())
         texts = [e["text"] for e in self.run_page()]
         self.assertIn("읽기 실패", texts)
         self.assertIn("search", texts)
