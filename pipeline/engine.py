@@ -214,7 +214,8 @@ def read_body(body):
 
 
 def open_draft(job, task, stage, raw, head, approved=None, seen=None):
-    """Push the task branch and open a draft PR with the body the implement worker wrote, else why not.
+    """Push the task branch and open a ready PR with the body the implement worker wrote, else why not.
+    Not a draft: opening a draft and marking it ready a second later ran each PR workflow twice and the cancelled run left a failed check.
     raw and head are what the caller already checked (the body's bytes, the tested commit): nothing here reads them again.
     approved is the sha256 a person approved for the stage's easy file. seen["easy"] says whether the PR proved easy."""
     pr_file = job / stage["out"]
@@ -246,14 +247,14 @@ def open_draft(job, task, stage, raw, head, approved=None, seen=None):
     push = git("push", "origin", f"{head}:refs/heads/{branch}")
     if push.returncode:
         return f"git push failed: {push.stderr.strip()}"
-    made = subprocess.run(["gh", "pr", "create", "--repo", repo, "--draft", "--head", branch,
+    made = subprocess.run(["gh", "pr", "create", "--repo", repo, "--head", branch,
                            "--base", base, "--title", title[2:].strip(),
                            "--body", text.lstrip("\n")], cwd=job, capture_output=True, text=True)
     url = (made.stdout.strip().splitlines() or [""])[-1]
     if made.returncode or not re.fullmatch(rf"https://github\.com/{re.escape(repo)}/pull/\d+", url, re.I):
         return f"gh pr create failed: {(made.stderr or made.stdout).strip()}"
     pr_file.write_text(url + "\n", encoding="utf-8")
-    # The ready stage marks every PR ready. Easy (proven here) only picks the review's model and the report's note:
+    # The PR opens ready; the ready stage marks a person's draft PR ready. Easy (proven here) only picks the review's model and the report's note:
     # a hard or trust-boundary PR needs a person to read its diff before the merge.
     if stage.get("easy"):
         design = read_body(job / stage["easy"])  # only the bytes a person approved
