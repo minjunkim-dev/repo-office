@@ -75,16 +75,6 @@ class PipelineTests(unittest.TestCase):
         patcher = unittest.mock.patch.dict(os.environ, {"PATH": f"{stub}{os.pathsep}{os.environ['PATH']}"})
         patcher.start()
         self.addCleanup(patcher.stop)
-        if not shutil.which("sandbox-exec"):
-            # Off macOS (CI), a stand-in drops `-p <profile>` and runs the command, so the flow tests still reach the
-            # check stage. The real sandbox is tested only where sandbox-exec exists.
-            bin_dir = Path(self.tmp.name) / "bin"
-            bin_dir.mkdir()
-            (bin_dir / "sandbox-exec").write_text('#!/bin/sh\nshift 2\nexec "$@"\n', encoding="utf-8")
-            (bin_dir / "sandbox-exec").chmod(0o755)
-            patcher = unittest.mock.patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"})
-            patcher.start()
-            self.addCleanup(patcher.stop)
 
     def state(self):
         return json.loads((self.job / "state.json").read_text())
@@ -407,7 +397,6 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(call[call.index("--title") + 1], "fix: x")
         self.assertEqual(call[call.index("--body") + 1], text)
 
-    @unittest.skipUnless(shutil.which("sandbox-exec"), "macOS sandbox-exec")
     def test_draft_stage_pushes_only_the_checked_commit(self):
         bare, _, gh = self.fake_github()
         worker = FakeWorker(self.job)
@@ -524,7 +513,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual([c for c in gh() if c[:2] == ["pr", "edit"]], [])
 
     def test_the_review_body_is_posted_only_to_a_github_pr_url(self):
-        # gh runs outside the sandbox with the owner's login: pr.txt must name a GitHub PR, not an option or another host.
+        # gh runs with the owner's login: pr.txt must name a GitHub PR, not an option or another host.
         # Starts at the post stage: the review stage already refuses a pr.txt it cannot pin to a repository.
         _, _, gh = self.fake_github()
         (self.job / "design.md").write_text("d\n", encoding="utf-8")
@@ -566,7 +555,7 @@ class PipelineTests(unittest.TestCase):
             return self.engine.run("search", FakeWorker(self.job))
 
     def test_the_engine_pushes_the_review_commits_then_posts_the_body(self):
-        # In the sandbox the worker's git cannot read the gh login, excluded or not: the engine pushes for it.
+        # The worker's push is denied: the engine pushes the review's commits for it.
         tip, edits = self.at_post()
         head = self.review_commit("fix.py")
         self.assertEqual(self.post(), self.engine.DONE)
@@ -590,7 +579,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual((tip(), edits()), (before, []))
 
     def test_review_commits_go_only_to_the_task_branch(self):
-        # Tests in the sandbox can rename the local branch: the engine names the remote branch itself.
+        # The worker or its tests can rename the local branch: the engine names the remote branch itself.
         tip, edits = self.at_post()
         before_main = tip("refs/heads/main")
         subprocess.run(["git", "-C", str(self.job / "repo"), "checkout", "-q", "-B", "main"], check=True)
