@@ -11,6 +11,7 @@ import shutil
 import socket
 import subprocess
 import tempfile
+import time
 import unittest
 import unittest.mock
 
@@ -20,6 +21,7 @@ OFFICE = Path(__file__).resolve().parent
 
 def load_engine(jobs):
     os.environ["OFFICE_JOBS"] = str(jobs)
+    os.environ["OFFICE_RETRY_WAIT"] = "0"  # the engine's one retry of a transient error, without the wait
     spec = importlib.util.spec_from_file_location("engine", OFFICE / "pipeline/engine.py")
     engine = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(engine)
@@ -109,16 +111,20 @@ class PipelineTests(unittest.TestCase):
         calls = lambda: [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []  # noqa: E731
         return draft, calls
 
-    def test_full_flow_waits_for_people_and_keeps_contexts_apart(self):
+    def test_full_flow_waits_only_for_the_design_approval_and_keeps_contexts_apart(self):
         bare, draft, gh = self.fake_github()
         worker = FakeWorker(self.job)
         self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
         self.assertEqual(self.state()["stage"], "approve")
         self.assertEqual(self.engine.approve("search"), 0)
-        self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
-        self.assertEqual(self.state()["stage"], "pr")
+        # An office checkout whose origin differs from the PR's repository, whatever this checkout's origin is.
+        office = Path(self.tmp.name) / "office"
+        subprocess.run(["git", "init", "-q", str(office)], check=True)
+        subprocess.run(["git", "-C", str(office), "remote", "add", "origin", "https://github.com/me/office.git"], check=True)
+        self.engine.BASELINE = office
+        # From the approval to the end with no person: the engine marks the PR ready and asks the review bot once.
+        self.assertEqual(self.engine.run("search", worker), self.engine.DONE)
         self.assertIn("exit 0", (self.job / "check.md").read_text())
-        # The engine pushed the task branch and opened a draft from the worker's body; the review waits for a person.
         head = subprocess.run(["git", "-C", str(self.job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout
         self.assertEqual(subprocess.run(["git", "-C", str(bare), "rev-parse", "office/search"], capture_output=True, text=True).stdout, head)
         create = gh()[0]
@@ -129,21 +135,21 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual((self.job / "pr.txt").read_text(), "https://github.com/O/R/pull/7\n")
         self.assertNotIn("branch.office/search.remote", subprocess.run(
             ["git", "-C", str(self.job / "repo"), "config", "--list"], capture_output=True, text=True).stdout)  # no -u
-        self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)  # still a draft
-        self.assertEqual([c[:2] for c in gh()], [["pr", "create"], ["pr", "view"], ["pr", "view"]])
-        draft.write_text("false\n", encoding="utf-8")
-        # An office checkout whose origin differs from the PR's repository, whatever this checkout's origin is.
-        office = Path(self.tmp.name) / "office"
-        subprocess.run(["git", "init", "-q", str(office)], check=True)
-        subprocess.run(["git", "-C", str(office), "remote", "add", "origin", "https://github.com/me/office.git"], check=True)
-        self.engine.BASELINE = office
+        self.assertEqual([c[:2] for c in gh()], [["pr", "create"], ["pr", "view"], ["pr", "ready"], ["pr", "comment"], ["pr", "edit"]])
+        self.assertIn("@coderabbitai review", next(c for c in gh() if c[:2] == ["pr", "comment"]))
+        report = (self.job / "REPORT.md").read_text()
+        head = subprocess.run(["git", "-C", str(self.job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        for part in ("https://github.com/O/R/pull/7", f"gh pr merge 7 --squash --match-head-commit {head}", "- design: sonnet",
+                     "- implement: sonnet", "- review: opus", "사람이 diff를 읽고 병합한다", "exit 0"):
+            self.assertIn(part, report)
+        self.engine.save(self.job / "state.json", {**self.state(), "stage": "ready"})  # the ready stage runs again
         self.assertEqual(self.engine.run("search", worker), self.engine.DONE)
-        self.assertEqual([c[:2] for c in gh()].count(["pr", "create"]), 1)
+        self.assertEqual([c[:2] for c in gh()].count(["pr", "comment"]), 1)  # asked once
         # The engine, not the reviewer, posts the review's body: as bytes on stdin to the pr.txt URL.
         self.assertEqual(gh()[-1], ["pr", "edit", "https://github.com/O/R/pull/7", "--body-file", "-",
                                     "## Summary\n\n## Review\nok\n"])
 
-        (design, d_argv, message), (implement, i_argv, _), (review, r_argv, _) = worker.calls
+        (design, d_argv, message), (implement, i_argv, _), (review, r_argv, _) = worker.calls[:3]
         self.assertEqual((design, implement, review), ("design", "implement", "review"))
         work = self.engine.session_id("search", "work")
         self.assertEqual(d_argv[d_argv.index("--session-id") + 1], work)
@@ -228,7 +234,8 @@ class PipelineTests(unittest.TestCase):
         task = json.loads((self.job / "task.json").read_text())
         task["test"] = "touch cache.pyc"
         (self.job / "task.json").write_text(json.dumps(task))
-        self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
+        self.engine.run("search", worker)
+        self.assertEqual(self.state()["stage"], "review")  # past the check and the draft
         self.assertIn("커밋하지 않은 변경: 없음", (self.job / "check.md").read_text())
 
     def test_draft_stage_marks_only_an_easy_pr_ready(self):
@@ -285,30 +292,27 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
                 self.assertEqual(self.engine.approve("search"), 0)
                 self.engine.run("search", worker)
-                calls = [c[:2] for c in gh()]
-                self.assertEqual(calls.count(["pr", "ready"]), int(ready))
-                # The review's model follows the same proof: sonnet for this checked commit only when it was easy.
+                # Every PR is marked ready; the proof of easy picks the review's model (and the report's note) only.
+                self.assertIn(["pr", "ready", "https://github.com/O/R/pull/7"], gh())
+                self.assertEqual(self.state()["stage"], "review")
                 self.assertEqual(self.state().get("easy_pr") == self.state()["checked"], bool(ready))
-                if ready:
-                    self.assertIn(["pr", "ready", "https://github.com/O/R/pull/7"], gh())
-                    self.assertEqual(self.state()["stage"], "review")  # past the person's Ready
-                else:
-                    self.assertEqual(self.state()["stage"], "pr")
 
-    def test_draft_stage_marks_ready_only_the_approved_design(self):
-        # The same easy text, but not the bytes a person approved: the PR stays a draft.
+    def test_draft_stage_proves_easy_only_from_the_approved_design(self):
+        # The same easy text, but not the bytes a person approved: not easy.
         _, _, gh = self.fake_github()
         (self.job / "design.md").write_text("Door: 되돌리기 쉬움\n", encoding="utf-8")
         body = "# fix: x\n\nDoor: 되돌리기 쉬움\n신뢰 경계: 없음\n".encode()
         task = json.loads((self.job / "task.json").read_text())
         head = subprocess.run(["git", "-C", str(self.job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
         stage = {"id": "draft", "body": "pr-body.md", "out": "pr.txt", "easy": "design.md"}
-        self.assertIsNone(self.engine.open_draft(self.job, task, stage, body, head, "0" * 64))
-        self.assertEqual([c[:2] for c in gh()], [["pr", "create"]])
+        seen = {}
+        self.assertIsNone(self.engine.open_draft(self.job, task, stage, body, head, "0" * 64, seen))
+        self.assertEqual(seen, {})
         (self.job / "pr.txt").unlink()
         approved = hashlib.sha256((self.job / "design.md").read_bytes()).hexdigest()
-        self.assertIsNone(self.engine.open_draft(self.job, task, stage, body, head, approved))
-        self.assertEqual([c[:2] for c in gh()], [["pr", "create"], ["pr", "create"], ["pr", "ready"]])
+        self.assertIsNone(self.engine.open_draft(self.job, task, stage, body, head, approved, seen))
+        self.assertEqual(seen, {"easy": True})
+        self.assertEqual([c[:2] for c in gh()], [["pr", "create"], ["pr", "create"]])
 
     def test_draft_stage_reads_easy_only_from_the_approved_design(self):
         # A process the tested code left behind rewrites design.md after the engine's approval check: no Ready.
@@ -404,15 +408,16 @@ class PipelineTests(unittest.TestCase):
         worker = FakeWorker(self.job)
         self.engine.run("search", worker)
         self.engine.approve("search")
-        self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
+        self.engine.run("search", worker)
         # A rerun after a blocked draft: a commit made since the check goes through the check again before the push.
         (self.job / "pr.txt").unlink()
+        (self.job / "BLOCKED.md").unlink(missing_ok=True)  # the review blocked: setUp's clone is not pinned
         self.engine.save(self.job / "state.json", {**self.state(), "stage": "draft"})
         repo = self.job / "repo"
         subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com",
                         "commit", "-q", "--allow-empty", "-m", "after the check"], check=True)
         head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-        self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
+        self.engine.run("search", worker)
         self.assertIn(head, (self.job / "check.md").read_text())
         self.assertEqual(self.state()["checked"], head)
         self.assertEqual(subprocess.run(["git", "-C", str(bare), "rev-parse", "office/search"],
@@ -455,7 +460,7 @@ class PipelineTests(unittest.TestCase):
         self.engine.run("search", worker)
         self.engine.approve("search")
         with unittest.mock.patch.object(self.engine, "read_body", commit_after_the_comparison):
-            self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
+            self.engine.run("search", worker)
         rev = lambda *a: subprocess.run(["git", *a], capture_output=True, text=True).stdout.strip()  # noqa: E731
         self.assertEqual(len(reads), 1)
         self.assertNotEqual(rev("-C", str(repo), "rev-parse", "HEAD"), self.state()["checked"])  # the race happened
@@ -734,7 +739,8 @@ class PipelineTests(unittest.TestCase):
         state = self.job / "state.json"
         self.assertEqual(json.loads(state.read_text())["sessions"] if state.exists() else [], [])
         # The jobs folder's tag keeps another checkout's engine from closing this terminal as a leftover.
-        self.assertEqual(names, [f"{self.engine.TAG}-search-design"])
+        # hc run failing may be passing: the engine tries once more before it blocks.
+        self.assertEqual(names, [f"{self.engine.TAG}-search-design"] * 2)
 
     def test_a_second_run_of_the_same_task_stops(self):
         import fcntl
@@ -1011,6 +1017,81 @@ class PipelineTests(unittest.TestCase):
                 self.assertIn("exit 0", (self.job / "check.md").read_text())  # the sonnet run passed the check
                 self.assertNotIn("gave up", (self.job / "BLOCKED.md").read_text() if (self.job / "BLOCKED.md").exists() else "")
         self.assertTrue((self.job / "BLOCKED.haiku.md").exists())
+
+    def test_a_transient_error_is_retried_once_then_blocks(self):
+        self.fake_github()
+        worker = FakeWorker(self.job)
+        self.engine.run("search", worker)
+        self.engine.approve("search")
+        answers = ["gh pr ready failed: timeout", None]
+        with unittest.mock.patch.object(self.engine, "make_ready", side_effect=lambda *a: answers.pop(0)):
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                self.engine.run("search", worker)
+        self.assertIn("retrying once", out.getvalue())
+        self.assertEqual(self.state()["stage"], "review")  # the second try passed
+        self.engine.save(self.job / "state.json", {**self.state(), "stage": "ready", "retried": {}})
+        (self.job / "BLOCKED.md").unlink(missing_ok=True)
+        with unittest.mock.patch.object(self.engine, "make_ready", return_value="gh pr ready failed: down") as made:
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(self.engine.run("search", worker), self.engine.BLOCKED)
+        self.assertEqual(made.call_count, 2)
+        self.assertIn("gh pr ready failed", (self.job / "BLOCKED.md").read_text())
+
+    def test_a_block_answered_in_intent_runs_on_and_the_worker_rereads_it(self):
+        class Worker(FakeWorker):
+            def __call__(self, name, cwd, argv, message):
+                if name.endswith("design") and len(self.calls) == 0:
+                    self.calls.append(("design", argv, message))
+                    (self.job / "BLOCKED.md").write_text("which API?\n", encoding="utf-8")
+                    return None
+                return super().__call__(name, cwd, argv, message)
+
+        worker = Worker(self.job)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.engine.run("search", worker), self.engine.BLOCKED)
+            self.assertEqual(self.engine.run("search", worker), self.engine.BLOCKED)  # no answer yet
+        intent = self.job / "INTENT.md"
+        intent.write_text(intent.read_text() + "- 2026-11-14: v2 API를 쓴다\n", encoding="utf-8")
+        os.utime(intent, (time.time() + 5, time.time() + 5))
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)  # design written, waits for approval
+        self.assertEqual(len(worker.calls), 2)
+        self.assertIn("Re-read", worker.calls[1][2])
+        self.assertIn(str(intent), worker.calls[1][2])
+        self.assertFalse((self.job / "BLOCKED.md").exists())
+        self.assertTrue(list(self.job.glob("BLOCKED.*.md")))  # the old block is kept
+
+    def test_new_fetches_the_base_and_blocks_while_setup_has_not_passed(self):
+        repo = self.product(setup="echo first", test="true")
+        # origin moved after this checkout fetched: the new setup must come from origin, not the stale local ref.
+        other = Path(self.tmp.name) / "other"
+        subprocess.run(["git", "clone", "-q", str(Path(self.tmp.name) / "product.git"), str(other)], check=True, capture_output=True)
+        jobs = self.engine.JOBS
+        (other / "AGENTS.md").write_text("## 명령\n\n- setup: `test -f ../BLOCKED.md && echo held > held`\n- check: `N/A: x`\n"
+                                         "- test: `true`\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(other), "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qam", "moved"], check=True)
+        subprocess.run(["git", "-C", str(other), "push", "-q", "origin", "HEAD:main"], check=True, capture_output=True)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.engine.new("connect", str(repo), "origin/main"), 0)
+        job = jobs / "connect"
+        self.assertEqual(json.loads((job / "task.json").read_text())["setup"], "test -f ../BLOCKED.md && echo held > held")
+        self.assertTrue((job / "repo/held").exists())  # BLOCKED.md stood while setup ran
+        self.assertFalse((job / "BLOCKED.md").exists())  # and went once it passed
+
+    def test_an_answered_setup_block_runs_setup_again_first(self):
+        repo = self.product(setup="test -f ../fixed")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.engine.new("connect", str(repo), "main"), self.engine.BLOCKED)
+        job = self.engine.JOBS / "connect"
+        worker = FakeWorker(job)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.engine.run("connect", worker), self.engine.BLOCKED)
+        (job / "fixed").write_text("")
+        os.utime(job / "INTENT.md", (time.time() + 5, time.time() + 5))
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.engine.run("connect", worker), self.engine.WAIT)
+        self.assertIn("exit 0", (job / "setup.md").read_text())
+        self.assertEqual([c[0] for c in worker.calls], ["design"])
 
     def test_workers_reads_files_only(self):
         self.engine.run("search", FakeWorker(self.job))

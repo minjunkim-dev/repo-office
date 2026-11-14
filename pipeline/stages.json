@@ -75,9 +75,10 @@
    "out": "pr.txt"
   },
   {
-   "id": "pr",
-   "by": "human",
-   "ready": "pr.txt"
+   "id": "ready",
+   "by": "script",
+   "ready": "pr.txt",
+   "request": "@coderabbitai review"
   },
   {
    "id": "review",

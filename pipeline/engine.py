@@ -10,8 +10,8 @@
   engine.py preflight <task>  run repo-baseline's review preflight for pr.txt in its repo/, diff into pr.diff
   engine.py skills <task> <base>  run matt-skills check_skills.py in its repo/ (exit 0 delegate, 1 missing, 2 do not)
 
-After the check passes, run pushes the task branch and opens a draft PR from pr-body.md; a person marks it ready.
-After the review, run replaces the PR body with review-body.md.
+After the check passes, run pushes the task branch, opens a PR from pr-body.md, marks it ready and asks the review bot once.
+After the review, run replaces the PR body with review-body.md and writes REPORT.md. People act only to approve the design and to merge.
 
 Exit codes for run: 0 done, 2 no such task or another run of it is going, 3 waiting for a person, 4 blocked.
 """
@@ -45,6 +45,10 @@ BASELINE = BASELINE and BASELINE.resolve()
 JOBS = Path(os.environ.get("OFFICE_JOBS", OFFICE / "jobs"))
 STAGES = Path(os.environ.get("OFFICE_STAGES", PIPELINE / "stages.json"))
 DONE, WAIT, BLOCKED = 0, 3, 4
+# Errors a second try may clear (network, GitHub, hc): the engine retries them once on its own, after this many seconds.
+TRANSIENT = ("git push failed", "gh pr create failed", "gh pr edit failed", "gh pr ready failed", "gh pr comment failed",
+             "gh pr view", "hc run failed")
+RETRY_WAIT = float(os.environ.get("OFFICE_RETRY_WAIT", "10"))
 # hc terminal names are global to the hc core; this tag keeps another checkout's jobs folder from sharing them.
 TAG = hashlib.sha256(str(JOBS.resolve()).encode()).hexdigest()[:4]
 
@@ -228,8 +232,8 @@ def open_draft(job, task, stage, raw, head, approved=None, seen=None):
     if made.returncode or not re.fullmatch(rf"https://github\.com/{re.escape(repo)}/pull/\d+", url, re.I):
         return f"gh pr create failed: {(made.stderr or made.stdout).strip()}"
     pr_file.write_text(url + "\n", encoding="utf-8")
-    # An easy PR skips the person's Ready: they already approved the design that says so. A hard one waits for them,
-    # and Ready is when they ask a skipping review bot for a review (POLICY §3). A failed gh leaves the draft to them.
+    # The ready stage marks every PR ready. Easy (proven here) only picks the review's model and the report's note:
+    # a hard or trust-boundary PR needs a person to read its diff before the merge.
     if stage.get("easy"):
         design = read_body(job / stage["easy"])  # only the bytes a person approved
         # -z: raw names, not C-quoted ones; --no-renames: a rename out of a trust path shows its old name too
@@ -238,7 +242,6 @@ def open_draft(job, task, stage, raw, head, approved=None, seen=None):
         if approved and hashlib.sha256(design).hexdigest() == approved and easy(design, raw) and not guarded:
             if seen is not None:
                 seen["easy"] = True
-            subprocess.run(["gh", "pr", "ready", url], cwd=job, capture_output=True)
     return None
 
 
@@ -304,18 +307,51 @@ def post_body(job, task, stage):
     return None
 
 
-def not_ready(pr_file):
-    """What a person still has to do with the PR in pr_file before the review, else None."""
+def make_ready(job, stage, state):
+    """Mark the PR in pr.txt ready and ask the review bot once (POLICY §3), else why not."""
+    pr_file = job / stage["ready"]
     if not pr_file.exists():
-        return f"waiting: a person opens the PR and writes its URL into {pr_file}"
+        return f"{pr_file} is missing: the draft stage did not open a PR"
     url = pr_file.read_text(encoding="utf-8").split()[:1]
-    view = subprocess.run(["gh", "pr", "view", *url, "--json", "isDraft", "--jq", ".isDraft"], cwd=pr_file.parent,
-                          capture_output=True, text=True)
+    view = subprocess.run(["gh", "pr", "view", *url, "--json", "isDraft", "--jq", ".isDraft"], cwd=job, capture_output=True, text=True)
     if view.returncode:
-        return f"waiting: gh pr view {' '.join(url)} failed: {view.stderr.strip()}"
+        return f"gh pr view {' '.join(url)} failed: {view.stderr.strip()}"
     if view.stdout.strip() != "false":
-        return f"waiting: a person reads the draft PR {' '.join(url)} and marks it Ready for review, or closes it"
+        ready = subprocess.run(["gh", "pr", "ready", *url], cwd=job, capture_output=True, text=True)
+        if ready.returncode:
+            return f"gh pr ready failed: {(ready.stderr or ready.stdout).strip()}"
+    if stage.get("request") and state.get("requested") != url[0]:
+        asked = subprocess.run(["gh", "pr", "comment", *url, "--body", stage["request"]], cwd=job, capture_output=True, text=True)
+        if asked.returncode:
+            return f"gh pr comment failed: {(asked.stderr or asked.stdout).strip()}"
+        state["requested"] = url[0]
     return None
+
+
+def write_report(job, task, state, flow):
+    """REPORT.md: what the leader tells the owner when the review is done, from the files the stages left."""
+    text = lambda name: (job / name).read_text(encoding="utf-8", errors="replace") if (job / name).exists() else ""  # noqa: E731
+    url = (text("pr.txt").split() or ["(PR 없음)"])[0]
+    review, body = text("review.md"), text("review-body.md")
+    head = re.search(r"리뷰한 head[^\n]*?\b([0-9a-f]{40})\b", review)
+    head = head[1] if head else subprocess.run(["git", "-C", str(job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    counts = re.search(r"P0\s*(\d+)\D+P1\s*(\d+)\D+P2\s*(\d+)", review)
+    number = url.rstrip("/").rsplit("/", 1)[-1]
+    door = [l.strip() for l in body.splitlines() if re.match(r"\s*(Door|신뢰 경계):", l)]
+    easy_pr = state.get("easy_pr") and state.get("easy_pr") == state.get("checked")
+    models = "\n".join(f"- {m['stage']}: {m['model']}" + (" (haiku 실패 뒤 다시 돌림)" if m["rerun"] else "") for m in state.get("models", []))
+    check = text("check.md").split("```")[0].strip()
+    setup = text("setup.md").split("```")[0].strip()
+    unverified = [l.strip() for l in (review + "\n" + body).splitlines() if "확인하지 않" in l or "미확인" in l]
+    report = (f"# {task['name']} 결과\n\n- PR: {url}\n- 리뷰한 head: `{head}`\n"
+              f"- 병합: `gh pr merge {number} --squash --match-head-commit {head}`\n"
+              f"- 리뷰 지적: " + (f"P0 {counts[1]}, P1 {counts[2]}, P2 {counts[3]}" if counts else "review.md에서 찾지 못함") + "\n"
+              + "".join(f"- {l}\n" for l in door)
+              + ("" if easy_pr else "- 되돌리기 어려움이거나 신뢰 경계를 건드린다(엔진이 쉬움을 확인하지 못했다): 사람이 diff를 읽고 병합한다\n")
+              + f"\n## 단계별 모델\n\n{models or '- 없음'}\n\n## 돌린 명령\n\n{setup or '- setup: 없음'}\n\n{check or '- check: 없음'}\n"
+              + "\n## 확인하지 않은 것\n\n" + ("".join(f"- {l}\n" for l in unverified) or "- 리뷰 보고와 PR 본문에 적힌 것이 없다\n")
+              + f"\n## 리뷰 보고\n\n{review.strip() or '없음'}\n")
+    (job / "REPORT.md").write_text(report, encoding="utf-8")
 
 
 def missing(job, name, *files):
@@ -356,9 +392,28 @@ def advance(job, name, runner):
         state.update(stage=stage_id, since=time.time())
         save(state_path, state)
 
+    def retry(error):
+        """True once per stage for an error a second try may clear."""
+        if not any(t in error for t in TRANSIENT) or state.setdefault("retried", {}).get(state["stage"], 0) >= 1:
+            return False
+        state["retried"][state["stage"]] = 1
+        save(state_path, state)
+        print(f"retrying once in {RETRY_WAIT:g}s: {error}")
+        time.sleep(RETRY_WAIT)
+        return True
+
     while True:
-        if (job / "BLOCKED.md").exists():
-            print(f"blocked: see {job / 'BLOCKED.md'}")
+        blocked, intent = job / "BLOCKED.md", job / "INTENT.md"
+        # The leader answers a block in INTENT.md's 결정 기록 and reruns: a newer INTENT.md is that answer.
+        if blocked.exists() and intent.exists() and intent.stat().st_mtime > blocked.stat().st_mtime:
+            setup = SETUP_BLOCK in blocked.read_text(encoding="utf-8", errors="replace")
+            blocked.replace(job / f"BLOCKED.{int(blocked.stat().st_mtime)}.md")
+            state["fails"].clear()
+            save(state_path, state)
+            if setup and (error := run_setup(job, task)):  # an answered setup block runs setup again before anything else
+                return block(job, error)
+        if blocked.exists():
+            print(f"blocked: see {blocked}")
             return BLOCKED
         if state["stage"] == "done":
             print("done: the owner merges the PR (POLICY §5)")
@@ -376,9 +431,6 @@ def advance(job, name, runner):
             if stage.get("approve") and sha(job / stage["approve"]) != state.get("approved", {}).get(stage["id"]):
                 print(f"waiting: a person reads {job / stage['approve']} and runs engine.py approve {name}")
                 return WAIT
-            if stage.get("ready") and (waiting := not_ready(job / stage["ready"])):
-                print(waiting)
-                return WAIT
         elif stage["by"] == "script" and stage.get("body"):
             # Push only the commit the check stage passed: a commit made since (a rerun after a block) goes through it again.
             head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=job / "repo", capture_output=True, text=True).stdout.strip()
@@ -393,13 +445,24 @@ def advance(job, name, runner):
             approved = next((state.get("approved", {}).get(s["id"]) for s in flow if stage.get("easy") and s.get("approve") == stage["easy"]), None)
             seen = {}
             if error := open_draft(job, task, stage, raw, state["checked"], approved, seen):
+                if retry(error):
+                    continue
                 return block(job, error)
             if seen:  # the review runs on sonnet only for a PR proven easy here; a PR opened elsewhere gets opus
                 state["easy_pr"] = state["checked"]
                 save(state_path, state)
+        elif stage["by"] == "script" and stage.get("ready"):
+            if error := make_ready(job, stage, state):
+                if retry(error):
+                    continue
+                return block(job, error)
+            save(state_path, state)
         elif stage["by"] == "script" and stage.get("edit"):
             if error := post_body(job, task, stage):
+                if retry(error):
+                    continue
                 return block(job, error)
+            write_report(job, task, state, flow)
         elif stage["by"] == "script":
             git = lambda *a: subprocess.run(["git", *a], cwd=job / "repo", capture_output=True, text=True).stdout.strip()  # noqa: E731
             # Read what the worker handed over before the test writes its own files (caches, reports).
@@ -425,7 +488,11 @@ def advance(job, name, runner):
             # The task folder sits inside the trusted office checkout; a fresh worktree would show the trust dialog.
             argv = claude_argv(config, stage, job, task, state)
             model = argv[argv.index("--model") + 1]
-            error = runner(f"{TAG}-{name}-{stage['id']}"[:32], job, argv, f"Read {prompt} and follow it exactly.")
+            # A restarted worker re-reads both files: the leader may have answered a block in INTENT.md since its last turn.
+            again = any(m["stage"] == stage["id"] for m in state.get("models", [])) or "--resume" in argv
+            message = (f"This stage runs again. Re-read {job / 'INTENT.md'} (its 결정 기록 may hold new answers) and {prompt}, "
+                       f"then follow {prompt} exactly." if again else f"Read {prompt} and follow it exactly.")
+            error = runner(f"{TAG}-{name}-{stage['id']}"[:32], job, argv, message)
             if not isinstance(error, NotStarted):
                 if session_key(stage, state) not in state["sessions"]:
                     state["sessions"].append(session_key(stage, state))
@@ -433,6 +500,8 @@ def advance(job, name, runner):
                                                        "rerun": stage["id"] in state.get("escalated", [])})
                 save(state_path, state)  # a blocked stage returns below; the next run must still --resume
             if error:
+                if retry(error):
+                    continue
                 return block(job, error)
             if (job / "BLOCKED.md").exists():
                 if model == "haiku":  # a haiku worker that gave up: sonnet tries once in a new session
@@ -457,6 +526,7 @@ def advance(job, name, runner):
             move(stage.get("retry", stage["id"]))
             continue
         state["fails"].pop(stage["id"], None)
+        state.get("retried", {}).pop(stage["id"], None)
         move(following)
 
 
@@ -572,6 +642,8 @@ def new(name, repo, base):
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,23}", name):
         print("task name: a-z 0-9 - _, at most 24 characters", file=sys.stderr)
         return 2
+    if base.startswith("origin/"):  # read the commands and branch from what origin has now, not a stale local ref
+        subprocess.run(["git", "-C", repo, "fetch", "-q", "origin", base.removeprefix("origin/")], capture_output=True)
     shown = subprocess.run(["git", "-C", repo, "show", f"{base}:AGENTS.md"], capture_output=True, text=True)
     cells = commands(shown.stdout) if shown.returncode == 0 else f"no AGENTS.md at {base}"
     if isinstance(cells, str):
@@ -586,13 +658,28 @@ def new(name, repo, base):
     (job / "INTENT.md").write_text(
         f"# {name}\n\n## 목표\n\n## 지시 원문\n\n## 하지 않을 것\n\n## 결정 기록\n", encoding="utf-8")
     subprocess.run(["git", "-C", repo, "worktree", "add", "-b", f"office/{name}", str(job / "repo"), base], check=True)
-    if cells["setup"]:
-        done = subprocess.run(cells["setup"], shell=True, cwd=job / "repo", capture_output=True, text=True)
-        if done.returncode:
-            return block(job, f"setup `{cells['setup']}` exit {done.returncode} in {job / 'repo'}: fix the product or the machine, "
-                              f"run it there yourself, then delete BLOCKED.md\n\n```\n{(done.stdout + done.stderr)[-3000:]}\n```")
+    if error := run_setup(job, load(job / "task.json", None)):
+        return block(job, error)
     print(job / "INTENT.md")
     return 0
+
+
+SETUP_BLOCK = "setup has not passed in repo/"
+
+
+def run_setup(job, task):
+    """Run the setup cell once in repo/, else why not. BLOCKED.md stands while it runs: an interrupted setup stays blocked."""
+    if not task.get("setup"):
+        return None
+    block(job, f"{SETUP_BLOCK}: `{task['setup']}` is running or was interrupted")
+    done = subprocess.run(task["setup"], shell=True, cwd=job / "repo", capture_output=True, text=True)
+    (job / "setup.md").write_text(f"# setup\n\n- 명령: `{task['setup']}`\n- exit {done.returncode}\n\n```\n"
+                                  f"{(done.stdout + done.stderr)[-4000:]}\n```\n", encoding="utf-8")
+    if done.returncode:
+        return (f"{SETUP_BLOCK}: `{task['setup']}` exit {done.returncode}. Fix the product or the machine, write the answer "
+                f"in INTENT.md's 결정 기록, and run again: the engine runs setup again first. Output: {job / 'setup.md'}")
+    (job / "BLOCKED.md").unlink()
+    return None
 
 
 def doctor(repo):

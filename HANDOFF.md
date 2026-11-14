@@ -13,7 +13,7 @@
 
 지금 상태(2026-11-12):
 
-- 흐름: 접수(leader) → 설계 → 사람 승인(`design.md` sha256) → 구현 → 검사(test 명령, 커밋하지 않은 변경) → 엔진이 push하고 초안 PR → 사람이 Ready → 리뷰(다른 세션) → 엔진이 리뷰 커밋을 push하고 리뷰 본문을 PR에 올림 → 사람이 병합.
+- 흐름: 접수(leader) → 설계 → 사람 승인(`design.md` sha256) → 구현 → 검사(test 명령, 커밋하지 않은 변경) → 엔진이 push하고 PR을 열어 Ready, 리뷰 봇 요청 → 리뷰(다른 세션) → 엔진이 리뷰 커밋을 push하고 리뷰 본문을 PR에 올리고 REPORT.md → 사람이 병합.
 - 이 흐름 전체를 장난감 저장소에서 엔진과 실제 작업자로 끝까지 돌렸다(leader 접수는 따로 돌렸다)(§6의 2026-11-12 항목). 단위 테스트는 60개다.
 - 열린 이슈는 없다. 남은 결정은 §4에 있다.
 
@@ -62,7 +62,7 @@
 - 2026-11-11: office는 별도 저장소로 두고, repo-baseline 클론 경로는 `baseline.path`로 받는다. 원본이 정본이다. office를 원본의 프로필로 넣지 않는다(macOS·Claude Code·`hc`에 묶인 코드가 중립 정본에 들어오므로).
 - 2026-11-12: 스킬 연결은 office 안(단계표·지시서·leader 규칙)에 둔다. 작업자에는 office `.claude/settings.json`의 `enabledPlugins`로 플러그인을 싣는다. `--setting-sources`를 넓히지 않는다(사용자 전역 허용 규칙이 샌다).
 - 2026-11-12: 플러그인 판은 고정하지 않고 기록만 한다. 리뷰 보고 「확인한 것」의 `check_skills.py` 경로·sha256이 그 기록이다.
-- 2026-11-12: 검사가 통과하면 엔진이 초안 PR을 연다. 사람이 Ready로 바꾸기 전에는 리뷰가 돌지 않는다.
+- 2026-11-12: 검사가 통과하면 엔진이 초안 PR을 연다. 사람이 Ready로 바꾸기 전에는 리뷰가 돌지 않는다. 2026-11-14에 바꿨다: 엔진이 늘 Ready로 바꾼다.
 
 남은 결정:
 
@@ -141,6 +141,7 @@
   - 승인 대기: leader가 `blast-radius`를 실행 폴더·금지 폴더와 함께 권했다. 설계 작업자는 Door를 쉬움으로 봤다(외부 호출자 없음). 그래서 `interrogate` 권유와 어려운 PR의 봇 리뷰 요청(§4 남은 결정)은 이번에 돌지 않았다.
   - 구현 작업자는 `mattpocock-skills:tdd`로 빨강(`ImportError`) → 초록. 검사 통과, 엔진이 초안 PR을 열고 Ready를 기다렸다. 사람이 Ready로 바꾼 뒤 리뷰 작업자가 `engine.py skills` 종료 코드 0을 받고 `mattpocock-skills:code-review`를 불렀다. diff가 작아 축별 하위 에이전트는 띄우지 않고 두 축을 직접 봤다. CodeRabbit 건너뜀은 「없음(건너뜀)」으로 판정했다(repo-baseline #129 규칙대로).
 - 2026-11-14, 모델 배치: 작업자는 `--setting-sources project`로 hc에서 돌아 사용자의 모델 설정을 받지 않는다. 그래서 엔진이 단계마다 `--model`을 준다(`stage_model`). leader 폴더에서 `claude -p ... --output-format json`의 `modelUsage`는 `leader/.claude/settings.json`(`"model": "opus"`)이 있으면 `claude-opus-5-5`, 없으면 `claude-haiku-5-5`였다(Claude Code 2.1.323).
+- 2026-11-14, 사람 관문 둘: 설계 승인과 병합 말고는 엔진과 leader가 돈다. 엔진이 PR을 늘 Ready로 바꾸고 리뷰 봇에 한 번 요청한다. 다시 하면 풀릴 오류는 단계마다 한 번 다시 해 본다. 막힘의 답은 `INTENT.md` 결정 기록이고, 다시 띄운 작업자에게는 엔진이 첫 메시지로 다시 읽으라고 한다(지시서 문장만으로는 이어 받은 세션이 두 번 다시 읽지 않았다). 리뷰가 끝나면 `REPORT.md`를 쓴다. `new`는 `<base>`를 fetch하고, setup이 통과할 때까지 `BLOCKED.md`를 둔다(#33 리뷰의 P2 두 개).
 
 ## 7. 다시 재현하는 법
 
