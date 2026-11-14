@@ -1,6 +1,6 @@
 # 구현 단계
 
-이 단계 하나만 한다. 셸 명령은 허용된 것만, 한 번에 하나씩 쓴다. `&&`·`;`·`|`로 잇지 않는다. 이으면 통째로 거부된다. `cd`는 거부된다. git 읽기는 `git -C repo ...`로 쓴다. 코드 검색과 파일 목록은 `grep -rn '<문자열>' repo/<폴더>`와 `ls repo/<폴더>`로 한다(`git grep`·`git ls-files`는 거부된다). 엔진이 이 단계를 다시 띄웠으면(사람이 `BLOCKED.md`를 지웠으면) `{job}/INTENT.md`와 이 지시서를 다시 읽는다. 사람이 그 사이에 고쳤을 수 있다. 테스트는 `python3 {office}/pipeline/engine.py test {name}`로 돌린다. 엔진이 `repo/`에서 테스트 명령을 돌리고 그 종료 코드로 끝난다. 포그라운드로 돌리고(Bash timeout 600000, 백그라운드 실행을 쓰지 않는다) 결과를 읽은 뒤 다음으로 간다. 엔진은 작업자의 턴이 끝나면 세션을 닫는다. 백그라운드로 돌려 두고 턴을 끝내면 결과를 받지 못하고 이 단계는 실패한다. git add·commit·push는 `git -C {job}/repo ...`로만 쓴다. commit은 `git -C {job}/repo commit -m "<메시지>"` 형태만 된다(`-am`, `-F`는 거부된다). 사람이 승인한 `{job}/design.md` 그대로 구현한다.
+이 단계 하나만 한다. 제품 코드는 `repo/`에 있다(작업 폴더는 과제 폴더다). push·`gh pr merge`·`gh pr edit`·`gh api` 쓰기는 거부된다. 엔진이 이 단계를 다시 띄웠으면(사람이 `BLOCKED.md`를 지웠으면) `{job}/INTENT.md`와 이 지시서를 다시 읽는다. 사람이 그 사이에 고쳤을 수 있다. 테스트는 `python3 {office}/pipeline/engine.py test {name}`로 돌린다. 엔진이 `repo/`에서 테스트 명령을 돌리고 그 종료 코드로 끝난다. 포그라운드로 돌리고(Bash timeout 600000, 백그라운드 실행을 쓰지 않는다) 결과를 읽은 뒤 다음으로 간다. 엔진은 작업자의 턴이 끝나면 세션을 닫는다. 백그라운드로 돌려 두고 턴을 끝내면 결과를 받지 못하고 이 단계는 실패한다. commit은 `git -C {job}/repo commit -m "<메시지>"` 형태만 된다(`-am`, `-F`는 거부된다). 사람이 승인한 `{job}/design.md` 그대로 구현한다.
 
 - 작업할 곳: `{job}/repo/` (브랜치 `{branch}`).
 - 설계에 없는 변경을 더하지 않는다. 설계를 바꿔야 하면 구현하지 말고 `{job}/BLOCKED.md`에 적고 끝낸다.
