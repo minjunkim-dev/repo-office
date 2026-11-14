@@ -333,9 +333,11 @@ def write_report(job, task, state, flow):
     text = lambda name: (job / name).read_text(encoding="utf-8", errors="replace") if (job / name).exists() else ""  # noqa: E731
     url = (text("pr.txt").split() or ["(PR 없음)"])[0]
     review, body = text("review.md"), text("review-body.md")
+    # The owner merges the SHA the review names, never one read from repo/ (POLICY §5).
     head = re.search(r"리뷰한 head[^\n]*?\b([0-9a-f]{40})\b", review)
-    head = head[1] if head else subprocess.run(["git", "-C", str(job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-    counts = re.search(r"P0\s*(\d+)\D+P1\s*(\d+)\D+P2\s*(\d+)", review)
+    head = head[1] if head else None
+    counts = re.search(r"고친 것:[^\n]*?P0\s*(\d+)\D+P1\s*(\d+)\D+P2\s*(\d+)", review)
+    left = re.search(r"남은 지적:[^\n]*", review)
     number = url.rstrip("/").rsplit("/", 1)[-1]
     door = [l.strip() for l in body.splitlines() if re.match(r"\s*(Door|신뢰 경계):", l)]
     easy_pr = state.get("easy_pr") and state.get("easy_pr") == state.get("checked")
@@ -343,9 +345,11 @@ def write_report(job, task, state, flow):
     check = text("check.md").split("```")[0].strip()
     setup = text("setup.md").split("```")[0].strip()
     unverified = [l.strip() for l in (review + "\n" + body).splitlines() if "확인하지 않" in l or "미확인" in l]
-    report = (f"# {task['name']} 결과\n\n- PR: {url}\n- 리뷰한 head: `{head}`\n"
-              f"- 병합: `gh pr merge {number} --squash --match-head-commit {head}`\n"
-              f"- 리뷰 지적: " + (f"P0 {counts[1]}, P1 {counts[2]}, P2 {counts[3]}" if counts else "review.md에서 찾지 못함") + "\n"
+    report = (f"# {task['name']} 결과\n\n- PR: {url}\n"
+              + (f"- 리뷰한 head: `{head}`\n- 병합: `gh pr merge {number} --squash --match-head-commit {head}`\n" if head
+                 else "- 리뷰한 head: review.md에서 40자 SHA를 찾지 못함. 병합 명령을 만들지 않는다\n")
+              + "- 리뷰가 고친 지적: " + (f"P0 {counts[1]}, P1 {counts[2]}, P2 {counts[3]}" if counts else "review.md에서 찾지 못함") + "\n"
+              + f"- {left[0].strip() if left else '남은 지적: review.md에서 찾지 못함'}\n"
               + "".join(f"- {l}\n" for l in door)
               + ("" if easy_pr else "- 되돌리기 어려움이거나 신뢰 경계를 건드린다(엔진이 쉬움을 확인하지 못했다): 사람이 diff를 읽고 병합한다\n")
               + f"\n## 단계별 모델\n\n{models or '- 없음'}\n\n## 돌린 명령\n\n{setup or '- setup: 없음'}\n\n{check or '- check: 없음'}\n"
@@ -402,16 +406,21 @@ def advance(job, name, runner):
         time.sleep(RETRY_WAIT)
         return True
 
+    if state["stage"] == "pr":  # a task saved before the ready stage replaced the person's Ready
+        move("ready")
+    blocked, intent = job / "BLOCKED.md", job / "INTENT.md"
+    # The leader answers a block in INTENT.md's 결정 기록 and reruns: a newer INTENT.md is that answer.
+    # Only here, once per run: a worker that blocks and then writes INTENT.md in the same run must not unblock itself.
+    if blocked.exists() and intent.exists() and intent.stat().st_mtime > blocked.stat().st_mtime:
+        setup = SETUP_BLOCK in blocked.read_text(encoding="utf-8", errors="replace")
+        blocked.replace(job / f"BLOCKED.{int(blocked.stat().st_mtime)}.md")
+        state["fails"].clear()
+        state.pop("retried", None)  # an answered stage gets its one retry again
+        save(state_path, state)
+        if setup and (error := run_setup(job, task)):  # an answered setup block runs setup again before anything else
+            return block(job, error)
+
     while True:
-        blocked, intent = job / "BLOCKED.md", job / "INTENT.md"
-        # The leader answers a block in INTENT.md's 결정 기록 and reruns: a newer INTENT.md is that answer.
-        if blocked.exists() and intent.exists() and intent.stat().st_mtime > blocked.stat().st_mtime:
-            setup = SETUP_BLOCK in blocked.read_text(encoding="utf-8", errors="replace")
-            blocked.replace(job / f"BLOCKED.{int(blocked.stat().st_mtime)}.md")
-            state["fails"].clear()
-            save(state_path, state)
-            if setup and (error := run_setup(job, task)):  # an answered setup block runs setup again before anything else
-                return block(job, error)
         if blocked.exists():
             print(f"blocked: see {blocked}")
             return BLOCKED
@@ -520,7 +529,7 @@ def advance(job, name, runner):
             state["fails"][stage["id"]] = state["fails"].get(stage["id"], 0) + 1
             save(state_path, state)
             if state["fails"][stage["id"]] >= 2:
-                state["fails"].clear()  # a person who clears BLOCKED.md gets two fresh tries
+                state["fails"].clear()  # an answer in INTENT.md gets two fresh tries
                 save(state_path, state)
                 return block(job, f"{failed}, twice in a row")
             move(stage.get("retry", stage["id"]))

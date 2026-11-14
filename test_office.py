@@ -46,6 +46,9 @@ class FakeWorker:
             (self.job / "pr-body.md").write_text("# fix: x\n\n## Summary\n", encoding="utf-8")
         if stage == "review":
             (self.job / "review-body.md").write_text("## Summary\n\n## Review\nok\n", encoding="utf-8")
+            head = subprocess.run(["git", "-C", str(self.job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+            (self.job / "review.md").write_text(f"리뷰한 head와 Door: {head}, 되돌리기 어려움\n고친 것: P0 0, P1 1, P2 0. x\n"
+                                                "남은 지적: [Spec] P1 y, a.py:3\n", encoding="utf-8")
         return None
 
 
@@ -140,8 +143,13 @@ class PipelineTests(unittest.TestCase):
         report = (self.job / "REPORT.md").read_text()
         head = subprocess.run(["git", "-C", str(self.job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
         for part in ("https://github.com/O/R/pull/7", f"gh pr merge 7 --squash --match-head-commit {head}", "- design: sonnet",
-                     "- implement: sonnet", "- review: opus", "사람이 diff를 읽고 병합한다", "exit 0"):
+                     "- implement: sonnet", "- review: opus", "사람이 diff를 읽고 병합한다", "exit 0",
+                     "리뷰가 고친 지적: P0 0, P1 1, P2 0", "남은 지적: [Spec] P1 y, a.py:3"):
             self.assertIn(part, report)
+        # Without the reviewed head in review.md there is no merge command: never a SHA read from repo/.
+        (self.job / "review.md").write_text("리뷰한 head와 Door: abc1234, 되돌리기 어려움\n", encoding="utf-8")
+        self.engine.write_report(self.job, json.loads((self.job / "task.json").read_text()), self.state(), [])
+        self.assertNotIn("gh pr merge", (self.job / "REPORT.md").read_text())
         self.engine.save(self.job / "state.json", {**self.state(), "stage": "ready"})  # the ready stage runs again
         self.assertEqual(self.engine.run("search", worker), self.engine.DONE)
         self.assertEqual([c[:2] for c in gh()].count(["pr", "comment"]), 1)  # asked once
@@ -1061,11 +1069,39 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse((self.job / "BLOCKED.md").exists())
         self.assertTrue(list(self.job.glob("BLOCKED.*.md")))  # the old block is kept
 
+    def test_a_worker_that_blocks_and_writes_intent_does_not_unblock_itself(self):
+        class Worker(FakeWorker):
+            def __call__(self, name, cwd, argv, message):
+                self.calls.append(("design", argv, message))
+                if len(self.calls) > 3:
+                    raise AssertionError("the engine kept rerunning a stage its worker blocked")
+                (self.job / "BLOCKED.md").write_text("which API?\n", encoding="utf-8")
+                intent = self.job / "INTENT.md"
+                intent.write_text(intent.read_text() + "- 질문: which API?\n", encoding="utf-8")
+                os.utime(intent, (time.time() + 5, time.time() + 5))
+                return None
+
+        worker = Worker(self.job)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.engine.run("search", worker), self.engine.BLOCKED)
+        self.assertEqual(len(worker.calls), 1)
+
+    def test_a_task_saved_at_the_old_pr_stage_goes_on_from_ready(self):
+        draft, gh = self.fake_gh()
+        (self.job / "pr.txt").write_text("https://github.com/O/R/pull/7\n", encoding="utf-8")
+        self.engine.save(self.job / "state.json", {"stage": "pr", "since": 0, "fails": {}, "sessions": []})
+        with unittest.mock.patch.object(self.engine, "unpinned", return_value="stop at the review"):
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(self.engine.run("search", FakeWorker(self.job)), self.engine.BLOCKED)
+        self.assertEqual(self.state()["stage"], "review")
+        self.assertIn(["pr", "ready"], [c[:2] for c in gh()])
+
     def test_new_fetches_the_base_and_blocks_while_setup_has_not_passed(self):
         repo = self.product(setup="echo first", test="true")
         # origin moved after this checkout fetched: the new setup must come from origin, not the stale local ref.
         other = Path(self.tmp.name) / "other"
-        subprocess.run(["git", "clone", "-q", str(Path(self.tmp.name) / "product.git"), str(other)], check=True, capture_output=True)
+        # -b main: the bare origin's HEAD follows git's default branch name, which is not main everywhere (CI)
+        subprocess.run(["git", "clone", "-q", "-b", "main", str(Path(self.tmp.name) / "product.git"), str(other)], check=True, capture_output=True)
         jobs = self.engine.JOBS
         (other / "AGENTS.md").write_text("## 명령\n\n- setup: `test -f ../BLOCKED.md && echo held > held`\n- check: `N/A: x`\n"
                                          "- test: `true`\n", encoding="utf-8")
