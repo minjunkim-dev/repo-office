@@ -14,7 +14,7 @@
 지금 상태(2026-11-12):
 
 - 흐름: 접수(leader) → 설계 → 사람 승인(`design.md` sha256) → 구현 → 검사(test 명령, 커밋하지 않은 변경) → 엔진이 push하고 PR을 열어 Ready, 쉬움이 아니면 리뷰 봇 요청 → 리뷰(다른 세션) → 엔진이 리뷰 커밋을 push하고 리뷰 본문을 PR에 올리고 REPORT.md → 사람이 병합.
-- 이 흐름 전체를 장난감 저장소에서 엔진과 실제 작업자로 끝까지 돌렸다(leader 접수는 따로 돌렸다)(§6의 2026-11-12 항목). 단위 테스트는 61개다(2026-11-14).
+- 이 흐름 전체를 장난감 저장소에서 엔진과 실제 작업자로 끝까지 돌렸다(leader 접수는 따로 돌렸다)(§6의 2026-11-12 항목). 단위 테스트는 66개다(2026-11-14).
 - 열린 이슈는 없다. 남은 결정은 §4에 있다.
 
 ## 2. 구성 요소
@@ -119,7 +119,7 @@
   - 판은 고정되지 않는다. office `.claude/settings.json`은 `enabledPlugins`만 둔다. 같은 이름 `mattpocock` 마켓플레이스가 사용자 범위(`~/.claude/plugins/known_marketplaces.json`)에 ref 없이 있으면 프로젝트 설정의 ref는 듣지 않는다(PR #4 리뷰). 이 실측에 실린 것은 캐시 폴더 이름이 `1.3.2`여도 upstream `main`의 `4ae2317`이다(태그 `v1.3.2`는 `d1478fc`, `code-review/`는 두 커밋 사이에 같다). 판을 고정하려면 실린 `gitCommitSha`로 확인한다. 2026-11-12에 소유자가 정했다: 판은 고정하지 않고 기록만 한다. 리뷰 보고 「확인한 것」의 `check_skills.py` 경로·sha256이 그 기록이다. 판이 다르면 작업자를 멈추는 안(PR #7)은 플러그인을 올릴 때마다 모든 과제를 멈추고 단계표 승인을 요구해서 닫았다.
   - 작업자는 `mattpocock-skills:code-review`를 불렀고, 스킬이 두 축을 하위 에이전트로 띄웠다. `Agent` 도구도 허용 규칙 없이 `dontAsk`에서 돌았다. 하위 에이전트는 지시대로 `pr.diff`를 Read로 읽었고, `cd ... && python3 -m unittest`는 거부됐다(부모의 `engine.py test` 결과로 대신했다). 보고를 `review.md`와 PR 본문에 쓰고 엔진은 `done`으로 끝났다.
   - 함정: 작업자의 `engine.py test`가 `repo/`에 `__pycache__/`를 남겨, 보고 직전 preflight가 `worktree: different`를 냈다. 작업자는 원인을 확인하고 넘어갔다. 제품 저장소의 `.gitignore`에 없으면 매번 나온다.
-  - 첫 실행은 작업자 CLI 계정의 5시간 한도에 걸려 첫 응답 전에 끝났고, 엔진은 「review.md 없음」 두 번으로 `BLOCKED.md`를 썼다. 한도 오류와 작업 실패를 구별하지 못한다.
+  - 첫 실행은 작업자 CLI 계정의 5시간 한도에 걸려 첫 응답 전에 끝났고, 엔진은 「review.md 없음」 두 번으로 `BLOCKED.md`를 썼다. 한도 오류와 작업 실패를 구별하지 못한다. 2026-11-14부터 엔진은 턴이 끝난 뒤 `hc get`의 상태가 `error`면(실제 메시지: `You've hit your 5-hour limit · resets 12:10am (Asia/Seoul)`) 그 메시지로 `BLOCKED.md`를 쓰고, 실패로 세지 않는다.
 - 2026-11-12, leader 수동 스킬 요청 실측(Claude Code 2.1.322, Opus 5.5 medium): `hc`로 `leader/`에 대화형 Claude Code를 띄우고, 장난감 저장소에 막연한 요청("계산 기능을 좀 더, 뭘 넣을지는 모르겠다")을 줬다.
   - 처음 규칙("요청이 막연하면 `grill-with-docs`를 권한다")으로는 leader가 방향 세 가지를 묻고, 과제를 등록하고, 엔진을 돌린 뒤에야 "다음에는 `grill-with-docs`로" 권했다. 그래서 규칙에 "방향을 묻기 전에, 등록하기 전에 권한다"를 더했다. 고친 뒤 새 leader 세션은 방향 질문 안에 `grill-with-docs` 권유를 함께 넣었다.
   - 설계 승인 대기(종료 코드 3): 작업자 설계의 Door가 되돌리기 쉬움이라 leader가 "`interrogate`·`blast-radius`는 권하지 않는다"고 밝히고 승인을 요청했다. Door가 어려움인 설계와 병합 뒤 `retro` 권유는 돌려 보지 않았다.
