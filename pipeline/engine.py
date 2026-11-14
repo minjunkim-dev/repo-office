@@ -6,6 +6,7 @@
   engine.py run <task>        advance until a person is needed, the task is blocked, or it is done
   engine.py approve <task>    a person approves the current design file (bound to its sha256)
   engine.py workers           show every task's stage from files only
+  engine.py board             write jobs/board.html, the same view as a page that reloads itself (run also rewrites it)
   engine.py test <task>       run the task's test command in its repo/, full output in test.log
   engine.py preflight <task>  run repo-baseline's review preflight for pr.txt in its repo/, diff into pr.diff
   engine.py skills <task> <base>  run matt-skills check_skills.py in its repo/ (exit 0 delegate, 1 missing, 2 do not)
@@ -19,6 +20,7 @@ Exit codes for run: 0 done, 2 no such task or another run of it is going, 3 wait
 import argparse
 import fcntl
 import hashlib
+import html
 import json
 import os
 import re
@@ -49,6 +51,8 @@ DONE, WAIT, BLOCKED = 0, 3, 4
 TRANSIENT = ("git push failed", "gh pr create failed", "gh pr edit failed", "gh pr ready failed", "gh pr comment failed",
              "gh pr view", "hc run failed")
 RETRY_WAIT = float(os.environ.get("OFFICE_RETRY_WAIT", "10"))
+# A worker turn longer than this is taken as hung: the engine closes it and blocks the task.
+WORKER_LIMIT = float(os.environ.get("OFFICE_WORKER_TIMEOUT", str(4 * 3600)))
 # hc terminal names are global to the hc core; this tag keeps another checkout's jobs folder from sharing them.
 TAG = hashlib.sha256(str(JOBS.resolve()).encode()).hexdigest()[:4]
 
@@ -143,8 +147,17 @@ def run_worker(name, cwd, argv, message):
             return NotStarted("folder is not trusted: open Claude Code here once and trust it")
         # A task passed on the command line is dropped after a dialog or --resume, so send it after start.
         reply = json.loads(hc("send", "--wait", name, message, check=False) or "{}").get("wait") or {}
+        deadline = time.monotonic() + WORKER_LIMIT
         while reply.get("reason") == "timeout":
+            if time.monotonic() > deadline:
+                return f"the worker was still working after {WORKER_LIMIT:g}s (OFFICE_WORKER_TIMEOUT): the engine closed it"
             reply = json.loads(hc("wait", name, check=False) or "{}")
+        # A usage limit ends the turn with hc status error ("You've hit your 5-hour limit · resets 12:10am"):
+        # a block, not a failed stage, so it neither spends the two tries nor moves haiku to sonnet.
+        status = json.loads(hc("get", name, check=False) or "{}").get("status") or {}
+        if isinstance(status, dict) and status.get("state") == "error":
+            # The message first: workers and the board show the first 60 characters, and the reset time is what matters.
+            return f"{status.get('msg') or 'no message'} (the worker ended in hc status error). Run the task again once that clears"
         return None
     finally:
         hc("kill", name, check=False)  # close the session so the next stage can resume it
@@ -401,7 +414,10 @@ def run(name, runner=run_worker):
         except BlockingIOError:
             print(f"another engine.py run {name} is running", file=sys.stderr)
             return 2
-        return advance(job, name, runner)
+        try:
+            return advance(job, name, runner)
+        finally:
+            refresh_board()  # a block or a wait changes what the board shows
 
 
 def advance(job, name, runner):
@@ -414,6 +430,7 @@ def advance(job, name, runner):
     def move(stage_id):
         state.update(stage=stage_id, since=time.time())
         save(state_path, state)
+        refresh_board()
 
     def retry(error):
         """True once per stage for an error a second try may clear."""
@@ -769,23 +786,79 @@ def doctor(repo):
     return 1 if missing_ else 0
 
 
+def job_status(job):
+    """What workers and the board show for one task, from its files only."""
+    state = load(job / "state.json", {"stage": "-", "since": time.time()})
+    blocked = job / "BLOCKED.md"
+    files = [p for p in job.iterdir() if p.is_file() and p.name != "run.lock"]
+    last = max(files, key=lambda p: p.stat().st_mtime)
+    if blocked.exists():
+        note = next((l.strip() for l in blocked.read_text(encoding="utf-8", errors="replace").splitlines()
+                     if l.strip() and not l.startswith("#")), "")[:60]  # block() writes a 「# 막힘」 heading first
+    else:
+        note = (job / "pr.txt").read_text(encoding="utf-8").strip() if (job / "pr.txt").exists() else ""
+    return {"name": job.name, "stage": "blocked" if blocked.exists() else state["stage"], "at": state["stage"],
+            "minutes": int((time.time() - state["since"]) // 60),
+            "model": (state.get("models") or [{"model": "-"}])[-1]["model"],
+            "last": f"{last.name} {datetime.fromtimestamp(last.stat().st_mtime):%H:%M}", "note": note}
+
+
+def tasks():
+    return [job_status(p) for p in sorted(JOBS.glob("*")) if (p / "task.json").exists()]
+
+
 def workers():
     print(f"{'과제':<24} {'단계':<10} {'단계 경과':>9}  {'모델':<7} 마지막 파일 · PR 또는 막힌 이유")
-    for job in sorted(p for p in JOBS.glob("*") if (p / "task.json").exists()):
-        state = load(job / "state.json", {"stage": "-", "since": time.time()})
-        blocked = job / "BLOCKED.md"
-        stage = "blocked" if blocked.exists() else state["stage"]
-        files = [p for p in job.iterdir() if p.is_file() and p.name != "run.lock"]
-        last = max(files, key=lambda p: p.stat().st_mtime)
-        minutes = int((time.time() - state["since"]) // 60)
-        model = (state.get("models") or [{"model": "-"}])[-1]["model"]
-        if blocked.exists():
-            note = next((l.strip() for l in blocked.read_text(encoding="utf-8", errors="replace").splitlines() if l.strip()), "")[:60]
-        else:
-            note = (job / "pr.txt").read_text(encoding="utf-8").strip() if (job / "pr.txt").exists() else ""
-        print(f"{job.name:<24} {stage:<10} {minutes:>7}분  {model:<7} {last.name} {datetime.fromtimestamp(last.stat().st_mtime):%H:%M}"
-              + (f" · {note}" if note else ""))
+    for t in tasks():
+        print(f"{t['name']:<24} {t['stage']:<10} {t['minutes']:>7}분  {t['model']:<7} {t['last']}"
+              + (f" · {t['note']}" if t["note"] else ""))
     return 0
+
+
+def board():
+    """Write jobs/board.html: every task's stages, from files only. The page reloads itself every 5 seconds."""
+    esc = html.escape
+    ids = [s["id"] for s in load(STAGES, {"flow": []})["flow"]] + ["done"]
+    rows = []
+    for t in tasks():
+        at = ids.index(t["at"]) if t["at"] in ids else -1
+        chips = "".join(
+            f'<li class="{"now" if i == at else "past" if i < at else ""}{" blocked" if i == at and t["stage"] == "blocked" else ""}">{esc(s)}</li>'
+            for i, s in enumerate(ids))
+        note = esc(t["note"])
+        if t["note"].startswith("https://github.com/"):
+            note = f'<a href="{esc(t["note"], quote=True)}">{note}</a>'
+        rows.append(f'<section><h2>{esc(t["name"])}</h2><ol>{chips}</ol>'
+                    f'<p>{esc(t["stage"])} · {t["minutes"]}분 · {esc(t["model"])} · {esc(t["last"])}</p>'
+                    + (f'<p class="note">{note}</p>' if note else "") + "</section>")
+    page = f"""<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta http-equiv="refresh" content="5">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>office 상태판</title><style>
+:root{{--bg:#fff;--fg:#1d1d1f;--mute:#6e6e73;--line:#d2d2d7;--now:#0a63c9;--bad:#c62828}}
+@media (prefers-color-scheme:dark){{:root{{--bg:#161618;--fg:#f2f2f2;--mute:#9a9aa0;--line:#3a3a3e;--now:#5aa2ff;--bad:#ff6b6b}}}}
+body{{margin:0;padding:16px;background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,system-ui,sans-serif}}
+section{{border-bottom:1px solid var(--line);padding:12px 0}} h2{{font-size:16px;margin:0 0 8px}}
+ol{{display:flex;flex-wrap:wrap;gap:6px;list-style:none;margin:0;padding:0}}
+li{{border:1px solid var(--line);border-radius:6px;padding:2px 8px;color:var(--mute)}}
+li.past{{color:var(--fg)}} li.now{{border-color:var(--now);color:var(--now);font-weight:600}}
+li.blocked{{border-color:var(--bad);color:var(--bad)}} p{{margin:6px 0 0;color:var(--mute)}} .note{{color:var(--fg);overflow-wrap:anywhere}}
+a{{color:var(--now)}}</style></head><body><h1 style="font-size:18px;margin:0">office 상태판</h1>
+<p>{datetime.now():%H:%M:%S} 기준 · 5초마다 다시 읽는다 · 작업자 화면은 <code>hc attach &lt;이름&gt;</code></p>
+{"".join(rows) or "<p>등록된 과제가 없다</p>"}</body></html>
+"""
+    out = JOBS / "board.html"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(".tmp")
+    tmp.write_text(page, encoding="utf-8")
+    tmp.replace(out)  # a reload never reads half a page
+    return out
+
+
+def refresh_board():
+    """The board is a view: failing to write it must not stop a task."""
+    try:
+        board()
+    except (OSError, ValueError, KeyError) as error:
+        print(f"board not written: {error}", file=sys.stderr)
 
 
 def main(argv=None):
@@ -802,8 +875,9 @@ def main(argv=None):
     checked.add_argument("task")
     checked.add_argument("base")
     sub.add_parser("workers")
+    sub.add_parser("board")
     args = parser.parse_args(argv)
-    if BASELINE is None and args.command != "workers":
+    if BASELINE is None and args.command not in ("workers", "board"):
         print(f"write the absolute path of the repo-baseline clone into {_PATH}", file=sys.stderr)
         return 2
     if args.command == "new":
@@ -812,6 +886,9 @@ def main(argv=None):
         return doctor(args.repo)
     if args.command == "workers":
         return workers()
+    if args.command == "board":
+        print(board())
+        return 0
     if args.command == "skills":
         return skills(args.task, args.base)
     return {"run": run, "approve": approve, "test": test, "preflight": preflight}[args.command](args.task)

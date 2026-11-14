@@ -799,6 +799,37 @@ class PipelineTests(unittest.TestCase):
         with unittest.mock.patch.dict(os.environ, {"PATH": f"{self.tmp.name}{os.pathsep}{os.environ['PATH']}"}):
             self.assertEqual(self.engine.run_worker("w", self.job, ["claude"], "hi"), "hc run failed: name in use")
 
+    def fake_hc(self, status, wait="done"):
+        calls = []
+
+        def hc(*args, check=True):
+            calls.append(args[0])
+            if args[0] == "send":
+                return json.dumps({"wait": {"reason": wait}})
+            if args[0] == "wait" and args[1:] != ("--timeout", "90", "w"):
+                return json.dumps({"reason": wait})
+            if args[0] == "get":
+                return json.dumps({"status": status})
+            return ""
+        self.engine.hc = hc
+        return calls
+
+    def test_a_worker_that_hit_its_usage_limit_blocks_with_the_message(self):
+        calls = self.fake_hc({"state": "error", "msg": "You've hit your 5-hour limit · resets 12:10am"})
+        error = self.engine.run_worker("w", self.job, ["claude"], "hi")
+        self.assertIn("resets 12:10am", error)
+        self.assertNotIsInstance(error, self.engine.NotStarted)  # the session exists: the next try resumes it
+        self.assertFalse(any(t in error for t in self.engine.TRANSIENT))  # a ten-second retry cannot clear a limit
+        self.assertEqual(calls[-2:], ["kill", "rm"])
+        self.fake_hc({"state": "done"})
+        self.assertIsNone(self.engine.run_worker("w", self.job, ["claude"], "hi"))
+
+    def test_a_worker_past_the_time_limit_is_closed(self):
+        calls = self.fake_hc({"state": "working"}, wait="timeout")
+        with unittest.mock.patch.object(self.engine, "WORKER_LIMIT", 0):
+            self.assertIn("still working", self.engine.run_worker("w", self.job, ["claude"], "hi"))
+        self.assertEqual(calls[-2:], ["kill", "rm"])
+
     def test_a_worker_that_never_started_leaves_no_session_to_resume(self):
         names = []
 
@@ -1195,7 +1226,7 @@ class PipelineTests(unittest.TestCase):
     def test_workers_reads_files_only(self):
         with contextlib.redirect_stdout(io.StringIO()):
             self.engine.run("search", FakeWorker(self.job))
-        (self.job / "BLOCKED.md").write_text("\nsetup failed: x\n", encoding="utf-8")
+        (self.job / "BLOCKED.md").write_text("# 막힘\n\nsetup failed: x\n", encoding="utf-8")
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(self.engine.workers(), 0)
@@ -1203,6 +1234,18 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("opus", out.getvalue())  # the design ran last
         self.assertIn("setup failed: x", out.getvalue())
 
+
+    def test_board_is_a_page_of_the_same_files_that_escapes_what_workers_wrote(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.engine.run("search", FakeWorker(self.job))  # run rewrites the board
+        page = (self.engine.JOBS / "board.html").read_text(encoding="utf-8")
+        self.assertIn('http-equiv="refresh"', page)
+        self.assertIn('class="now"', page)
+        (self.job / "BLOCKED.md").write_text("<script>x</script>\n", encoding="utf-8")
+        page = self.engine.board().read_text(encoding="utf-8")
+        self.assertNotIn("<script>", page)
+        self.assertIn("&lt;script&gt;", page)
+        self.assertIn('class="now blocked"', page)
 
 class LayoutTests(unittest.TestCase):
     def test_rules_live_in_agents_files_with_do_and_do_not(self):
