@@ -706,7 +706,7 @@ class PipelineTests(unittest.TestCase):
 
     def test_task_names_are_safe_folder_and_terminal_names(self):
         for bad in ("../x", "검색", "A", "a" * 25):
-            self.assertEqual(self.engine.new(bad, ".", "true", "main"), 2)
+            self.assertEqual(self.engine.new(bad, ".", "main"), 2)
 
     def test_failed_hc_run_blocks_instead_of_crashing(self):
         fake = Path(self.tmp.name) / "claude"
@@ -852,6 +852,80 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue((repo / "made").exists())  # a normal command ran
         heads = subprocess.run(["git", "-C", str(bare), "for-each-ref", "refs/heads"], capture_output=True, text=True).stdout
         self.assertEqual(heads, "")  # neither push reached the remote
+
+    def product(self, setup="N/A: nothing", check="N/A: no linter", test="true", template=True):
+        """A product repository with an AGENTS.md 「명령」 section and a GitHub origin backed by a local bare one."""
+        repo, bare = Path(self.tmp.name) / "product", Path(self.tmp.name) / "product.git"
+        repo.mkdir()
+        (repo / "AGENTS.md").write_text(f"# p\n\n## 명령\n\n- setup: `{setup}` (why)\n- check: `{check}`\n- test: `{test}`\n"
+                                        "- build: `N/A: none`\n\n## 길잡이\n\n- test: `not this one`\n", encoding="utf-8")
+        if template:
+            (repo / ".github").mkdir()
+            (repo / ".github/pull_request_template.md").write_text("## Summary\n", encoding="utf-8")
+        (repo / ".gitignore").write_text("setup-ran\n", encoding="utf-8")
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        for args in (["init", "-q", "-b", "main"], ["add", "."], ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "p"],
+                     ["remote", "add", "origin", "https://github.com/o/p.git"], ["config", f"url.{bare}.insteadOf", "https://github.com/o/p.git"],
+                     ["push", "-q", "origin", "main"]):
+            subprocess.run(["git", "-C", str(repo), *args], check=True)
+        return repo
+
+    def test_command_cells_come_from_the_agents_md_section_and_n_a_drops(self):
+        text = ("## 명령\n\n- setup: `N/A: none`\n- check: `make lint` (note `x`)\n- test: `make test`\n\n"
+                "## 길잡이\n- test: `other`\n")
+        self.assertEqual(self.engine.commands(text), {"setup": None, "check": "make lint", "test": "make test"})
+        self.assertIn("no `## 명령` section", self.engine.commands("# x\n"))
+        self.assertIn("- check:", self.engine.commands("## 명령\n- setup: `a`\n- test: `b`\n"))
+        self.assertIn("test cell is N/A", self.engine.commands("## 명령\n- setup: `a`\n- check: `b`\n- test: `N/A: x`\n"))
+
+    def test_new_takes_check_and_test_from_the_product_and_runs_setup_once(self):
+        repo = self.product(setup="echo s >> setup-ran", check="make lint", test="make test")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.engine.new("connect", str(repo), "origin/main"), 0)
+        job = self.engine.JOBS / "connect"
+        task = json.loads((job / "task.json").read_text())
+        self.assertEqual((task["test"], task["setup"]), ("make lint && make test", "echo s >> setup-ran"))
+        self.assertEqual((job / "repo/setup-ran").read_text(), "s\n")  # in repo/, once
+        self.assertFalse((job / "BLOCKED.md").exists())
+
+    def test_new_refuses_a_product_without_command_cells(self):
+        repo = self.product()
+        (repo / "AGENTS.md").write_text("# p\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qam", "x"], check=True)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(self.engine.new("connect", str(repo), "main"), 2)
+        self.assertIn("engine.py doctor", err.getvalue())
+        self.assertFalse((self.engine.JOBS / "connect").exists())
+
+    def test_a_failing_setup_blocks_the_new_task(self):
+        repo = self.product(setup="echo broken; exit 3")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.engine.new("connect", str(repo), "main"), self.engine.BLOCKED)
+        blocked = (self.engine.JOBS / "connect/BLOCKED.md").read_text()
+        self.assertIn("exit 3", blocked)
+        self.assertIn("broken", blocked)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.engine.run("connect", FakeWorker(self.engine.JOBS / "connect")), self.engine.BLOCKED)
+
+    def test_doctor_says_what_the_product_lacks(self):
+        _, calls = self.fake_gh()  # gh answers 0: logged in, main protected
+        repo = self.product(setup="echo s >> setup-ran", test="test -f setup-ran")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(self.engine.doctor(str(repo)), 0, out.getvalue())
+        self.assertNotIn("FAIL", out.getvalue())
+        self.assertIn(["api", "repos/o/p/branches/main/protection"], calls())
+        self.assertFalse((repo / "setup-ran").exists())  # it ran in a fresh checkout of main, not here
+        # A second product with a failing test and no template.
+        shutil.rmtree(repo)
+        shutil.rmtree(Path(self.tmp.name) / "product.git")
+        repo = self.product(test="exit 5", template=False)
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(self.engine.doctor(str(repo)), 1)
+        failed = [l for l in out.getvalue().splitlines() if l.startswith("FAIL")]
+        self.assertEqual(len(failed), 2, out.getvalue())
+        self.assertIn("pull_request_template.md", failed[0])
+        self.assertIn("test passes on main: `exit 5`: exit 5", failed[1])
+        self.assertEqual(subprocess.run(["git", "-C", str(repo), "worktree", "list"], capture_output=True, text=True).stdout.count("\n"), 1)
 
     def test_workers_reads_files_only(self):
         self.engine.run("search", FakeWorker(self.job))

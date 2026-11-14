@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Move office tasks through stages.json. Workers run in hc terminals; this script only reads and writes files.
 
-  engine.py new <task> --repo PATH --test CMD [--base main]
+  engine.py doctor <repo>     check that a product repository can connect (AGENTS.md cells pass on main, protection, gh)
+  engine.py new <task> --repo PATH [--base main]   test = the product AGENTS.md check && test cells; runs setup once
   engine.py run <task>        advance until a person is needed, the task is blocked, or it is done
   engine.py approve <task>    a person approves the current design file (bound to its sha256)
   engine.py workers           show every task's stage from files only
@@ -21,8 +22,10 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import unicodedata
 import uuid
@@ -501,19 +504,95 @@ def approve(name):
     return 0
 
 
-def new(name, repo, test, base):
+def commands(text):
+    """The setup, check and test cells of an AGENTS.md 「명령」 section (POLICY §2), None for N/A, else why not."""
+    section = re.search(r"^## 명령[ \t]*$(.*?)(?=^## |\Z)", text, re.M | re.S)
+    if not section:
+        return "AGENTS.md has no `## 명령` section"
+    cells = {}
+    for name in ("setup", "check", "test"):
+        found = re.search(rf"^- {name}: `([^`]+)`", section[1], re.M)
+        if not found:
+            return f"AGENTS.md 「명령」 has no `- {name}: `<command>`` line"
+        cells[name] = None if found[1].startswith("N/A") else found[1]
+    if not cells["test"]:
+        return "the AGENTS.md test cell is N/A: the pipeline needs a test command"
+    return cells
+
+
+def new(name, repo, base):
     # The name becomes a folder, a branch and an hc terminal name (a-z 0-9 - _ only).
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,23}", name):
         print("task name: a-z 0-9 - _, at most 24 characters", file=sys.stderr)
         return 2
+    shown = subprocess.run(["git", "-C", repo, "show", f"{base}:AGENTS.md"], capture_output=True, text=True)
+    cells = commands(shown.stdout) if shown.returncode == 0 else f"no AGENTS.md at {base}"
+    if isinstance(cells, str):
+        print(f"{cells}: run engine.py doctor {repo}", file=sys.stderr)
+        return 2
     job = JOBS / name
     job.mkdir(parents=True)
-    save(job / "task.json", {"name": name, "repo": str(Path(repo).resolve()), "test": test, "base": base})
+    test = " && ".join(c for c in (cells["check"], cells["test"]) if c)
+    save(job / "task.json", {"name": name, "repo": str(Path(repo).resolve()), "test": test, "setup": cells["setup"], "base": base})
     (job / "INTENT.md").write_text(
         f"# {name}\n\n## 목표\n\n## 지시 원문\n\n## 하지 않을 것\n\n## 결정 기록\n", encoding="utf-8")
     subprocess.run(["git", "-C", repo, "worktree", "add", "-b", f"office/{name}", str(job / "repo"), base], check=True)
+    if cells["setup"]:
+        done = subprocess.run(cells["setup"], shell=True, cwd=job / "repo", capture_output=True, text=True)
+        if done.returncode:
+            return block(job, f"setup `{cells['setup']}` exit {done.returncode} in {job / 'repo'}: fix the product or the machine, "
+                              f"run it there yourself, then delete BLOCKED.md\n\n```\n{(done.stdout + done.stderr)[-3000:]}\n```")
     print(job / "INTENT.md")
     return 0
+
+
+def doctor(repo):
+    """What a product repository lacks to connect, checked on origin/main. Exit 0 when nothing is missing.
+    Every fix is in the product repository or this machine: the pipeline does not bend to one product."""
+    repo, missing_ = Path(repo).resolve(), []
+
+    def report(ok, what, fix=""):
+        print(("ok   " if ok else "FAIL ") + what + ("" if ok else f": {fix}"))
+        if not ok:
+            missing_.append(what)
+
+    git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True)  # noqa: E731
+    report(git("fetch", "-q", "origin", "main").returncode == 0, "origin has a main branch", "push main to origin")
+    shown = git("show", "origin/main:AGENTS.md")
+    cells = commands(shown.stdout) if shown.returncode == 0 else "no AGENTS.md on origin/main"
+    report(not isinstance(cells, str), "AGENTS.md 「명령」 has setup, check and test cells",
+           f"{cells} (repo-baseline templates/core/AGENTS.md)")
+    report(git("cat-file", "-e", "origin/main:.github/pull_request_template.md").returncode == 0, "PR template on main",
+           "add .github/pull_request_template.md (repo-baseline templates/core/pull_request_template.md)")
+    authed = subprocess.run(["gh", "auth", "status"], capture_output=True).returncode == 0
+    report(authed, "gh is logged in", "run gh auth login")
+    repo_slug = slug(git("config", "--get", "remote.origin.url").stdout)  # as written, like the draft stage
+    protected = False
+    if repo_slug and authed:
+        api = lambda path, *a: subprocess.run(["gh", "api", path, *a], capture_output=True, text=True)  # noqa: E731
+        rules = api(f"repos/{repo_slug}/rules/branches/main", "--jq", "length")
+        protected = api(f"repos/{repo_slug}/branches/main/protection").returncode == 0 or (
+            rules.returncode == 0 and rules.stdout.strip() not in ("", "0"))
+    report(protected, "main is protected (branch protection or a ruleset)",
+           "turn it on (repo-baseline tools/apply_github_settings.py)" if repo_slug else "origin is not a GitHub repository")
+    if isinstance(cells, str):
+        return 1
+    root = Path(tempfile.mkdtemp(prefix="office-doctor-"))
+    checkout = root / "main"
+    try:
+        added = git("worktree", "add", "-q", "--detach", str(checkout), "origin/main")
+        report(added.returncode == 0, "a fresh checkout of origin/main", added.stderr.strip())
+        for name in () if added.returncode else ("setup", "check", "test"):  # setup first: check and test may need what it installs
+            if cells[name] is None:
+                print(f"ok   {name}: N/A")
+                continue
+            done = subprocess.run(cells[name], shell=True, cwd=checkout, capture_output=True, text=True)
+            report(done.returncode == 0, f"{name} passes on main: `{cells[name]}`",
+                   f"exit {done.returncode}; make it pass on a fresh checkout of main\n{(done.stdout + done.stderr)[-1500:]}")
+    finally:
+        git("worktree", "remove", "--force", str(checkout))
+        shutil.rmtree(root, ignore_errors=True)
+    return 1 if missing_ else 0
 
 
 def workers():
@@ -534,8 +613,8 @@ def main(argv=None):
     created = sub.add_parser("new")
     created.add_argument("task")
     created.add_argument("--repo", required=True)
-    created.add_argument("--test", required=True, help="the product's AGENTS.md test command")
     created.add_argument("--base", default="main")
+    sub.add_parser("doctor").add_argument("repo")
     for command in ("run", "approve", "test", "preflight"):
         sub.add_parser(command).add_argument("task")
     checked = sub.add_parser("skills")
@@ -547,7 +626,9 @@ def main(argv=None):
         print(f"write the absolute path of the repo-baseline clone into {_PATH}", file=sys.stderr)
         return 2
     if args.command == "new":
-        return new(args.task, args.repo, args.test, args.base)
+        return new(args.task, args.repo, args.base)
+    if args.command == "doctor":
+        return doctor(args.repo)
     if args.command == "workers":
         return workers()
     if args.command == "skills":
