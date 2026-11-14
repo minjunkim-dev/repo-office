@@ -6,7 +6,7 @@
   engine.py run <task>        advance until a person is needed, the task is blocked, or it is done
   engine.py approve <task>    a person approves the current design file (bound to its sha256)
   engine.py workers           show every task's stage from files only
-  engine.py board             write jobs/board.html: the Pixel Agents office beside the stages and task cards (run also rewrites it)
+  engine.py board             write jobs/board.html: an office of this pipeline's tasks beside the stages and cards (run also rewrites it)
   engine.py test <task>       run the task's test command in its repo/, full output in test.log
   engine.py preflight <task>  run repo-baseline's review preflight for pr.txt in its repo/, diff into pr.diff
   engine.py skills <task> <base>  run matt-skills check_skills.py in its repo/ (exit 0 delegate, 1 missing, 2 do not)
@@ -18,6 +18,7 @@ Exit codes for run: 0 done, 2 no such task or another run of it is going, 3 wait
 """
 
 import argparse
+import base64
 import fcntl
 import hashlib
 import json
@@ -869,18 +870,17 @@ def workers():
 
 
 def board():
-    """Write jobs/board.html, one screen: the Pixel Agents office (OFFICE_PIXEL_AGENTS, a local address) beside
-    jobs/board-tasks.html, stage lanes and a card per task from files only, which reloads itself every 5 seconds.
+    """Write jobs/board.html, one screen: a pixel office with one character per task, beside jobs/board-tasks.html,
+    stage lanes and a card per task from files only, which reloads itself every 5 seconds and hands its rows to the office.
     run() rewrites both every BOARD_EVERY seconds while it goes; "stamp" lets the page tell data no engine rewrites."""
     flow = [{"id": s["id"], "by": s["by"]} for s in load(STAGES, {"flow": []})["flow"]]
     data = json.dumps({"time": f"{datetime.now():%H:%M:%S}", "stamp": int(time.time()), "flow": flow, "tasks": tasks()}, ensure_ascii=False)
     # Inside <script>, a worker's text must not close the tag: escape <, > and & as JSON \u escapes.
     data = data.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
-    # Only a local http address without a query: the token URL would hand the page the right to install hooks.
-    pixel = os.environ.get("OFFICE_PIXEL_AGENTS", "http://127.0.0.1:3100").strip()
-    pixel = pixel if re.fullmatch(r"http://(127\.0\.0\.1|localhost):\d{1,5}/?", pixel) else ""
+    # The office's images go inline as data URIs: the page loads nothing from anywhere else.
+    art = {p.stem: "data:image/png;base64," + base64.b64encode(p.read_bytes()).decode() for p in sorted((PIPELINE / "office").glob("*.png"))}
     pages = {"board-tasks.html": (PIPELINE / "board-tasks.html").read_text(encoding="utf-8").replace("/*DATA*/", data),
-             "board.html": (PIPELINE / "board.html").read_text(encoding="utf-8").replace("/*PIXEL*/", pixel)}
+             "board.html": (PIPELINE / "board.html").read_text(encoding="utf-8").replace("/*ART*/", json.dumps(art))}
     JOBS.mkdir(parents=True, exist_ok=True)
     for name, page in pages.items():
         tmp = JOBS / f".{name}.{os.getpid()}.{threading.get_ident()}.tmp"  # other runs and this run's keeper write too

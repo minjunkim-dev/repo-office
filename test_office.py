@@ -7,6 +7,7 @@ import io
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import socket
@@ -1287,6 +1288,7 @@ function El(tag) {
 }
 const nodes = {data: {textContent: data}, meta: El("span"), lanes: El("section"), cards: El("section")};
 globalThis.document = {getElementById: id => nodes[id], createElement: El};
+globalThis.window = {parent: {postMessage(m) { made.push({tag: "posted", text: JSON.stringify(m), href: ""}); }}};
 globalThis.location = {reload() {}};
 globalThis.setTimeout = () => 0;
 new Function(script)();
@@ -1410,18 +1412,23 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         self.assertIn("읽기 실패", texts)
         self.assertIn("search", texts)
 
-    def test_the_board_embeds_only_a_local_pixel_agents_address(self):
-        for given, embedded in [(None, "http://127.0.0.1:3100"), ("http://localhost:4000/", "http://localhost:4000/"),
-                                ("http://127.0.0.1:3100/?token=x", ""), ("https://evil.example", ""),
-                                ('http://127.0.0.1:1"</script>', ""), ("", "")]:
-            with self.subTest(given=given):
-                env = {} if given is None else {"OFFICE_PIXEL_AGENTS": given}
-                with unittest.mock.patch.dict(os.environ, env):
-                    if given is None:
-                        os.environ.pop("OFFICE_PIXEL_AGENTS", None)
-                    shell = self.engine.board().read_text(encoding="utf-8")
-                self.assertIn(f'const pixel = "{embedded}";', shell)
-                self.assertIn('src="board-tasks.html"', shell)
+    def test_the_office_loads_nothing_from_elsewhere(self):
+        shell = self.engine.board().read_text(encoding="utf-8")
+        self.assertIn('src="board-tasks.html"', shell)
+        self.assertFalse(re.findall(r"(?:src|href)\s*=\s*[\"']?(?:https?:|//)|url\(|import\s|fetch\(", shell))
+        start = shell.index("const ART = ") + len("const ART = ")
+        art = json.loads(shell[start:shell.index(";  //", start)])
+        self.assertEqual(sorted(art), sorted(p.stem for p in (OFFICE / "pipeline/office").glob("*.png")))
+        self.assertIn("char_5", art)
+        self.assertTrue(all(v.startswith("data:image/png;base64,") for v in art.values()))
+
+    def test_the_office_gets_each_task_with_the_cards_status(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.engine.run("search", FakeWorker(self.job))  # waits for design approval
+        (self.job / "BLOCKED.md").write_text("# 막힘\n\nx\n", encoding="utf-8")
+        posted = [json.loads(e["text"]) for e in self.run_page() if e["tag"] == "posted"]
+        self.assertEqual(posted, [{"office": [{"name": "search", "lane": "approve", "stage": "설계 승인", "key": "bad",
+                                               "text": "막힘", "model": "", "by": "human"}]}])
 
     def test_a_board_that_cannot_be_written_leaves_the_run_exit_code(self):
         def broken():
