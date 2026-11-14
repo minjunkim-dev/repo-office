@@ -287,6 +287,8 @@ class PipelineTests(unittest.TestCase):
                 self.engine.run("search", worker)
                 calls = [c[:2] for c in gh()]
                 self.assertEqual(calls.count(["pr", "ready"]), int(ready))
+                # The review's model follows the same proof: sonnet for this checked commit only when it was easy.
+                self.assertEqual(self.state().get("easy_pr") == self.state()["checked"], bool(ready))
                 if ready:
                     self.assertIn(["pr", "ready", "https://github.com/O/R/pull/7"], gh())
                     self.assertEqual(self.state()["stage"], "review")  # past the person's Ready
@@ -987,8 +989,9 @@ class PipelineTests(unittest.TestCase):
         stage = next(s for s in json.loads(self.engine.STAGES.read_text())["flow"] if s["id"] == "review")
         flow = json.loads(self.engine.STAGES.read_text())["flow"]
         self.assertEqual(self.engine.stage_model(stage, self.job, {}, flow), "opus")
-        self.assertEqual(self.engine.stage_model(stage, self.job, {"easy_pr": True}, flow), "sonnet")
-        self.assertNotIn("haiku", [self.engine.stage_model(stage, self.job, st, flow) for st in ({}, {"easy_pr": True})])
+        self.assertEqual(self.engine.stage_model(stage, self.job, {"easy_pr": "abc", "checked": "abc"}, flow), "sonnet")
+        self.assertEqual(self.engine.stage_model(stage, self.job, {"easy_pr": "abc", "checked": "def"}, flow), "opus")  # a later commit
+        self.assertNotIn("haiku", [self.engine.stage_model(stage, self.job, st, flow) for st in ({}, {"easy_pr": "a", "checked": "a"})])
 
     def test_a_failed_haiku_implement_reruns_once_on_sonnet_in_a_new_session(self):
         work, fresh = self.engine.session_id("search", "work"), self.engine.session_id("search", "work-sonnet")

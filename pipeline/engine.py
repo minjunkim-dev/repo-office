@@ -100,7 +100,8 @@ def stage_model(stage, job, state, flow):
     if route == "difficulty":
         return "sonnet" if stage["id"] in state.get("escalated", []) or difficulty(job, state, flow) != "쉬움" else "haiku"
     if route == "door":
-        return "sonnet" if state.get("easy_pr") else "opus"
+        # Proven easy for the commit that was checked and pushed: a later commit or a rerun of the check drops it.
+        return "sonnet" if state.get("easy_pr") and state.get("easy_pr") == state.get("checked") else "opus"
     return route
 
 
@@ -394,7 +395,7 @@ def advance(job, name, runner):
             if error := open_draft(job, task, stage, raw, state["checked"], approved, seen):
                 return block(job, error)
             if seen:  # the review runs on sonnet only for a PR proven easy here; a PR opened elsewhere gets opus
-                state["easy_pr"] = True
+                state["easy_pr"] = state["checked"]
                 save(state_path, state)
         elif stage["by"] == "script" and stage.get("edit"):
             if error := post_body(job, task, stage):
