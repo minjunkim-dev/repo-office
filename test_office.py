@@ -614,6 +614,32 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(tip(), head)
         self.assertEqual(len(edits()), 1)
 
+    def test_easy_reads_the_new_lines_and_the_old_ones(self):
+        easy = lambda d, b: self.engine.easy(d.encode(), b.encode())  # noqa: E731
+        self.assertTrue(easy("되돌리기: 쉬움", "되돌리기: 쉬움\n민감한 파일: 없음"))
+        self.assertTrue(easy("Door: 되돌리기 쉬움", "되돌리기: 쉬움\n민감한 파일: 없음"))  # a design approved before the rename
+        self.assertTrue(easy("되돌리기: 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음"))  # a product still on the old template
+        # The new words are ordinary Korean: prose without a colon is no claim, and 되돌리는 법 is another field.
+        self.assertTrue(easy("되돌리기: 쉬움\n되돌리기 쉬운 이유: 문서만", "되돌리기: 쉬움\n되돌리는 법: revert\n민감한 파일: 없음\n민감한 파일을 건드리지 않는다"))
+        for design, body in [("되돌리기: 어려움", "되돌리기: 쉬움\n민감한 파일: 없음"),
+                             ("되돌리기: 쉬움", "되돌리기: 쉬움\n민감한 파일: `.claude/`"),
+                             ("되돌리기: 쉬움", "되돌리기: 쉬움\n민감한 파일: 없음\n신뢰 경계: 없음"),  # two claims
+                             ("되돌리기: 쉬움", "되돌리기: 쉬움\n- 되돌리기: 어려움\n민감한 파일: 없음"),
+                             ("되돌리기: 쉬움", "**되돌리기:** 쉬움\n민감한 파일: 없음"),
+                             ("되돌리기 쉬움", "되돌리기: 쉬움\n민감한 파일: 없음"),  # no claim in the design
+                             ("되돌리기: 쉬움", "되돌리기: 쉬움\nDoor 어려움\n민감한 파일: 없음")]:
+            with self.subTest(design=design, body=body):
+                self.assertFalse(easy(design, body))
+
+    def test_the_review_line_is_read_in_both_names(self):
+        sha = "a" * 40
+        for line, easy in [(f"리뷰한 head와 되돌리기: {sha}, 쉬움", True), (f"리뷰한 head와 되돌리기: {sha}, 어려움", False),
+                           (f"리뷰한 head와 Door: {sha}, 되돌리기 쉬움", True), (f"리뷰한 head와 Door: {sha}, 되돌리기 어려움", False),
+                           ("리뷰 끝", False)]:
+            with self.subTest(line=line):
+                (self.job / "review.md").write_text(line + "\n", encoding="utf-8")
+                self.assertIs(self.engine.review_says_easy(self.job), easy)
+
     def test_a_review_that_raises_door_asks_the_bot_once_after_the_body(self):
         # The ready stage skipped the bot for a PR it proved easy; the review saw it hard (FakeWorker writes 어려움).
         tip, edits = self.at_post()
