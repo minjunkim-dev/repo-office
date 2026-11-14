@@ -2,7 +2,7 @@
 """Move office tasks through stages.json. Workers run in hc terminals; this script only reads and writes files.
 
   engine.py doctor <repo>     check that a product repository can connect (AGENTS.md cells pass on main, protection, gh)
-  engine.py new <task> --repo PATH [--base main]   test = the product AGENTS.md check && test cells; runs setup once
+  engine.py new <task> --repo PATH [--base origin/main]  test = the product AGENTS.md check && test cells; runs setup once
   engine.py run <task>        advance until a person is needed, the task is blocked, or it is done
   engine.py approve <task>    a person approves the current design file (bound to its sha256)
   engine.py workers           show every task's stage from files only

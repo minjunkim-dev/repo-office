@@ -2,10 +2,14 @@
   "model": "opus",
   "permissions": {
     "allow": [
-      "Bash(python3 ../pipeline/engine.py *)"
+      "Bash(python3 ../pipeline/engine.py workers)",
+      "Bash(python3 ../pipeline/engine.py doctor *)",
+      "Bash(python3 ../pipeline/engine.py new *)",
+      "Bash(python3 ../pipeline/engine.py run *)"
     ],
     "ask": [
-      "Bash(python3 ../pipeline/engine.py approve*)"
+      "Bash(python3 ../pipeline/engine.py approve*)",
+      "Bash(python3 ../pipeline/engine.py * approve*)"
     ]
   }
 }

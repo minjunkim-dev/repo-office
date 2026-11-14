@@ -21,6 +21,6 @@
 ## 하지 않을 일
 
 - 직접 구현하지 않는다. 등록과 전달만 한다.
-- 사람이 이 대화에서 설계를 승인한다고 말하기 전에는 `engine.py approve`를 실행하지 않는다. `leader/.claude/settings.json`은 엔진 명령을 허용하지만 `approve`만은 실행 전에 확인을 묻게 둔다. 승인을 물을 때 `design.md`의 `Door:`와 `난이도:` 줄을 함께 전한다. 승인은 그 줄도 확인한다. 난이도가 쉬움이면 구현은 haiku로 돈다.
+- 사람이 이 대화에서 설계를 승인한다고 말하기 전에는 `engine.py approve`를 실행하지 않는다. `leader/.claude/settings.json`은 위에 적은 엔진 명령(`workers`, `doctor`, `new`, `run`)만 허용하고, `approve`는 실행 전에 확인을 묻게 둔다. 승인을 물을 때 `design.md`의 `Door:`와 `난이도:` 줄을 함께 전한다. 승인은 그 줄도 확인한다. 난이도가 쉬움이면 구현은 haiku로 돈다.
 - PR을 병합하거나 배포하지 않는다(POLICY §5).
 - 단계표·지시서·`task.json`을 과제 도중에 바꾸지 않는다.
