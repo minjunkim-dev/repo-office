@@ -10,37 +10,191 @@
 html, body { height: 100%; }
 body { margin: 0; background: var(--bg); color: #eef0f7; font: 14px/1.5 -apple-system, system-ui, "Apple SD Gothic Neo", sans-serif;
        display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
-body.solo { grid-template-columns: minmax(0, 1fr); }
 section { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .office { border-right: 1px solid var(--line); }
 .office p { margin: 0; padding: 8px 14px; color: var(--mute); font-size: 12px; border-top: 1px solid var(--line); }
+#room { flex: 1; min-height: 0; position: relative; }
+canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 iframe { flex: 1; width: 100%; border: 0; display: block; background: var(--bg); }
 @media (max-width: 900px) {
-  body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 60vh; height: auto; }
+  body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 70vh; height: auto; }
   .tasks { order: -1; border-bottom: 1px solid var(--line); }  /* the pipeline first: it is what tells whether work moves */
   .office { border-right: 0; }
-  .tasks iframe { height: 100vh; }
+  .tasks iframe { flex: none; height: 100vh; }
 }
 </style>
 </head>
 <body>
-<!-- One screen. Left: the Pixel Agents office (live, never reloaded, so its animation keeps going).
-     Right: board-tasks.html, the pipeline's stages and cards, which reloads itself every 5 seconds. -->
-<section class="office" id="office" aria-label="도트 사무실">
-  <iframe title="Pixel Agents 사무실" id="pixel"></iframe>
-  <p>도트 사무실(Pixel Agents, <span id="where"></span>)은 이 Mac의 Claude 세션을 모두 보여 줍니다. office 작업자는 과제 카드의 「사무실 캐릭터 이름」으로 찾습니다. 화면이 비어 있으면 README의 「도트 사무실」대로 띄우세요.</p>
+<!-- One screen. Left: an office with one character per office task, drawn here and never reloaded, so it can animate.
+     Right: board-tasks.html, the stages and cards, which reloads itself every 5 seconds and posts its rows here. -->
+<section class="office" aria-label="사무실">
+  <div id="room"><canvas id="scene" role="img" aria-label="단계별 방에 과제마다 한 명씩 있는 사무실. 글로 된 내용은 오른쪽 과제 카드에 있습니다."></canvas></div>
+  <p>방은 단계 순서(①→⑥)입니다. 과제 하나가 한 명이고, 단계가 바뀌면 다음 방으로 걸어갑니다. 머리 옆 표시: 초록 진행 중 · 노랑 사람 차례 · 파랑 병합 대기 · 회색 멈춤 · 빨강 막힘.</p>
 </section>
-<section class="tasks"><iframe title="단계와 과제" src="board-tasks.html"></iframe></section>
+<section class="tasks"><iframe title="단계와 과제" id="tasks" src="board-tasks.html"></iframe></section>
 <script>
 "use strict";
-const pixel = "/*PIXEL*/";  // engine.py board writes it only as a local http address without a query, or ""
-if (pixel) {
-  document.getElementById("pixel").src = pixel;
-  document.getElementById("where").textContent = pixel;
-} else {
-  document.getElementById("office").remove();
-  document.body.classList.add("solo");
+const ART = /*ART*/;  // engine.py board inlines pipeline/office/*.png as data URIs (see pipeline/office/NOTICE)
+const img = {};
+for (const [k, src] of Object.entries(ART)) { img[k] = new Image(); img[k].src = src; }
+
+// The office in sprite pixels: six 8x6-tile rooms in pipeline order, two across.
+const T = 16, RW = 8 * T, RH = 6 * T, COLS = 2, W = COLS * RW, H = 3 * RH;
+const ROOMS = [["design", "설계", false], ["approve", "설계 승인", true], ["implement", "구현", false],
+               ["check", "검사", false], ["pr", "PR·리뷰", false], ["done", "병합 대기", true]];  // true: people act here
+const COLOR = { work: "#5ad1a0", wait: "#ffc857", bad: "#ff6b6b", done: "#7aa7ff", idle: "#8a90a8" };
+const MARK = { work: "", wait: "!", bad: "!", done: "✓", idle: "z" };
+const SLOTS = 2;  // two desks a room; more tasks in one room show as "+N"
+const FONT = "-apple-system, system-ui, 'Apple SD Gothic Neo', sans-serif";
+
+const room = i => ({ x: (i % COLS) * RW, y: Math.floor(i / COLS) * RH });
+function slot(lane, k) {  // where the k-th task of a room sits or stands, in sprite pixels (feet at y)
+  const r = room(ROOMS.findIndex(([id]) => id === lane));
+  return { x: r.x + 24 + k * 64, y: r.y + RH - 22 };
 }
+const hash = s => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
+
+let tasks = [];        // rows from board-tasks.html
+const people = {};     // task name -> {x, y, tx, ty, sprite, task}
+const frame = document.getElementById("tasks");
+window.addEventListener("message", e => {
+  if (e.source !== frame.contentWindow || !e.data || !Array.isArray(e.data.office)) return;
+  tasks = e.data.office.filter(t => t && typeof t.name === "string" && ROOMS.some(([id]) => id === t.lane))
+                       .map(t => ({ name: t.name, lane: t.lane, stage: String(t.stage), key: COLOR[t.key] ? t.key : "idle",
+                                    text: String(t.text), model: String(t.model || ""), by: String(t.by || "") }));
+  place();
+});
+
+// Give each shown task a slot. One already in its room keeps its seat; one whose room changed walks to a free seat;
+// a new one appears in place.
+function place() {
+  const seen = new Set();
+  for (const [id] of ROOMS) {
+    const here = tasks.filter(t => t.lane === id);
+    const kept = here.filter(t => people[t.name] && people[t.name].lane === id && people[t.name].k < SLOTS);
+    const taken = new Set(kept.map(t => people[t.name].k));
+    const free = [...Array(SLOTS).keys()].filter(k => !taken.has(k));
+    const fresh = here.filter(t => !kept.includes(t)).slice(0, free.length);
+    for (const t of kept.concat(fresh)) {
+      const k = kept.includes(t) ? people[t.name].k : free.shift(), to = slot(id, k);
+      const p = people[t.name] || (people[t.name] = { x: to.x, y: to.y, sprite: hash(t.name) % 6 });
+      Object.assign(p, { tx: to.x, ty: to.y, lane: id, k, task: t });
+      seen.add(t.name);
+    }
+  }
+  for (const n of Object.keys(people)) if (!seen.has(n)) delete people[n];
+}
+
+const canvas = document.getElementById("scene"), ctx = canvas.getContext("2d");
+let S = 1, OX = 0, OY = 0, DPR = 1;
+function fit() {
+  const box = document.getElementById("room").getBoundingClientRect();
+  DPR = window.devicePixelRatio || 1;
+  canvas.width = Math.round(box.width * DPR); canvas.height = Math.round(box.height * DPR);
+  S = Math.max(1, Math.min(box.width / W, box.height / H));
+  OX = Math.round((box.width - W * S) / 2); OY = Math.round((box.height - H * S) / 2);
+}
+new ResizeObserver(fit).observe(document.getElementById("room"));
+
+const sprite = () => ctx.setTransform(DPR * S, 0, 0, DPR * S, DPR * OX, DPR * OY);
+const screen = () => ctx.setTransform(DPR, 0, 0, DPR, DPR * OX, DPR * OY);
+const ready = k => img[k] && img[k].complete && img[k].naturalWidth;
+function draw(k, x, y) { if (ready(k)) ctx.drawImage(img[k], Math.round(x), Math.round(y)); }
+function person(p, col, row, flip) {  // one 16x32 frame of a character sheet, feet at p.y; flip turns right into left
+  const k = "char_" + p.sprite, x = Math.round(p.x), y = Math.round(p.y) - 32;
+  if (!ready(k)) return;
+  ctx.save();
+  if (flip) { ctx.translate(2 * x + 16, 0); ctx.scale(-1, 1); }
+  ctx.drawImage(img[k], col * 16, row * 32, 16, 32, x, y, 16, 32);
+  ctx.restore();
+}
+const busyAt = s => Object.values(people).some(p => p.tx === s.x && p.ty === s.y && p.x === p.tx && p.y === p.ty && p.task.key === "work");
+
+function roomsLayer(now) {
+  ROOMS.forEach(([id, , human], i) => {
+    const r = room(i);
+    for (let x = 0; x < RW; x += T) for (let y = T; y < RH; y += T) draw(human ? "floor_0" : "floor_1", r.x + x, r.y + y);
+    ctx.fillStyle = human ? "rgba(255, 200, 87, .12)" : "rgba(90, 120, 200, .12)";
+    ctx.fillRect(r.x, r.y + T, RW, RH - T);
+    ctx.fillStyle = "#2c3047"; ctx.fillRect(r.x, r.y, RW, T);  // wall
+    ctx.fillStyle = "#14151f"; ctx.fillRect(r.x, r.y, RW, 1); ctx.fillRect(r.x, r.y, 1, RH);
+    if (human) draw("WHITEBOARD", r.x + RW - 40, r.y + 4);
+    draw("PLANT", r.x + RW - 18, r.y + RH - 34);
+    if (!human) for (let k = 0; k < SLOTS; k++) {
+      const s = slot(id, k);
+      draw(busyAt(s) ? (Math.floor(now / 400) % 2 ? "PC_FRONT_ON_1" : "PC_FRONT_ON_2") : "PC_FRONT_OFF", s.x - 14, s.y - 34);
+    }
+  });
+  ctx.fillStyle = "#14151f"; ctx.fillRect(W - 1, 0, 1, H); ctx.fillRect(0, H - 1, W, 1);
+}
+
+function peopleLayer(now, dt) {
+  for (const p of Object.values(people).sort((a, b) => a.y - b.y)) {
+    const dx = p.tx - p.x, dy = p.ty - p.y, step = 48 * dt;
+    if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {  // walking: across first, then up or down
+      if (Math.abs(dx) > 0.01) p.x += Math.sign(dx) * Math.min(step, Math.abs(dx));
+      else p.y += Math.sign(dy) * Math.min(step, Math.abs(dy));
+      const f = Math.floor(now / 150) % 3;
+      if (Math.abs(dx) > 0.01) person(p, f, 2, dx < 0); else person(p, f, dy < 0 ? 1 : 0, false);
+      continue;
+    }
+    p.x = p.tx; p.y = p.ty;
+    const t = p.task, human = ROOMS.find(([id]) => id === t.lane)[2];
+    if (human) { person(p, 1, 0, false); continue; }                                    // standing at the whiteboard
+    if (t.key === "work") person(p, (t.by === "claude" ? 3 : 5) + Math.floor(now / 300) % 2, 0, false);  // typing, or reading
+    else person(p, 3, 0, false);                                                       // seated, still
+  }
+  ROOMS.forEach(([id, , human]) => { if (!human) for (let k = 0; k < SLOTS; k++) { const s = slot(id, k); draw("DESK_FRONT", s.x - 16, s.y - 25); } });
+}
+
+// Two short lines over each head: the exact task name, then stage · model · state. Text goes only through fillText.
+function labelsLayer() {
+  ctx.textBaseline = "middle";
+  for (const p of Object.values(people)) {
+    const t = p.task, cx = (p.x + 8) * S;
+    const line2 = [t.stage, t.model, t.text].filter(Boolean).join(" · ");
+    ctx.font = `600 12px ${FONT}`; const w1 = ctx.measureText(t.name).width;
+    ctx.font = `11px ${FONT}`; const w2 = ctx.measureText(line2).width + 12;
+    const w = Math.max(w1, w2) + 14, x = Math.min(Math.max(cx - w / 2, 2), W * S - w - 2), y = (p.y - 34) * S - 36;
+    ctx.fillStyle = "rgba(20, 21, 31, .9)"; ctx.beginPath(); ctx.roundRect(x, y, w, 32, 5); ctx.fill();
+    ctx.fillStyle = COLOR[t.key]; ctx.fillRect(x, y, 3, 32);
+    ctx.fillStyle = "#eef0f7"; ctx.font = `600 12px ${FONT}`; ctx.fillText(t.name, x + 9, y + 9);
+    ctx.fillStyle = COLOR[t.key]; ctx.beginPath(); ctx.arc(x + 13, y + 23, 3.5, 0, 7); ctx.fill();
+    ctx.fillStyle = "#c9cde0"; ctx.font = `11px ${FONT}`; ctx.fillText(line2, x + 21, y + 23);
+    if (MARK[t.key]) {  // a mark beside the head for every state a person should notice
+      const bx = (p.x + 17) * S, by = (p.y - 28) * S;
+      ctx.fillStyle = COLOR[t.key]; ctx.beginPath(); ctx.arc(bx, by, 8, 0, 7); ctx.fill();
+      ctx.fillStyle = "#15161f"; ctx.font = `700 11px ${FONT}`; ctx.textAlign = "center";
+      ctx.fillText(MARK[t.key], bx, by + 1); ctx.textAlign = "left";
+    }
+  }
+  ROOMS.forEach(([id, title], i) => {  // room names on the wall, with how many tasks are there
+    const r = room(i), n = tasks.filter(t => t.lane === id).length;
+    ctx.fillStyle = "#eef0f7"; ctx.font = `600 12px ${FONT}`;
+    ctx.fillText(`${"①②③④⑤⑥"[i]} ${title}`, r.x * S + 8, (r.y + T / 2) * S);
+    if (n) {
+      ctx.fillStyle = "#9aa0b8"; ctx.textAlign = "right";
+      ctx.fillText(n > SLOTS ? `${n}개 (${n - SLOTS}개 안 보임)` : `${n}개`, (r.x + RW) * S - 8, (r.y + T / 2) * S);
+      ctx.textAlign = "left";
+    }
+  });
+  if (!tasks.length) {
+    ctx.fillStyle = "#9aa0b8"; ctx.font = `13px ${FONT}`; ctx.textAlign = "center";
+    ctx.fillText("등록된 과제가 없습니다", W * S / 2, H * S / 2); ctx.textAlign = "left";
+  }
+}
+
+let last = performance.now();
+function tick(now) {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.imageSmoothingEnabled = false;
+  sprite(); roomsLayer(now); peopleLayer(now, dt);
+  screen(); labelsLayer();
+  requestAnimationFrame(tick);
+}
+fit();
+requestAnimationFrame(tick);
 </script>
 </body>
 </html>
