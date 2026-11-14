@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Move office tasks through stages.json. Workers run in hc terminals; this script only reads and writes files.
 
-  engine.py new <task> --repo PATH --test CMD [--allow RULE ...] [--base main]
+  engine.py new <task> --repo PATH --test CMD [--setup CMD] [--read DIR ...] [--allow RULE ...] [--base main]
   engine.py run <task>        advance until a person is needed, the task is blocked, or it is done
   engine.py approve <task>    a person approves the current design file (bound to its sha256)
   engine.py allow <task> RULE a person adds a Bash rule to the task's implement and review stages
@@ -462,6 +462,19 @@ def advance(job, name, runner):
         elif stage["by"] == "script" and stage.get("edit"):
             if error := post_body(job, task, stage):
                 return block(job, error)
+        elif stage["by"] == "script" and stage.get("setup"):
+            # The product's setup cell, the one run with network, so the offline check finds its dependencies.
+            if not shutil.which("sandbox-exec"):
+                return block(job, "sandbox-exec is missing: setup runs the product's code only inside a sandbox")
+            if task.get("setup"):
+                result = run_test(job, task, command=task["setup"], network=True, capture_output=True, text=True)
+                code, tail = result.returncode, (result.stdout + result.stderr)[-4000:]
+            else:
+                code, tail = 0, "no setup command registered"
+            (job / stage["out"]).write_text(f"# {stage['id']}\n\n- 명령: `{task.get('setup', '없음')}`\n- exit {code}\n\n```\n{tail}\n```\n",
+                                            encoding="utf-8")
+            if code:
+                failed = f"`{task['setup']}` exit {code}"
         elif stage["by"] == "script":
             git = lambda *a: subprocess.run(["git", *a], cwd=job / "repo", capture_output=True, text=True, env=SAFE_GIT).stdout.strip()  # noqa: E731
             # Read what the worker handed over before the test writes its own files (caches, reports).
@@ -552,7 +565,11 @@ def scratch(job):
     return root
 
 
-def check_profile(job, task, protect=()):
+def task_reads(task):
+    return task.get("read", toolchain_reads())  # recorded by `new`; tasks registered before that use PATH now
+
+
+def check_profile(job, task, protect=(), network=False):
     """Seatbelt rules for every test run (AGENTS.md 「테스트 명령이 받는 것」): writes to the task folder minus its control
     files and to the user temp and cache folders; no network but localhost and unix sockets in the task folder; no reads
     in the home folder (credentials) but the task folder, this checkout, the product's git data and the task's toolchain
@@ -563,25 +580,32 @@ def check_profile(job, task, protect=()):
     deny += f" (literal {quote(str(real / 'repo'))})"  # renaming repo/ away and back would rewrite repo/.git
     common = subprocess.run(["git", "-C", str(job / "repo"), "rev-parse", "--path-format=absolute", "--git-common-dir"],
                             capture_output=True, text=True, env=SAFE_GIT).stdout.strip()
-    reads = task.get("read", toolchain_reads())  # recorded by `new`; tasks registered before that use PATH now
+    reads = task_reads(task)
     readable = " ".join(f"(subpath {quote(str(Path(p).resolve()))})" for p in (job, BASELINE, OFFICE, *([common] if common else []), *reads))
     # realpath and friends stat each parent of a read folder; stat only, not listing, inside the home folder.
     home = Path.home().resolve()
     parents = {q for r in reads for q in Path(r).resolve().parents if q == home or home in q.parents}
     metadata = " ".join(f"(literal {quote(str(q))})" for q in sorted(parents))
-    writable = " ".join(f"(subpath {quote(str(d))})" for d in (real, *(user_dir(n) for n in ("DARWIN_USER_TEMP_DIR", "DARWIN_USER_CACHE_DIR"))) if d)
+    # Foundation's atomic save stages a file in the volume's .TemporaryItems when the task folder is not on the boot volume.
+    volume = next(q for q in (real, *real.parents) if os.path.ismount(q))
+    staging = volume / f".TemporaryItems/folders.{os.getuid()}" if volume != Path("/") else None
+    writable = " ".join(f"(subpath {quote(str(d))})" for d in (real, staging, *(user_dir(n) for n in ("DARWIN_USER_TEMP_DIR", "DARWIN_USER_CACHE_DIR"))) if d)
     return ("(version 1) (allow default)\n"
             # ps is setuid root, which macOS never starts inside a sandbox; it only reads process information.
             "(allow process-exec (literal \"/bin/ps\") (with no-sandbox))\n"
             # Unix sockets only in the task folder: one outside, such as /var/run/docker.sock, can start processes outside the sandbox.
-            f"(deny network-outbound) (allow network-outbound (remote ip \"localhost:*\") (remote unix-socket (subpath {quote(str(real))})))\n"
+            # The setup stage gets every host: Seatbelt filters by address, not name (AGENTS.md 「테스트 명령이 받는 것」).
+            # Name lookups go through mDNSResponder's socket, which starts nothing.
+            + ("(deny network-outbound (remote unix-socket)) (allow network-outbound (remote unix-socket (literal \"/private/var/run/mDNSResponder\"))) "
+               if network else "(deny network-outbound) (allow network-outbound (remote ip \"localhost:*\")) ")
+            + f"(allow network-outbound (remote unix-socket (subpath {quote(str(real))})))\n"
             f"(deny file-write*) (allow file-write* {writable} (subpath \"/dev\"))\n"
             f"(deny file-write* {deny})\n"
             f"(deny file-read* (subpath {quote(str(Path.home().resolve()))})) (allow file-read* {readable})\n"
             + (f"(allow file-read-metadata {metadata})\n" if metadata else ""))
 
 
-def run_test(job, task, protect=(), **kwargs):
+def run_test(job, task, protect=(), command=None, network=False, **kwargs):
     """The one test environment (AGENTS.md 「테스트 명령이 받는 것」): the check stage and the worker's `engine.py test` both use it.
 
     The owner wrote this command (the product's AGENTS.md test cell) with `new`; workers cannot edit task.json."""
@@ -589,9 +613,15 @@ def run_test(job, task, protect=(), **kwargs):
     # The check stage fails on untracked files, and a worker's earlier test run would leave __pycache__ in repo/.
     # shortcut: Python bytecode only; other tools' artifacts must be in the product's .gitignore.
     root = scratch(job)
-    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "TMPDIR": str(root / "tmp"), "HOME": str(root / "home"),
+    # A path in the home folder that the test cannot read (CARGO_HOME=~/.cargo) only misleads the tools; without it
+    # they use the task's HOME, where the setup stage put their files.
+    inside = lambda path, folder: path == folder or folder in path.parents  # noqa: E731
+    home, readable = Path.home().resolve(), [job.resolve(), *(Path(r) for r in task_reads(task))]
+    hidden = {k for k, v in os.environ.items() if k != "PATH" and os.path.isabs(v) and os.pathsep not in v
+              and inside(Path(v).resolve(), home) and not any(inside(Path(v).resolve(), r) for r in readable)}
+    env = {**{k: v for k, v in os.environ.items() if k not in hidden}, "PYTHONDONTWRITEBYTECODE": "1", "TMPDIR": str(root / "tmp"), "HOME": str(root / "home"),
            "GIT_CONFIG_GLOBAL": "/dev/null"}
-    return subprocess.run(["sandbox-exec", "-p", check_profile(job, task, protect), "/bin/sh", "-c", task["test"]], cwd=job / "repo",
+    return subprocess.run(["sandbox-exec", "-p", check_profile(job, task, protect, network), "/bin/sh", "-c", command or task["test"]], cwd=job / "repo",
                           env=env, **kwargs)
 
 
@@ -747,7 +777,7 @@ def allow(name, rule):
     return 0
 
 
-def new(name, repo, test, allow, base, read=()):
+def new(name, repo, test, allow, base, read=(), setup=None):
     # The name becomes a folder, a branch and an hc terminal name (a-z 0-9 - _ only).
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,23}", name):
         print("task name: a-z 0-9 - _, at most 24 characters", file=sys.stderr)
@@ -766,7 +796,7 @@ def new(name, repo, test, allow, base, read=()):
         reads.append(str(real))
     job.mkdir(parents=True)
     save(job / "task.json", {"name": name, "repo": str(Path(repo).resolve()), "test": test, "allow": allow, "base": base,
-                             "read": reads})
+                             "read": reads, **({"setup": setup} if setup else {})})
     (job / "INTENT.md").write_text(
         f"# {name}\n\n## 목표\n\n## 지시 원문\n\n## 하지 않을 것\n\n## 결정 기록\n", encoding="utf-8")
     subprocess.run(["git", "-C", repo, "worktree", "add", "-b", f"office/{name}", str(job / "repo"), base], check=True)
@@ -795,6 +825,7 @@ def main(argv=None):
     created.add_argument("--test", required=True, help="the product's AGENTS.md test command")
     created.add_argument("--allow", action="append", default=[], help="extra tool rule run from the task folder, e.g. 'Bash(make -C repo lint)'")
     created.add_argument("--base", default="main")
+    created.add_argument("--setup", help="the product's AGENTS.md setup command; runs once with network before implement")
     created.add_argument("--read", action="append", default=[],
                          help="a toolchain folder in the home folder that is not on PATH, e.g. ~/.rustup; the test may read it")
     for command in ("run", "approve", "test", "preflight"):
@@ -811,7 +842,7 @@ def main(argv=None):
         print(f"write the absolute path of the repo-baseline clone into {_PATH}", file=sys.stderr)
         return 2
     if args.command == "new":
-        return new(args.task, args.repo, args.test, args.allow, args.base, args.read)
+        return new(args.task, args.repo, args.test, args.allow, args.base, args.read, args.setup)
     if args.command == "workers":
         return workers()
     if args.command == "allow":

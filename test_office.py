@@ -317,6 +317,31 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("twice in a row", (self.job / "BLOCKED.md").read_text())
         self.assertEqual(self.state()["fails"], {})
 
+    def test_setup_runs_once_before_implement_and_leaves_its_files_for_the_check(self):
+        # The product's setup cell fetches dependencies into the task's HOME; the offline check then finds them.
+        task = json.loads((self.job / "task.json").read_text())
+        task.update(setup='echo dep > "$HOME/dep"', test='test -f pass && test -f "$HOME/dep"')
+        (self.job / "task.json").write_text(json.dumps(task))
+        worker = FakeWorker(self.job)
+        self.engine.run("search", worker)
+        self.assertFalse((self.job / "setup.md").exists())  # not before the design is approved
+        self.engine.approve("search")
+        self.engine.run("search", worker)
+        self.assertIn("exit 0", (self.job / "setup.md").read_text())
+        self.assertIn("exit 0", (self.job / "check.md").read_text())
+        self.assertEqual([c[0] for c in worker.calls], ["design", "implement"])
+
+    def test_a_failing_setup_stops_the_task_before_implement(self):
+        task = json.loads((self.job / "task.json").read_text())
+        task["setup"] = "exit 3"
+        (self.job / "task.json").write_text(json.dumps(task))
+        worker = FakeWorker(self.job)
+        self.engine.run("search", worker)
+        self.engine.approve("search")
+        self.assertEqual(self.engine.run("search", worker), self.engine.BLOCKED)
+        self.assertIn("`exit 3` exit 3, twice in a row", (self.job / "BLOCKED.md").read_text())
+        self.assertEqual([c[0] for c in worker.calls], ["design"])
+
     def test_uncommitted_changes_fail_the_check(self):
         worker = FakeWorker(self.job)
         self.engine.run("search", worker)
@@ -1242,6 +1267,62 @@ class PipelineTests(unittest.TestCase):
         script = "; ".join(f"(nc -U -w 1 {p} </dev/null 2>/dev/null && echo {n} ok || echo {n} denied)" for n, p in paths.items())
         result = self.engine.run_test(self.job, {"test": script}, capture_output=True, text=True)
         self.assertEqual(result.stdout.split("\n")[:-1], ["inside ok", "outside denied"])
+
+    @unittest.skipUnless(shutil.which("sandbox-exec") and shutil.which("nc"), "macOS sandbox-exec")
+    def test_only_setup_reaches_other_hosts_and_neither_reaches_outside_sockets(self):
+        # Another host that answers outside the sandbox; Seatbelt's localhost also covers this machine's own addresses.
+        gateway = subprocess.run(["route", "-n", "get", "default"], capture_output=True, text=True).stdout
+        hosts = [(line.split()[-1], port) for line in gateway.splitlines() if "gateway:" in line for port in (53, 80)] + [("1.1.1.1", 443)]
+        reachable = None
+        for host in hosts:
+            try:
+                socket.create_connection(host, timeout=2).close()
+                reachable = host
+                break
+            except OSError:
+                pass
+        if not reachable:
+            self.skipTest("no other host answers")
+        address, port = reachable
+        sock = Path(tempfile.mkdtemp(dir="/private/tmp")) / "out.sock"
+        self.addCleanup(shutil.rmtree, sock.parent, True)
+        outside = socket.socket(socket.AF_UNIX)
+        self.addCleanup(outside.close)
+        outside.bind(str(sock))
+        outside.listen()
+        script = (f"(nc -z -w 2 {address} {port} 2>/dev/null && echo host ok || echo host denied); "
+                  "(/usr/bin/dscacheutil -q host -a name github.com | grep -q ip_address && echo dns ok || echo dns denied); "
+                  f"(nc -U -w 1 {sock} </dev/null 2>/dev/null && echo socket ok || echo socket denied)")
+        lines = {net: self.engine.run_test(self.job, {"test": script}, network=net, capture_output=True, text=True).stdout.split("\n")[:-1]
+                 for net in (False, True)}
+        self.assertEqual(lines, {False: ["host denied", "dns denied", "socket denied"], True: ["host ok", "dns ok", "socket denied"]})
+
+    @unittest.skipUnless(shutil.which("sandbox-exec") and shutil.which("osascript") and not os.path.ismount(OFFICE.resolve()) and
+                         next(q for q in OFFICE.resolve().parents if os.path.ismount(q)) != Path("/"), "a checkout on another volume")
+    def test_check_stage_lets_foundation_save_atomically_on_another_volume(self):
+        # SwiftPM failed writing .build/.../manifest.json on an external volume: Foundation stages it in <volume>/.TemporaryItems.
+        (OFFICE / "jobs").mkdir(exist_ok=True)  # git ignores jobs/
+        job = Path(tempfile.mkdtemp(dir=OFFICE / "jobs")).resolve()
+        self.addCleanup(shutil.rmtree, job, True)
+        (job / "repo").mkdir()
+        self.job = job
+        target = job / "atomic.txt"
+        script = (f"/usr/bin/osascript -l JavaScript -e 'ObjC.import(\"Foundation\"); "
+                  f"$(\"x\").writeToFileAtomicallyEncodingError(\"{target}\", true, 4, null) ? \"saved\" : \"failed\"'")
+        result = self.engine.run_test(self.job, {"test": script}, capture_output=True, text=True)
+        self.assertEqual(result.stdout, "saved\n", result.stderr)
+
+    @unittest.skipUnless(shutil.which("sandbox-exec"), "macOS sandbox-exec")
+    def test_a_test_gets_no_variable_naming_a_home_path_it_cannot_read(self):
+        # CARGO_HOME=~/.cargo made cargo use an unreadable folder instead of the task's HOME, where setup put the crates.
+        home = Path(tempfile.mkdtemp(dir="/private/tmp")).resolve()
+        self.addCleanup(shutil.rmtree, home, True)
+        (home / "tools").mkdir()
+        env = {"HOME": str(home), "CARGO_HOME": str(home / ".cargo"), "TOOL_HOME": str(home / "tools"), "ELSEWHERE": "/usr/bin"}
+        with unittest.mock.patch.dict(os.environ, env):
+            result = self.engine.run_test(self.job, {"test": 'echo "${CARGO_HOME-unset} ${TOOL_HOME-unset} ${ELSEWHERE-unset}"',
+                                                     "read": [str(home / "tools")]}, capture_output=True, text=True)
+        self.assertEqual(result.stdout, f"unset {home / 'tools'} /usr/bin\n", result.stderr)
 
     def test_workers_reads_files_only(self):
         self.engine.run("search", FakeWorker(self.job))

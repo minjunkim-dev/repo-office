@@ -135,6 +135,12 @@
    "approve": "design.md"
   },
   {
+   "id": "setup",
+   "by": "script",
+   "setup": true,
+   "out": "setup.md"
+  },
+  {
    "id": "implement",
    "by": "claude",
    "session": "work",
