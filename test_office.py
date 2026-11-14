@@ -1285,6 +1285,19 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual((task["stage"], task["note"]), ("blocked", "</script><script>alert(1)</script>&"))
         self.assertNotIn("innerHTML = t", page)  # worker text is set only through textContent
 
+    def test_a_malformed_task_gives_the_board_only_text_and_numbers(self):
+        other = self.engine.JOBS / "other"
+        other.mkdir()
+        (other / "task.json").write_text("{}", encoding="utf-8")
+        # NaN breaks JSON.parse and an object without a usable toString throws in the page: both blank every task
+        (other / "state.json").write_text('{"stage": {"toString": 1}, "since": 0, "models": [{"model": NaN}]}', encoding="utf-8")
+        page = self.engine.board().read_text(encoding="utf-8")
+        start = page.index('id="data">') + len('id="data">')
+        data = json.loads(page[start:page.index("</script>", start)], parse_constant=lambda c: self.fail(c))
+        for task in data["tasks"]:
+            self.assertTrue(all(isinstance(v, (str, int)) for v in task.values()), task)
+        self.assertIn("other", [t["name"] for t in data["tasks"]])
+
     def test_the_board_links_only_github_pull_requests(self):
         page = (OFFICE / "pipeline/board.html").read_text(encoding="utf-8")
         self.assertIn(r"/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/.test(t.note)", page)

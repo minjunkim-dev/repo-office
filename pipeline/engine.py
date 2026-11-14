@@ -821,7 +821,9 @@ def board():
     """Write jobs/board.html: a pixel office where each task sits at its stage's desk, from files only.
     The page draws itself from the JSON put into pipeline/board.html and reloads every 5 seconds."""
     flow = [{"id": s["id"], "by": s["by"]} for s in load(STAGES, {"flow": []})["flow"]]
-    data = json.dumps({"time": f"{datetime.now():%H:%M:%S}", "flow": flow, "tasks": tasks()}, ensure_ascii=False)
+    # state.json may hold any JSON (NaN, objects): give the page only text and whole numbers, so one task cannot break it.
+    rows = [{k: v if isinstance(v, int) else str(v) for k, v in t.items()} for t in tasks()]
+    data = json.dumps({"time": f"{datetime.now():%H:%M:%S}", "flow": flow, "tasks": rows}, ensure_ascii=False)
     # Inside <script>, a worker's text must not close the tag: escape <, > and & as JSON \u escapes.
     data = data.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     page = (PIPELINE / "board.html").read_text(encoding="utf-8").replace("/*DATA*/", data)

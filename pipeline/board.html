@@ -59,6 +59,7 @@ a { color: var(--done); }
 <script type="application/json" id="data">/*DATA*/</script>
 <script>
 "use strict";
+setTimeout(() => location.reload(), 5000);  // first, so a drawing error never stops the board from reloading
 // Original pixel art drawn here; no outside images. Data comes from the JSON above, set only through textContent.
 const D = JSON.parse(document.getElementById("data").textContent);
 const NS = "http://www.w3.org/2000/svg";
@@ -232,7 +233,6 @@ function cards() {
 document.getElementById("meta").textContent = `${D.time} 기준 · 5초마다 다시 읽는다 · 토큰을 쓰지 않는다`;
 scene();
 cards();
-setTimeout(() => location.reload(), 5000);
 </script>
 </body>
 </html>
