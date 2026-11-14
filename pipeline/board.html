@@ -161,7 +161,7 @@ function labelsLayer() {
   ctx.textBaseline = "middle";
   for (const p of Object.values(people)) {
     const t = p.task, cx = (p.x + 8) * S;
-    const line2 = [t.stage, t.model, t.text].filter(Boolean).join(" · ");
+    const line2 = [t.stage, t.model, t.text !== t.stage && t.text].filter(Boolean).join(" · ");  // not "병합 대기 · 병합 대기"
     ctx.font = `600 12px ${FONT}`; const w1 = ctx.measureText(t.name).width;
     ctx.font = `11px ${FONT}`; const w2 = ctx.measureText(line2).width + 12;
     // Two seats share a room: the first seat's label sits above the head, the second's over the desk front, so the
