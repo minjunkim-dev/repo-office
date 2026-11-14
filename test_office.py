@@ -309,6 +309,38 @@ class PipelineTests(unittest.TestCase):
                 # POLICY §3: an easy PR never asks the review bot; every other PR asks once.
                 self.assertEqual([c[:2] for c in gh()].count(["pr", "comment"]), 0 if ready else 1)
 
+    def test_a_reapproved_design_drops_the_earlier_proof_of_easy(self):
+        # Through run(): the PR stays open with the same commit, so the draft stage never proves easy again.
+        _, _, gh = self.fake_github()
+        design = ["Door: 되돌리기 쉬움"]
+
+        class Worker(FakeWorker):
+            def __call__(w, name, cwd, argv, message):
+                super().__call__(name, cwd, argv, message)
+                stage = name.rsplit("-", 1)[1]
+                if stage == "design":
+                    (self.job / "design.md").write_text(f"# d\n\n{design[0]}\n", encoding="utf-8")
+                if stage == "implement":
+                    (self.job / "pr-body.md").write_text("# fix: x\n\nDoor: 되돌리기 쉬움\n신뢰 경계: 없음\n", encoding="utf-8")
+                    if design[0].endswith("어려움"):  # the new design needs no code change: no new commit
+                        subprocess.run(["git", "-C", str(self.job / "repo"), "reset", "-q", "--soft", "HEAD~1"], check=True)
+
+        worker = Worker(self.job)
+        self.engine.run("search", worker)
+        self.engine.approve("search")
+        self.engine.run("search", worker)
+        self.assertEqual(self.state()["easy_pr"], self.state()["checked"])
+        self.assertNotIn(["pr", "comment"], [c[:2] for c in gh()])
+        (self.job / "BLOCKED.md").unlink()  # the review stage's pin check, not part of this case
+        design[0] = "Door: 되돌리기 어려움"
+        (self.job / "design.md").write_text(f"# d\n\n{design[0]}\n", encoding="utf-8")
+        self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
+        self.assertEqual(self.engine.approve("search"), 0)
+        self.engine.run("search", worker)
+        self.assertEqual(self.state()["stage"], "review")
+        self.assertFalse(self.engine.proven_easy(self.state()))
+        self.assertEqual([c[:2] for c in gh()].count(["pr", "comment"]), 1)  # the hard design asks the bot once
+
     def test_draft_stage_proves_easy_only_from_the_approved_design(self):
         # The same easy text, but not the bytes a person approved: not easy.
         _, _, gh = self.fake_github()

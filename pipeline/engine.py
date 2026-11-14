@@ -629,6 +629,7 @@ def approve(name):
         print(f"nothing to approve at stage {state['stage']}", file=sys.stderr)
         return 2
     state.setdefault("approved", {})[stage["id"]] = sha(job / stage["approve"])
+    state.pop("easy_pr", None)  # proven for the design approved before; an open PR is never proven again
     save(state_path, state)
     print(f"approved {stage['approve']} {state['approved'][stage['id']]}")
     return 0
