@@ -46,7 +46,7 @@
    "session": "work",
    "prompt": "prompts/design.md",
    "out": "design.md",
-   "model": "sonnet"
+   "model": "opus"
   },
   {
    "id": "approve",

@@ -1,3 +1,8 @@
 {
-  "model": "opus"
+  "model": "opus",
+  "permissions": {
+    "allow": [
+      "Bash(python3 ../pipeline/engine.py *)"
+    ]
+  }
 }
