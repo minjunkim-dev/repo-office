@@ -270,15 +270,15 @@ TRUST_NAMES = {n.casefold() for n in ("CLAUDE.md", "CLAUDE.local.md", "AGENTS.md
 def easy(design, body):
     """True only when every revert claim in the approved design and in the PR body says exactly 되돌리기: 쉬움
     (or the old Door: 되돌리기 쉬움), there is one, and the body has exactly one sensitive-files line: 민감한 파일: 없음
-    (or the old 신뢰 경계: 없음). A claim is any line naming the old words, or a line with the new word and a colon:
-    the new words are ordinary Korean that prose uses too. Fails closed: list markers, emphasis or a second claim
-    anywhere leave the PR not easy."""
+    (or the old 신뢰 경계: 없음). A claim is any line naming the old words, or a line with the new word before its
+    first colon (되돌리기 판정: 어려움 counts): the new words are ordinary Korean that prose uses too. Fails closed:
+    list markers, emphasis or a second claim anywhere leave the PR not easy."""
     def claims(raw, word, values):
         found = [l.strip() for l in unicodedata.normalize("NFKC", raw.decode("utf-8", "replace")).splitlines()
                  if re.search(word, l, re.I) and not re.match(r"\s*#+\s*\S+\s*$", l)]
         return found if found and set(found) <= values else None
-    door = r"d\W*o\W*o\W*r|되\W*돌\W*리\W*기\W{0,3}:"
-    trust = r"신뢰\W*경계|민감한\W*파일\W{0,3}:"
+    door = r"d\W*o\W*o\W*r|^[^:]*되\W*돌\W*리\W*기[^:]*:"
+    trust = r"신뢰\W*경계|^[^:]*민감한\W*파일[^:]*:"
     easy_door = {"되돌리기: 쉬움", "Door: 되돌리기 쉬움"}
     sensitive = claims(body, trust, {"민감한 파일: 없음", "신뢰 경계: 없음"})
     return bool(claims(design, door, easy_door) and claims(body, door, easy_door) and sensitive and len(sensitive) == 1)

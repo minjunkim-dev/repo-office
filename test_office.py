@@ -620,14 +620,18 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(easy("Door: 되돌리기 쉬움", "되돌리기: 쉬움\n민감한 파일: 없음"))  # a design approved before the rename
         self.assertTrue(easy("되돌리기: 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음"))  # a product still on the old template
         # The new words are ordinary Korean: prose without a colon is no claim, and 되돌리는 법 is another field.
-        self.assertTrue(easy("되돌리기: 쉬움\n되돌리기 쉬운 이유: 문서만", "되돌리기: 쉬움\n되돌리는 법: revert\n민감한 파일: 없음\n민감한 파일을 건드리지 않는다"))
+        self.assertTrue(easy("되돌리기: 쉬움\n문서만 바꿔 되돌리기 쉽다.", "되돌리기: 쉬움\n되돌리는 법: revert\n민감한 파일: 없음\n민감한 파일을 건드리지 않는다"))
         for design, body in [("되돌리기: 어려움", "되돌리기: 쉬움\n민감한 파일: 없음"),
                              ("되돌리기: 쉬움", "되돌리기: 쉬움\n민감한 파일: `.claude/`"),
                              ("되돌리기: 쉬움", "되돌리기: 쉬움\n민감한 파일: 없음\n신뢰 경계: 없음"),  # two claims
                              ("되돌리기: 쉬움", "되돌리기: 쉬움\n- 되돌리기: 어려움\n민감한 파일: 없음"),
                              ("되돌리기: 쉬움", "**되돌리기:** 쉬움\n민감한 파일: 없음"),
                              ("되돌리기 쉬움", "되돌리기: 쉬움\n민감한 파일: 없음"),  # no claim in the design
-                             ("되돌리기: 쉬움", "되돌리기: 쉬움\nDoor 어려움\n민감한 파일: 없음")]:
+                             ("되돌리기: 쉬움", "되돌리기: 쉬움\nDoor 어려움\n민감한 파일: 없음"),
+                             # A label that names the word before its colon is a claim too.
+                             ("되돌리기: 쉬움\n되돌리기 판정: 어려움", "되돌리기: 쉬움\n민감한 파일: 없음"),
+                             ("되돌리기: 쉬움", "되돌리기 (판정): 어려움\n되돌리기: 쉬움\n민감한 파일: 없음"),
+                             ("되돌리기: 쉬움", "되돌리기: 쉬움\n민감한 파일: 없음\n민감한 파일 목록: `.claude/`")]:
             with self.subTest(design=design, body=body):
                 self.assertFalse(easy(design, body))
 
