@@ -65,6 +65,14 @@ window.addEventListener("message", e => {
   place();
 });
 
+// A newcomer takes the first of the six looks, from its name's, that no one shown wears; one keeps its look after that.
+function look(name) {
+  const worn = new Set(Object.values(people).map(q => q.sprite));
+  let s = hash(name) % 6;
+  for (let i = 0; i < 6 && worn.has(s); i++) s = (s + 1) % 6;
+  return s;
+}
+
 // Give each shown task a slot. One already in its room keeps its seat; one whose room changed walks to a free seat;
 // a new one appears in place.
 function place() {
@@ -77,7 +85,7 @@ function place() {
     const fresh = here.filter(t => !kept.includes(t)).slice(0, free.length);
     for (const t of kept.concat(fresh)) {
       const k = kept.includes(t) ? people[t.name].k : free.shift(), to = slot(id, k);
-      const p = people[t.name] || (people[t.name] = { x: to.x, y: to.y, sprite: hash(t.name) % 6 });
+      const p = people[t.name] || (people[t.name] = { x: to.x, y: to.y, sprite: look(t.name) });
       Object.assign(p, { tx: to.x, ty: to.y, lane: id, k, task: t });
       seen.add(t.name);
     }
