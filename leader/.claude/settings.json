@@ -3,6 +3,9 @@
   "permissions": {
     "allow": [
       "Bash(python3 ../pipeline/engine.py *)"
+    ],
+    "ask": [
+      "Bash(python3 ../pipeline/engine.py approve*)"
     ]
   }
 }
