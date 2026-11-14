@@ -155,7 +155,10 @@ function labelsLayer() {
     const line2 = [t.stage, t.model, t.text].filter(Boolean).join(" · ");
     ctx.font = `600 12px ${FONT}`; const w1 = ctx.measureText(t.name).width;
     ctx.font = `11px ${FONT}`; const w2 = ctx.measureText(line2).width + 12;
-    const w = Math.max(w1, w2) + 14, x = Math.min(Math.max(cx - w / 2, 2), W * S - w - 2), y = (p.y - 34) * S - 36;
+    // Two seats share a room: the first seat's label sits above the head, the second's over the desk front, so the
+    // two never share a line; each stays inside the room it is in.
+    const rx = Math.floor(p.x / RW) * RW * S, w = Math.max(w1, w2) + 14;
+    const x = Math.max(Math.min(cx - w / 2, rx + RW * S - w - 2), rx + 2), y = p.k ? (p.y - 2) * S : (p.y - 34) * S - 36;
     ctx.fillStyle = "rgba(20, 21, 31, .9)"; ctx.beginPath(); ctx.roundRect(x, y, w, 32, 5); ctx.fill();
     ctx.fillStyle = COLOR[t.key]; ctx.fillRect(x, y, 3, 32);
     ctx.fillStyle = "#eef0f7"; ctx.font = `600 12px ${FONT}`; ctx.fillText(t.name, x + 9, y + 9);
