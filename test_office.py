@@ -1247,6 +1247,25 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("&lt;script&gt;", page)
         self.assertIn('class="now blocked"', page)
 
+    def test_the_board_links_only_github_urls(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.engine.run("search", FakeWorker(self.job))
+        for line in ("javascript:alert(1)", 'https://x" onmouseover="alert(1)', "https://github.com.evil.example/x"):
+            (self.job / "BLOCKED.md").write_text(f"# 막힘\n\n{line}\n", encoding="utf-8")
+            self.assertNotIn("href", self.engine.board().read_text(encoding="utf-8"), line)
+        (self.job / "BLOCKED.md").unlink()
+        (self.job / "pr.txt").write_text("https://github.com/O/R/pull/7\n", encoding="utf-8")
+        self.assertIn('href="https://github.com/O/R/pull/7"', self.engine.board().read_text(encoding="utf-8"))
+
+    def test_a_board_that_cannot_be_written_leaves_the_run_exit_code(self):
+        def broken():
+            raise TypeError("since is not a number")  # e.g. another task's hand-edited state.json
+        err = io.StringIO()
+        with unittest.mock.patch.object(self.engine, "board", broken), contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(err):
+            self.assertEqual(self.engine.run("search", FakeWorker(self.job)), self.engine.WAIT)  # design approval
+        self.assertIn("board not written: TypeError", err.getvalue())
+
 class LayoutTests(unittest.TestCase):
     def test_rules_live_in_agents_files_with_do_and_do_not(self):
         self.assertEqual(list(OFFICE.rglob("CLAUDE.md")), [])

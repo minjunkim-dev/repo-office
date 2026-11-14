@@ -847,18 +847,19 @@ a{{color:var(--now)}}</style></head><body><h1 style="font-size:18px;margin:0">of
 """
     out = JOBS / "board.html"
     out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_suffix(".tmp")
+    tmp = out.with_name(f".board.{os.getpid()}.tmp")  # runs of other tasks write the board at the same time
     tmp.write_text(page, encoding="utf-8")
     tmp.replace(out)  # a reload never reads half a page
     return out
 
 
 def refresh_board():
-    """The board is a view: failing to write it must not stop a task."""
+    """The board is a view: failing to write it must not stop a task. It reads every task's files, so a malformed
+    state.json of another task (TypeError, AttributeError) must not replace this run's exit code either."""
     try:
         board()
-    except (OSError, ValueError, KeyError) as error:
-        print(f"board not written: {error}", file=sys.stderr)
+    except Exception as error:
+        print(f"board not written: {type(error).__name__}: {error}", file=sys.stderr)
 
 
 def main(argv=None):
