@@ -1333,7 +1333,8 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         with contextlib.redirect_stdout(io.StringIO()):
             self.engine.run("search", FakeWorker(self.job))
         for name, state in [("nan", '{"stage": {"toString": 1}, "since": 0, "models": [{"model": NaN}]}'),
-                            ("text", '{"stage": "design", "since": "yesterday"}'), ("bare", '{"stage": "design"}')]:
+                            ("text", '{"stage": "design", "since": "yesterday"}'), ("bare", '{"stage": "design"}'),
+                            ("flag", '{"stage": true, "since": 0}')]:
             other = self.engine.JOBS / name
             other.mkdir()
             (other / "task.json").write_text("{}", encoding="utf-8")
@@ -1346,11 +1347,11 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         self.assertEqual((stages["text"], stages["bare"]), ("unreadable", "unreadable"))
         self.assertNotEqual(stages["search"], "unreadable")
         for task in data["tasks"]:
-            self.assertTrue(all(isinstance(v, (str, int)) for v in task.values()), task)
+            self.assertTrue(all(type(v) in (str, int) for v in task.values()), task)  # bool is an int: JSON true would slip through isinstance
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(self.engine.workers(), 0)  # the table view lists every task too
-        self.assertTrue(all(name in out.getvalue() for name in ("nan", "text", "bare", "search")), out.getvalue())
+        self.assertTrue(all(name in out.getvalue() for name in ("nan", "text", "bare", "flag", "search")), out.getvalue())
         texts = [e["text"] for e in self.run_page()]
         self.assertIn("읽기 실패", texts)
         self.assertIn("search", texts)
