@@ -254,7 +254,7 @@ def open_draft(job, task, stage, raw, head, approved=None, seen=None):
     if made.returncode or not re.fullmatch(rf"https://github\.com/{re.escape(repo)}/pull/\d+", url, re.I):
         return f"gh pr create failed: {(made.stderr or made.stdout).strip()}"
     pr_file.write_text(url + "\n", encoding="utf-8")
-    # The ready stage marks every PR ready. Easy (proven here) only picks the review's model and the report's note:
+    # The PR opens ready; the ready stage marks a person's draft PR ready. Easy (proven here) only picks the review's model and the report's note:
     # a hard or trust-boundary PR needs a person to read its diff before the merge.
     if stage.get("easy"):
         design = read_body(job / stage["easy"])  # only the bytes a person approved
