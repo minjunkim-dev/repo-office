@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>office 상태판</title>
+<style>
+:root {
+  --bg: #1b1d2a; --panel: #262938; --line: #3a3e55; --fg: #eef0f7; --mute: #9aa0b8;
+  --work: #5ad1a0; --wait: #ffc857; --bad: #ff6b6b; --done: #7aa7ff;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 -apple-system, system-ui, "Apple SD Gothic Neo", sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+h1 { font-size: 18px; margin: 0; letter-spacing: .02em; }
+.meta { color: var(--mute); font-size: 13px; }
+.lanes { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+.lane { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; min-height: 92px; min-width: 0; }
+.lane h3 { font-size: 13px; margin: 0 0 2px; display: flex; justify-content: space-between; }
+.lane h3 b { color: var(--mute); font-weight: 600; }
+.lane small { display: block; color: var(--mute); font-size: 11px; margin-bottom: 8px; }
+.chip { display: block; border-radius: 6px; padding: 4px 8px; margin-top: 6px; font-size: 13px; font-weight: 600; color: #15161f; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 10px 2px 18px; color: var(--mute); font-size: 13px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; min-width: 0; }
+.card h2 { font-size: 15px; margin: 0 0 6px; display: flex; justify-content: space-between; gap: 8px; }
+.pill { font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 99px; color: #15161f; white-space: nowrap; }
+.track { display: flex; gap: 3px; margin: 8px 0; }
+.track span { flex: 1; height: 6px; border-radius: 2px; background: var(--line); }
+.track span.past { background: #6b7194; }
+.track span.now { background: var(--c); box-shadow: 0 0 6px var(--c); }
+.steps { display: flex; justify-content: space-between; font-size: 11px; color: var(--mute); }
+.row { color: var(--mute); font-size: 13px; margin-top: 6px; overflow-wrap: anywhere; }
+.note { color: var(--fg); font-size: 13px; margin-top: 6px; overflow-wrap: anywhere; }
+a { color: var(--done); }
+.empty { color: var(--mute); padding: 24px 0; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>office 상태판</h1>
+    <span class="meta" id="meta"></span>
+  </header>
+  <section class="lanes" id="lanes" aria-label="단계마다 지금 있는 과제"></section>
+  <div class="legend">
+    <span><i style="background:var(--work)"></i>작업 중</span>
+    <span><i style="background:var(--wait)"></i>사람 차례(승인·병합)</span>
+    <span><i style="background:var(--bad)"></i>막힘</span>
+    <span>작업자 화면: <code>hc attach &lt;이름&gt;</code> · 도트 사무실: Pixel Agents(README)</span>
+  </div>
+  <section class="cards" id="cards"></section>
+</main>
+<script type="application/json" id="data">/*DATA*/</script>
+<script>
+"use strict";
+setTimeout(() => location.reload(), 5000);  // first, so a drawing error never stops the board from reloading
+// Data comes from the JSON above and is set only through textContent.
+const D = JSON.parse(document.getElementById("data").textContent);
+
+// Lanes in pipeline order. Each stage of stages.json falls into one; a person acts in 승인 and 병합.
+const LANES = [["design", "설계", "opus"], ["approve", "설계 승인", "사람"], ["implement", "구현", "haiku·sonnet"],
+               ["check", "검사", "스크립트"], ["pr", "PR·리뷰", "엔진·다른 세션"], ["done", "병합 대기", "사람"]];
+const LANE_OF = { design: "design", approve: "approve", implement: "implement", check: "check",
+                  draft: "pr", ready: "pr", review: "pr", post: "pr", done: "done" };
+const STAGE_NAME = { design: "설계", approve: "설계 승인", implement: "구현", check: "검사", draft: "초안 PR",
+                     ready: "Ready·봇", review: "리뷰", post: "본문 올리기", done: "병합 대기" };
+const human = new Set(D.flow.filter(s => s.by === "human").map(s => s.id).concat(["done"]));
+
+function status(t) {
+  if (t.stage === "blocked") return { key: "bad", text: "막힘" };
+  if (t.stage === "unreadable") return { key: "bad", text: "읽기 실패" };
+  if (t.at === "done") return { key: "done", text: "병합 대기" };
+  if (human.has(t.at)) return { key: "wait", text: "사람 차례" };
+  return { key: "work", text: "작업 중" };
+}
+const COLOR = { work: "#5ad1a0", wait: "#ffc857", bad: "#ff6b6b", done: "#7aa7ff" };
+
+function lanes() {
+  const box = document.getElementById("lanes");
+  LANES.forEach(([key, name, who]) => {
+    const here = D.tasks.filter(t => (LANE_OF[t.at] || "design") === key);
+    const lane = document.createElement("div"); lane.className = "lane";
+    const h = document.createElement("h3");
+    const n = document.createElement("span"); n.textContent = name;
+    const c = document.createElement("b"); c.textContent = here.length;
+    h.append(n, c);
+    const w = document.createElement("small"); w.textContent = who;
+    lane.append(h, w);
+    here.forEach(t => {
+      const chip = document.createElement("span"); chip.className = "chip";
+      chip.style.background = COLOR[status(t).key];
+      chip.textContent = t.name; chip.title = `${t.name} · ${status(t).text}`;
+      lane.append(chip);
+    });
+    box.append(lane);
+  });
+}
+
+function cards() {
+  const box = document.getElementById("cards");
+  const ids = D.flow.map(s => s.id).concat(["done"]);
+  if (!D.tasks.length) { box.innerHTML = '<p class="empty">등록된 과제가 없다</p>'; return; }
+  D.tasks.forEach(t => {
+    const st = status(t);
+    const c = document.createElement("article");
+    c.className = "card";
+    c.style.setProperty("--c", COLOR[st.key]);
+    const h = document.createElement("h2");
+    const n = document.createElement("span"); n.textContent = t.name;
+    const p = document.createElement("span"); p.className = "pill"; p.style.background = COLOR[st.key]; p.textContent = st.text;
+    h.append(n, p); c.append(h);
+    const track = document.createElement("div"); track.className = "track";
+    const i = ids.indexOf(t.at);
+    ids.forEach((id, k) => { const s = document.createElement("span"); s.className = k < i ? "past" : k === i ? "now" : ""; s.title = STAGE_NAME[id] || id; track.append(s); });
+    c.append(track);
+    const steps = document.createElement("div"); steps.className = "steps";
+    const a = document.createElement("span"); a.textContent = "설계";
+    const b = document.createElement("span"); b.textContent = `지금: ${STAGE_NAME[t.at] || t.at}`;
+    const e = document.createElement("span"); e.textContent = "병합";
+    steps.append(a, b, e); c.append(steps);
+    const row = document.createElement("div"); row.className = "row";
+    row.textContent = `${t.minutes}분째 · 모델 ${t.model} · 마지막 파일 ${t.last}`;
+    c.append(row);
+    if (t.note) {
+      const note = document.createElement("div"); note.className = "note";
+      if (/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/.test(t.note)) {
+        const link = document.createElement("a"); link.href = t.note; link.textContent = t.note; note.append(link);
+      } else note.textContent = t.note;
+      c.append(note);
+    }
+    box.append(c);
+  });
+}
+
+document.getElementById("meta").textContent = `${D.time} 기준 · 5초마다 다시 읽는다 · 토큰을 쓰지 않는다`;
+lanes();
+cards();
+</script>
+</body>
+</html>

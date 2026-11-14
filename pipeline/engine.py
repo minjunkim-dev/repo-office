@@ -6,7 +6,7 @@
   engine.py run <task>        advance until a person is needed, the task is blocked, or it is done
   engine.py approve <task>    a person approves the current design file (bound to its sha256)
   engine.py workers           show every task's stage from files only
-  engine.py board             write jobs/board.html, the same view as a page that reloads itself (run also rewrites it)
+  engine.py board             write jobs/board.html: the Pixel Agents office beside the stages and task cards (run also rewrites it)
   engine.py test <task>       run the task's test command in its repo/, full output in test.log
   engine.py preflight <task>  run repo-baseline's review preflight for pr.txt in its repo/, diff into pr.diff
   engine.py skills <task> <base>  run matt-skills check_skills.py in its repo/ (exit 0 delegate, 1 missing, 2 do not)
@@ -20,7 +20,6 @@ Exit codes for run: 0 done, 2 no such task or another run of it is going, 3 wait
 import argparse
 import fcntl
 import hashlib
-import html
 import json
 import os
 import re
@@ -807,7 +806,14 @@ def job_status(job):
 
 
 def tasks():
-    return [job_status(p) for p in sorted(JOBS.glob("*")) if (p / "task.json").exists()]
+    rows = []
+    for job in sorted(p for p in JOBS.glob("*") if (p / "task.json").exists()):
+        try:
+            rows.append(job_status(job))
+        except Exception as error:  # one hand-edited state.json (since not a number, a key missing) must not hide the rest
+            rows.append({"name": job.name, "stage": "unreadable", "at": "-", "minutes": 0, "model": "-", "last": "-",
+                         "note": f"state.json을 읽지 못함: {type(error).__name__}"})
+    return rows
 
 
 def workers():
@@ -819,41 +825,25 @@ def workers():
 
 
 def board():
-    """Write jobs/board.html: every task's stages, from files only. The page reloads itself every 5 seconds."""
-    esc = html.escape
-    ids = [s["id"] for s in load(STAGES, {"flow": []})["flow"]] + ["done"]
-    rows = []
-    for t in tasks():
-        at = ids.index(t["at"]) if t["at"] in ids else -1
-        chips = "".join(
-            f'<li class="{"now" if i == at else "past" if i < at else ""}{" blocked" if i == at and t["stage"] == "blocked" else ""}">{esc(s)}</li>'
-            for i, s in enumerate(ids))
-        note = esc(t["note"])
-        if t["note"].startswith("https://github.com/"):
-            note = f'<a href="{esc(t["note"], quote=True)}">{note}</a>'
-        rows.append(f'<section><h2>{esc(t["name"])}</h2><ol>{chips}</ol>'
-                    f'<p>{esc(t["stage"])} · {t["minutes"]}분 · {esc(t["model"])} · {esc(t["last"])}</p>'
-                    + (f'<p class="note">{note}</p>' if note else "") + "</section>")
-    page = f"""<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta http-equiv="refresh" content="5">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>office 상태판</title><style>
-:root{{--bg:#fff;--fg:#1d1d1f;--mute:#6e6e73;--line:#d2d2d7;--now:#0a63c9;--bad:#c62828}}
-@media (prefers-color-scheme:dark){{:root{{--bg:#161618;--fg:#f2f2f2;--mute:#9a9aa0;--line:#3a3a3e;--now:#5aa2ff;--bad:#ff6b6b}}}}
-body{{margin:0;padding:16px;background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,system-ui,sans-serif}}
-section{{border-bottom:1px solid var(--line);padding:12px 0}} h2{{font-size:16px;margin:0 0 8px}}
-ol{{display:flex;flex-wrap:wrap;gap:6px;list-style:none;margin:0;padding:0}}
-li{{border:1px solid var(--line);border-radius:6px;padding:2px 8px;color:var(--mute)}}
-li.past{{color:var(--fg)}} li.now{{border-color:var(--now);color:var(--now);font-weight:600}}
-li.blocked{{border-color:var(--bad);color:var(--bad)}} p{{margin:6px 0 0;color:var(--mute)}} .note{{color:var(--fg);overflow-wrap:anywhere}}
-a{{color:var(--now)}}</style></head><body><h1 style="font-size:18px;margin:0">office 상태판</h1>
-<p>{datetime.now():%H:%M:%S} 기준 · 5초마다 다시 읽는다 · 작업자 화면은 <code>hc attach &lt;이름&gt;</code></p>
-{"".join(rows) or "<p>등록된 과제가 없다</p>"}</body></html>
-"""
-    out = JOBS / "board.html"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_name(f".board.{os.getpid()}.tmp")  # runs of other tasks write the board at the same time
-    tmp.write_text(page, encoding="utf-8")
-    tmp.replace(out)  # a reload never reads half a page
-    return out
+    """Write jobs/board.html, one screen: the Pixel Agents office (OFFICE_PIXEL_AGENTS, a local address) beside
+    jobs/board-tasks.html, stage lanes and a card per task from files only, which reloads itself every 5 seconds."""
+    flow = [{"id": s["id"], "by": s["by"]} for s in load(STAGES, {"flow": []})["flow"]]
+    # state.json may hold any JSON (NaN, objects): give the page only text and whole numbers, so one task cannot break it.
+    rows = [{k: v if isinstance(v, int) else str(v) for k, v in t.items()} for t in tasks()]
+    data = json.dumps({"time": f"{datetime.now():%H:%M:%S}", "flow": flow, "tasks": rows}, ensure_ascii=False)
+    # Inside <script>, a worker's text must not close the tag: escape <, > and & as JSON \u escapes.
+    data = data.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    # Only a local http address without a query: the token URL would hand the page the right to install hooks.
+    pixel = os.environ.get("OFFICE_PIXEL_AGENTS", "http://127.0.0.1:3100").strip()
+    pixel = pixel if re.fullmatch(r"http://(127\.0\.0\.1|localhost):\d{1,5}/?", pixel) else ""
+    pages = {"board-tasks.html": (PIPELINE / "board-tasks.html").read_text(encoding="utf-8").replace("/*DATA*/", data),
+             "board.html": (PIPELINE / "board.html").read_text(encoding="utf-8").replace("/*PIXEL*/", pixel)}
+    JOBS.mkdir(parents=True, exist_ok=True)
+    for name, page in pages.items():
+        tmp = JOBS / f".{name}.{os.getpid()}.tmp"  # runs of other tasks write the board at the same time
+        tmp.write_text(page, encoding="utf-8")
+        tmp.replace(JOBS / name)  # a reload never reads half a page
+    return JOBS / "board.html"
 
 
 def refresh_board():

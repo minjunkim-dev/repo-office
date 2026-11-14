@@ -1267,27 +1267,102 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("setup failed: x", out.getvalue())
 
 
-    def test_board_is_a_page_of_the_same_files_that_escapes_what_workers_wrote(self):
+    def board_data(self, page):
+        """The JSON the page draws from: the only place worker text goes into the page."""
+        start = page.index('<script type="application/json" id="data">') + len('<script type="application/json" id="data">')
+        return json.loads(page[start:page.index("</script>", start)])
+
+    # The page's own script, run in node against a minimal DOM: what it puts on screen, not how its source looks.
+    PAGE_HARNESS = r"""
+const {data, script} = JSON.parse(require("fs").readFileSync(0, "utf8"));
+const made = [];
+function El(tag) {
+  const e = {tag, text: "", href: "", className: "", title: "", style: {setProperty() {}},
+             append(...c) {}, set innerHTML(v) { made.push({tag: "innerHTML", text: String(v), href: ""}); }};
+  Object.defineProperty(e, "textContent", {get() { return e.text; }, set(v) { e.text = String(v); }});
+  made.push(e);
+  return e;
+}
+const nodes = {data: {textContent: data}, meta: El("span"), lanes: El("section"), cards: El("section")};
+globalThis.document = {getElementById: id => nodes[id], createElement: El};
+globalThis.location = {reload() {}};
+globalThis.setTimeout = () => 0;
+new Function(script)();
+console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.href}))));
+"""
+
+    def run_page(self):
+        """Every element the page script made, as {tag, text, href}."""
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        self.engine.board()
+        page = (self.engine.JOBS / "board-tasks.html").read_text(encoding="utf-8")
+        start = page.index('id="data">') + len('id="data">')
+        data = page[start:page.index("</script>", start)]
+        body = page.index("<script>", start) + len("<script>")
+        script = page[body:page.index("</script>", body)]
+        ran = subprocess.run([node, "-e", self.PAGE_HARNESS], input=json.dumps({"data": data, "script": script}),
+                             capture_output=True, text=True)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        return json.loads(ran.stdout)
+
+    def test_board_shows_what_workers_wrote_as_text_only(self):
         with contextlib.redirect_stdout(io.StringIO()):
             self.engine.run("search", FakeWorker(self.job))  # run rewrites the board
-        page = (self.engine.JOBS / "board.html").read_text(encoding="utf-8")
-        self.assertIn('http-equiv="refresh"', page)
-        self.assertIn('class="now"', page)
-        (self.job / "BLOCKED.md").write_text("<script>x</script>\n", encoding="utf-8")
-        page = self.engine.board().read_text(encoding="utf-8")
-        self.assertNotIn("<script>", page)
-        self.assertIn("&lt;script&gt;", page)
-        self.assertIn('class="now blocked"', page)
+        self.assertIn("location.reload()", (self.engine.JOBS / "board-tasks.html").read_text(encoding="utf-8"))
+        evil = '</script><img src=x onerror="alert(1)">&'
+        (self.job / "BLOCKED.md").write_text(f"# 막힘\n\n{evil}\n", encoding="utf-8")
+        made = self.run_page()
+        self.assertIn(evil, [e["text"] for e in made])  # shown as the very text, through textContent
+        self.assertFalse([e for e in made if e["tag"] == "innerHTML" and "onerror" in e["text"]])
+        self.assertIn("막힘", [e["text"] for e in made])
 
-    def test_the_board_links_only_github_urls(self):
+    def test_the_board_links_only_github_pull_requests(self):
         with contextlib.redirect_stdout(io.StringIO()):
             self.engine.run("search", FakeWorker(self.job))
-        for line in ("javascript:alert(1)", 'https://x" onmouseover="alert(1)', "https://github.com.evil.example/x"):
-            (self.job / "BLOCKED.md").write_text(f"# 막힘\n\n{line}\n", encoding="utf-8")
-            self.assertNotIn("href", self.engine.board().read_text(encoding="utf-8"), line)
-        (self.job / "BLOCKED.md").unlink()
-        (self.job / "pr.txt").write_text("https://github.com/O/R/pull/7\n", encoding="utf-8")
-        self.assertIn('href="https://github.com/O/R/pull/7"', self.engine.board().read_text(encoding="utf-8"))
+        pr = self.job / "pr.txt"
+        for url, linked in [("https://github.com/O/R/pull/7", True), ("javascript:alert(1)", False),
+                            ("https://github.com.evil.example/O/R/pull/7", False), ("https://github.com/O/R/pull/7x", False)]:
+            with self.subTest(url=url):
+                pr.write_text(url + "\n", encoding="utf-8")
+                links = [e["href"] for e in self.run_page() if e["tag"] == "a"]
+                self.assertEqual(links, [url] if linked else [])
+
+    def test_a_malformed_task_shows_as_unreadable_and_the_others_stay(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.engine.run("search", FakeWorker(self.job))
+        for name, state in [("nan", '{"stage": {"toString": 1}, "since": 0, "models": [{"model": NaN}]}'),
+                            ("text", '{"stage": "design", "since": "yesterday"}'), ("bare", '{"stage": "design"}')]:
+            other = self.engine.JOBS / name
+            other.mkdir()
+            (other / "task.json").write_text("{}", encoding="utf-8")
+            (other / "state.json").write_text(state, encoding="utf-8")
+        self.engine.board()
+        page = (self.engine.JOBS / "board-tasks.html").read_text(encoding="utf-8")
+        start = page.index('id="data">') + len('id="data">')
+        data = json.loads(page[start:page.index("</script>", start)], parse_constant=lambda c: self.fail(c))
+        stages = {t["name"]: t["stage"] for t in data["tasks"]}
+        self.assertEqual((stages["text"], stages["bare"]), ("unreadable", "unreadable"))
+        self.assertNotEqual(stages["search"], "unreadable")
+        for task in data["tasks"]:
+            self.assertTrue(all(isinstance(v, (str, int)) for v in task.values()), task)
+        texts = [e["text"] for e in self.run_page()]
+        self.assertIn("읽기 실패", texts)
+        self.assertIn("search", texts)
+
+    def test_the_board_embeds_only_a_local_pixel_agents_address(self):
+        for given, embedded in [(None, "http://127.0.0.1:3100"), ("http://localhost:4000/", "http://localhost:4000/"),
+                                ("http://127.0.0.1:3100/?token=x", ""), ("https://evil.example", ""),
+                                ('http://127.0.0.1:1"</script>', ""), ("", "")]:
+            with self.subTest(given=given):
+                env = {} if given is None else {"OFFICE_PIXEL_AGENTS": given}
+                with unittest.mock.patch.dict(os.environ, env):
+                    if given is None:
+                        os.environ.pop("OFFICE_PIXEL_AGENTS", None)
+                    shell = self.engine.board().read_text(encoding="utf-8")
+                self.assertIn(f'const pixel = "{embedded}";', shell)
+                self.assertIn('src="board-tasks.html"', shell)
 
     def test_a_board_that_cannot_be_written_leaves_the_run_exit_code(self):
         def broken():

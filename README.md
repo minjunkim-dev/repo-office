@@ -33,7 +33,8 @@ macOS에서만 돌려 봤다.
 ## 진행 보기
 
 - `python3 pipeline/engine.py workers`: 과제마다 단계, 경과, 모델, PR 또는 막힌 이유를 표로 보여 준다.
-- `jobs/board.html`: 같은 내용을 단계 흐름으로 그린 페이지다. `engine.py run`이 단계를 옮길 때마다 다시 쓰고, 페이지는 5초마다 다시 읽는다. `python3 pipeline/engine.py board`로 바로 만들 수도 있다. 파일만 읽으므로 토큰을 쓰지 않는다.
+- `jobs/board.html`: 한 화면 상태판이다. 왼쪽에는 도트 사무실(Pixel Agents, 아래)이 움직이고, 오른쪽에는 단계 칸(설계 → 설계 승인 → 구현 → 검사 → PR·리뷰 → 병합 대기)과 과제 카드(진행 막대, 모델, PR 또는 막힌 이유)가 있다. 초록은 작업 중, 노랑은 사람 차례, 빨강은 막힘이나 `state.json` 읽기 실패다. 오른쪽(`jobs/board-tasks.html`)만 5초마다 다시 읽으므로 사무실 움직임은 끊기지 않는다. `engine.py run`이 단계를 옮길 때마다 다시 쓰고, `python3 pipeline/engine.py board`로 바로 만들 수도 있다. 파일만 읽으므로 토큰을 쓰지 않는다. 파일로 열었을 때 칸이 비면 `python3 -m http.server 8765 --bind 127.0.0.1 --directory jobs`로 띄우고 `http://127.0.0.1:8765/board.html`을 연다.
+- 도트 사무실: [Pixel Agents](https://github.com/pixel-agents-hq/pixel-agents)(MIT)는 이 기기의 Claude Code 세션마다 도트 캐릭터를 책상에 앉히고, 쓰기·읽기·대기를 움직임과 말풍선으로 보인다. `npx pixel-agents@1.5.0 --port 3100 --no-terminal`로 띄운다. 처음 한 번은 출력된 주소(`?token=` 포함, 남에게 보이지 않는다)를 열어 Settings에서 **Watch All Sessions**를 켠다. 작업자는 과제 폴더마다 따로 뜨므로 이 설정이 있어야 보인다. 훅 설치 안내(Install Hooks)는 「Don't Ask Again」으로 넘긴다. 훅은 `~/.claude/settings.json`에 들어가 모든 세션에 붙지만, 작업자는 `--setting-sources project`로 돌아서 읽지 않는다. 훅 없이도 Pixel Agents는 `~/.claude/projects/`의 대화 기록으로 상태를 읽는다. 상태판에는 토큰 없는 주소만 넣는다(기본 `http://127.0.0.1:3100`, 다르면 `OFFICE_PIXEL_AGENTS`). 2026-11-14에는 데스크탑 앱의 Claude Code 세션이 캐릭터로 보이는 것만 확인했고, hc 작업자는 확인하지 않았다.
 - 작업자 화면은 `hc ls`로 이름을 찾고 `hc attach <이름>`으로 본다(`ctrl+\`로 빠진다). 작업자는 hc 터미널이라 Claude 데스크탑 앱의 세션 목록에는 나오지 않는다.
 
 작업자가 사용량 한도에 걸리면 엔진은 그 메시지(예: `resets 12:10am`)를 `BLOCKED.md`에 적고 멈춘다. 한 턴이 4시간(`OFFICE_WORKER_TIMEOUT`, 초)을 넘어도 작업자를 닫고 멈춘다.
