@@ -142,7 +142,7 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("@coderabbitai review", next(c for c in gh() if c[:2] == ["pr", "comment"]))
         report = (self.job / "REPORT.md").read_text()
         head = subprocess.run(["git", "-C", str(self.job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-        for part in ("https://github.com/O/R/pull/7", f"gh pr merge 7 --squash --match-head-commit {head}", "- design: sonnet",
+        for part in ("https://github.com/O/R/pull/7", f"gh pr merge https://github.com/O/R/pull/7 --squash --match-head-commit {head}", "- design: sonnet",
                      "- implement: sonnet", "- review: opus", "사람이 diff를 읽고 병합한다", "exit 0",
                      "리뷰가 고친 지적: P0 0, P1 1, P2 0", "남은 지적: [Spec] P1 y, a.py:3"):
             self.assertIn(part, report)
@@ -248,7 +248,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.state()["stage"], "review")  # past the check and the draft
         self.assertIn("커밋하지 않은 변경: 없음", (self.job / "check.md").read_text())
 
-    def test_draft_stage_marks_only_an_easy_pr_ready(self):
+    def test_every_pr_is_marked_ready_and_only_a_hard_one_asks_the_bot(self):
         # Through run(): the Ready call depends on the approved design and the body the engine read.
         cases = [("Door: 되돌리기 쉬움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", True),
                  ("Door: 되돌리기 어려움", "Door: 되돌리기 쉬움\n신뢰 경계: 없음", False),
@@ -306,6 +306,8 @@ class PipelineTests(unittest.TestCase):
                 self.assertIn(["pr", "ready", "https://github.com/O/R/pull/7"], gh())
                 self.assertEqual(self.state()["stage"], "review")
                 self.assertEqual(self.state().get("easy_pr") == self.state()["checked"], bool(ready))
+                # POLICY §3: an easy PR never asks the review bot; every other PR asks once.
+                self.assertEqual([c[:2] for c in gh()].count(["pr", "comment"]), 0 if ready else 1)
 
     def test_draft_stage_proves_easy_only_from_the_approved_design(self):
         # The same easy text, but not the bytes a person approved: not easy.
