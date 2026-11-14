@@ -344,7 +344,7 @@ def write_report(job, task, state, flow):
     models = "\n".join(f"- {m['stage']}: {m['model']}" + (" (haiku 실패 뒤 다시 돌림)" if m["rerun"] else "") for m in state.get("models", []))
     check = text("check.md").split("```")[0].strip()
     setup = text("setup.md").split("```")[0].strip()
-    unverified = [l.strip() for l in (review + "\n" + body).splitlines() if "확인하지 않" in l or "미확인" in l]
+    unverified = [l.strip().removeprefix("- ") for l in (review + "\n" + body).splitlines() if "확인하지 않" in l or "미확인" in l]
     report = (f"# {task['name']} 결과\n\n- PR: {url}\n"
               + (f"- 리뷰한 head: `{head}`\n- 병합: `gh pr merge {number} --squash --match-head-commit {head}`\n" if head
                  else "- 리뷰한 head: review.md에서 40자 SHA를 찾지 못함. 병합 명령을 만들지 않는다\n")
@@ -680,7 +680,7 @@ def run_setup(job, task):
     """Run the setup cell once in repo/, else why not. BLOCKED.md stands while it runs: an interrupted setup stays blocked."""
     if not task.get("setup"):
         return None
-    block(job, f"{SETUP_BLOCK}: `{task['setup']}` is running or was interrupted")
+    (job / "BLOCKED.md").write_text(f"# 막힘\n\n{SETUP_BLOCK}: `{task['setup']}` is running or was interrupted\n", encoding="utf-8")  # not block(): no "blocked:" line while setup runs
     done = subprocess.run(task["setup"], shell=True, cwd=job / "repo", capture_output=True, text=True)
     (job / "setup.md").write_text(f"# setup\n\n- 명령: `{task['setup']}`\n- exit {done.returncode}\n\n```\n"
                                   f"{(done.stdout + done.stderr)[-4000:]}\n```\n", encoding="utf-8")
