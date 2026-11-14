@@ -107,7 +107,9 @@ class PipelineTests(unittest.TestCase):
             "#!/usr/bin/env python3\nimport json, sys\n"
             "stdin = [sys.stdin.read()] if sys.argv[1:3] == ['pr', 'edit'] else []\n"
             f"open({str(log)!r}, 'a').write(json.dumps(sys.argv[1:] + stdin) + '\\n')\n"
-            "if sys.argv[1:3] == ['pr', 'create']: print('https://github.com/O/R/pull/7')\n"
+            "if sys.argv[1:3] == ['pr', 'create']:\n"
+            f"    open({str(draft)!r}, 'w').write(str('--draft' in sys.argv).lower())\n"
+            "    print('https://github.com/O/R/pull/7')\n"
             f"if sys.argv[1:3] == ['pr', 'view']: print(open({str(draft)!r}).read().strip())\n"
             f"if sys.argv[1:3] == ['pr', 'ready']: open({str(draft)!r}, 'w').write('false')\n", encoding="utf-8")
         (bin_dir / "gh").chmod(0o755)
@@ -137,11 +139,11 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(create[:3], ["pr", "create", "--repo"])
         self.assertEqual([create[create.index(f) + 1] for f in ("--repo", "--head", "--base", "--title", "--body")],
                          ["o/r", "office/search", "main", "fix: x", "## Summary\n"])
-        self.assertIn("--draft", create)
+        self.assertNotIn("--draft", create)  # a draft marked ready at once ran CI twice
         self.assertEqual((self.job / "pr.txt").read_text(), "https://github.com/O/R/pull/7\n")
         self.assertNotIn("branch.office/search.remote", subprocess.run(
             ["git", "-C", str(self.job / "repo"), "config", "--list"], capture_output=True, text=True).stdout)  # no -u
-        self.assertEqual([c[:2] for c in gh()], [["pr", "create"], ["pr", "view"], ["pr", "ready"], ["pr", "comment"], ["pr", "edit"]])
+        self.assertEqual([c[:2] for c in gh()], [["pr", "create"], ["pr", "view"], ["pr", "comment"], ["pr", "edit"]])
         self.assertIn("@coderabbitai review", next(c for c in gh() if c[:2] == ["pr", "comment"]))
         report = (self.job / "REPORT.md").read_text()
         head = subprocess.run(["git", "-C", str(self.job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
@@ -305,8 +307,10 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
                 self.assertEqual(self.engine.approve("search"), 0)
                 self.engine.run("search", worker)
-                # Every PR is marked ready; the proof of easy picks the review's model (and the report's note) only.
-                self.assertIn(["pr", "ready", "https://github.com/O/R/pull/7"], gh())
+                # Every PR is opened ready, so no draft-to-ready event runs the PR workflows twice;
+                # the proof of easy picks the review's model (and the report's note) only.
+                self.assertEqual(draft.read_text(), "false")
+                self.assertNotIn(["pr", "ready", "https://github.com/O/R/pull/7"], gh())
                 self.assertEqual(self.state()["stage"], "review")
                 self.assertEqual(self.state().get("easy_pr") == self.state()["checked"], bool(ready))
                 # POLICY §3: an easy PR never asks the review bot; every other PR asks once.
