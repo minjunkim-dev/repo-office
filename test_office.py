@@ -1095,19 +1095,23 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("test passes on main: `exit 5`: exit 5", failed[1])
         self.assertEqual(subprocess.run(["git", "-C", str(repo), "worktree", "list"], capture_output=True, text=True).stdout.count("\n"), 1)
 
-    def routed(self, design_text, fail_haiku=None):
-        """Run to the draft wait with a design that says design_text; fail_haiku: "silent", "blocked" or "check" for a haiku implement."""
-        job = self.job
+    def routed(self, design_text, fail_haiku=None, fail_model="haiku"):
+        """Run to the draft wait with a design that says design_text; fail_haiku: "silent", "blocked" or "check" for the first
+        implement on fail_model."""
+        job, failed = self.job, []
 
         class Worker(FakeWorker):
             def __call__(self, name, cwd, argv, message):
                 stage = name.rsplit("-", 1)[1]
                 model = argv[argv.index("--model") + 1]
-                if stage == "implement" and model == "haiku" and fail_haiku == "check":
+                fails = stage == "implement" and model == fail_model and fail_haiku and not failed
+                if fails:
+                    failed.append(model)
+                if fails and fail_haiku == "check":
                     result = super().__call__(name, cwd, argv, message)
                     (job / "repo/pass").unlink()  # writes its result but leaves a commit whose test fails
                     return result
-                if stage == "implement" and model == "haiku" and fail_haiku:
+                if fails:
                     self.calls.append((stage, argv, message))
                     if fail_haiku == "blocked":
                         (job / "BLOCKED.md").write_text("gave up\n", encoding="utf-8")
@@ -1130,8 +1134,8 @@ class PipelineTests(unittest.TestCase):
     def test_each_stage_gets_its_model_from_the_approved_difficulty(self):
         work = self.engine.session_id("search", "work")
         self.assertEqual(self.routed("# d\n\n난이도: 쉬움\n"), [("design", "opus", work), ("implement", "haiku", work)])
-        self.assertEqual(self.state()["models"], [{"stage": "design", "model": "opus", "rerun": False},
-                                                  {"stage": "implement", "model": "haiku", "rerun": False}])
+        self.assertEqual(self.state()["models"], [{"stage": "design", "model": "opus", "effort": "medium", "rerun": False},
+                                                  {"stage": "implement", "model": "haiku", "effort": "medium", "rerun": False}])
         for text in ("# d\n", "난이도: 보통\n", "난이도: 어려움\n", "난이도: easy\n", "난이도: 쉬움\n난이도: 보통\n", "- 난이도: 쉬움\n"):
             with self.subTest(text=text):
                 shutil.rmtree(self.job / "repo")
@@ -1153,6 +1157,23 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.engine.stage_model(stage, self.job, {"easy_pr": "abc", "checked": "def"}, flow), "opus")  # a later commit
         self.assertNotIn("haiku", [self.engine.stage_model(stage, self.job, st, flow) for st in ({}, {"easy_pr": "a", "checked": "a"})])
 
+    def test_the_worker_gets_the_effort_its_stage_sets_for_its_model(self):
+        config, task = json.loads(self.engine.STAGES.read_text()), json.loads((self.job / "task.json").read_text())
+        stage = {"id": "review", "session": "review", "model": "door", "effort": {"opus": "high", "sonnet": "medium"}}
+        for state, want in (({}, "high"), ({"easy_pr": "a", "checked": "a"}, "medium")):
+            argv = self.engine.claude_argv(config, stage, self.job, task, {"sessions": [], **state})
+            self.assertEqual(argv[argv.index("--effort") + 1], want)
+        argv = self.engine.claude_argv(config, {**stage, "effort": {"opus": "high"}}, self.job, task,
+                                       {"sessions": [], "easy_pr": "a", "checked": "a"})
+        self.assertNotIn("--effort", argv)  # no entry for sonnet: the model's own default
+
+    def test_the_stage_table_sets_a_valid_effort_for_every_model_a_worker_stage_can_run(self):
+        routes = {"difficulty": {"haiku", "sonnet"}, "door": {"opus", "sonnet"}}
+        for stage in (s for s in json.loads(self.engine.STAGES.read_text())["flow"] if s["by"] == "claude"):
+            effort = stage.get("effort", {})
+            self.assertEqual(set(effort), routes.get(stage["model"], {stage["model"]}), stage["id"])
+            self.assertLessEqual(set(effort.values()), {"low", "medium", "high", "xhigh", "max"}, stage["id"])
+
     def test_a_failed_haiku_implement_reruns_once_on_sonnet_in_a_new_session(self):
         work, fresh = self.engine.session_id("search", "work"), self.engine.session_id("search", "work-sonnet")
         for mode in ("silent", "check", "blocked"):
@@ -1161,7 +1182,7 @@ class PipelineTests(unittest.TestCase):
                     self.setUp()
                 calls = self.routed("난이도: 쉬움\n", fail_haiku=mode)
                 self.assertEqual(calls, [("design", "opus", work), ("implement", "haiku", work), ("implement", "sonnet", fresh)])
-                self.assertEqual(self.state()["models"][-1], {"stage": "implement", "model": "sonnet", "rerun": True})
+                self.assertEqual(self.state()["models"][-1], {"stage": "implement", "model": "sonnet", "effort": "medium", "rerun": True})
                 self.assertIn("exit 0", (self.job / "check.md").read_text())  # the sonnet run passed the check
                 self.assertNotIn("gave up", (self.job / "BLOCKED.md").read_text() if (self.job / "BLOCKED.md").exists() else "")
         self.assertTrue((self.job / "BLOCKED.haiku.md").exists())
@@ -1334,6 +1355,20 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         self.assertIn(evil, [e["text"] for e in made])  # shown as the very text, through textContent
         self.assertFalse([e for e in made if e["tag"] == "innerHTML" and "onerror" in e["text"]])
         self.assertIn("막힘", [e["text"] for e in made])
+
+    def test_a_failed_sonnet_implement_reruns_once_one_effort_level_higher(self):
+        work = self.engine.session_id("search", "work")
+        for mode in ("silent", "check"):
+            with self.subTest(mode=mode):
+                if mode != "silent":
+                    self.setUp()
+                self.assertEqual(self.routed("난이도: 보통\n", fail_haiku=mode, fail_model="sonnet"),
+                                 [("design", "opus", work), ("implement", "sonnet", work), ("implement", "sonnet", work)])
+                self.assertEqual([m.get("effort") for m in self.state()["models"]], ["medium", "medium", "high"])
+                self.assertIn("exit 0", (self.job / "check.md").read_text())
+        stage = {"id": "implement", "effort": {"sonnet": "max"}}
+        self.assertEqual(self.engine.stage_effort(stage, "sonnet", {"raised": ["implement"]}), "max")  # no level above max
+        self.assertIsNone(self.engine.stage_effort(stage, "haiku", {"raised": ["implement"]}))
 
     def test_the_board_shows_progress_only_while_an_engine_holds_the_task(self):
         self.engine.save(self.job / "state.json", {"stage": "implement", "since": 0, "models": [
