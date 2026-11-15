@@ -76,6 +76,9 @@ const BY = Object.fromEntries(D.flow.map(s => [s.id, s.by]));
 const COLOR = { work: "#5ad1a0", wait: "#ffc857", bad: "#ff6b6b", done: "#7aa7ff", idle: "#8a90a8" };
 const name = id => STAGE_NAME[id] || id;
 const IDS = D.flow.map(s => s.id).concat(["done"]);
+// A merged PR leaves nothing for anyone to do: its task leaves the lanes, the cards and the office; the header counts it.
+const MERGED = D.tasks.filter(t => t.merged).length;
+D.tasks = D.tasks.filter(t => !t.merged);
 // No state.json yet: the engine has just started the first stage.
 D.tasks.forEach(t => { if (t.stage !== "unreadable" && !IDS.includes(t.at)) t.at = IDS[0]; });
 // A running engine rewrites this data every 5 seconds. Older data means no engine runs: nothing is in progress.
@@ -187,7 +190,7 @@ function cards() {
 
 const count = k => D.tasks.filter(t => status(t).key === k).length;
 document.getElementById("meta").textContent =
-  `과제 ${D.tasks.length}개 · 진행 중 ${count("work")} · 사람 차례 ${count("wait") + count("done")} · 멈춤 ${count("idle")} · 막힘 ${count("bad")}`
+  `과제 ${D.tasks.length}개 · 진행 중 ${count("work")} · 사람 차례 ${count("wait") + count("done")} · 멈춤 ${count("idle")} · 막힘 ${count("bad")}` + (MERGED ? ` · 병합 끝나 숨김 ${MERGED}` : "")
   + (live ? ` · ${D.time} 기준 (엔진이 5초마다 갱신)` : ` · ${D.time} 뒤로 바뀐 것 없음 (도는 엔진 없음)`);
 lanes();
 cards();
