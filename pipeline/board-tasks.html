@@ -201,14 +201,15 @@ function cards() {
 const count = k => D.tasks.filter(t => status(t).key === k).length;
 document.getElementById("meta").textContent =
   `과제 ${D.tasks.length}개 · 진행 중 ${count("work")} · 사람 차례 ${count("wait") + count("done")} · 멈춤 ${count("idle")} · 막힘 ${count("bad")}` + (MERGED ? ` · 병합 끝나 숨김 ${MERGED}` : "")
-  + (live ? ` · ${D.time} 기준 (엔진이 5초마다 갱신)` : ` · ${D.time} 뒤로 바뀐 것 없음 (도는 엔진 없음)`);
+  + (live ? ` · ${D.time} 기준 (5초마다 갱신)` : ` · ${D.time} 뒤로 갱신 멈춤: engine.py board --watch를 돌리면 다시 따라옵니다`);
 lanes();
 cards();
 // The office beside this page draws one character per task from these rows, with the same status as the cards.
 if (typeof window !== "undefined" && window.parent !== window) {
+  // In the 병합 대기 room the room name says the stage: a label there shows only the state, e.g. 「충돌」.
   window.parent.postMessage({ office: D.tasks.map(t => {
     const st = status(t);
-    return { name: t.name, lane: LANE_OF[t.at] || "design", stage: name(t.at), key: st.key, text: st.text,
+    return { name: t.name, lane: LANE_OF[t.at] || "design", stage: t.at === "done" ? "" : name(t.at), key: st.key, text: st.text,
              model: BY[t.at] === "claude" ? t.model : "", by: BY[t.at] || "" };
   }) }, location.protocol === "file:" ? "*" : location.origin);  // over http only our own origin gets the rows; file:// has no origin to name
 }

@@ -962,6 +962,29 @@ def refresh_board():
         print(f"board not written: {type(error).__name__}: {error}", file=sys.stderr)
 
 
+def watch_board(rounds=None):
+    """Rewrite the board every BOARD_EVERY seconds until stopped, so it stays current while no engine runs: a person
+    merges, the base moves, a task waits. One watcher a jobs folder: a second one exits at once. rounds is for tests."""
+    JOBS.mkdir(parents=True, exist_ok=True)
+    with open(JOBS / ".board-watch.lock", "a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("another board --watch already rewrites this board", file=sys.stderr)
+            return 0
+        print(JOBS / "board.html", flush=True)
+        n = 0
+        try:
+            while rounds is None or n < rounds:
+                refresh_board()
+                n += 1
+                if rounds is None or n < rounds:
+                    time.sleep(BOARD_EVERY)
+        except KeyboardInterrupt:
+            pass
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -976,7 +999,7 @@ def main(argv=None):
     checked.add_argument("task")
     checked.add_argument("base")
     sub.add_parser("workers")
-    sub.add_parser("board")
+    sub.add_parser("board").add_argument("--watch", action="store_true", help="keep rewriting the board until stopped")
     args = parser.parse_args(argv)
     if BASELINE is None and args.command not in ("workers", "board"):
         print(f"write the absolute path of the repo-baseline clone into {_PATH}", file=sys.stderr)
@@ -988,6 +1011,8 @@ def main(argv=None):
     if args.command == "workers":
         return workers()
     if args.command == "board":
+        if args.watch:
+            return watch_board()
         print(board())
         return 0
     if args.command == "skills":

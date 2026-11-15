@@ -1511,6 +1511,28 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         self.assertTrue(any("병합 끝나 숨김 1" in t for t in texts), texts)
         self.assertEqual([json.loads(e["text"]) for e in made if e["tag"] == "posted"], [{"office": []}])
 
+    def test_board_watch_keeps_the_board_current_with_no_engine_and_runs_once(self):
+        self.engine.BOARD_EVERY = 0.01
+        self.engine.save(self.job / "state.json", {"stage": "design", "since": 0})
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.engine.watch_board(rounds=1), 0)
+        first = self.board_data((self.engine.JOBS / "board-tasks.html").read_text(encoding="utf-8"))
+        self.engine.save(self.job / "state.json", {"stage": "approve", "since": 0})  # no engine moved it
+        time.sleep(1.1)  # stamp is in whole seconds
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.engine.watch_board(rounds=2), 0)
+        data = self.board_data((self.engine.JOBS / "board-tasks.html").read_text(encoding="utf-8"))
+        self.assertEqual(data["tasks"][0]["at"], "approve")
+        self.assertGreater(data["stamp"], first["stamp"])
+        with open(self.engine.JOBS / ".board-watch.lock", "a") as lock:  # a watcher is already running
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            (self.engine.JOBS / "board-tasks.html").unlink()
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(self.engine.watch_board(rounds=1), 0)
+            self.assertIn("already", err.getvalue())
+            self.assertFalse((self.engine.JOBS / "board-tasks.html").exists())
+
     def test_a_board_that_cannot_be_written_leaves_the_run_exit_code(self):
         def broken():
             raise TypeError("since is not a number")  # e.g. another task's hand-edited state.json
