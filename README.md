@@ -32,13 +32,15 @@ worktree는 한 git 저장소의 브랜치를 다른 폴더에 따로 꺼낸 작
 2. office 체크아웃에서 Claude Code를 한 번 열고 폴더를 신뢰한다. 작업자는 이 체크아웃 안의 `jobs/<과제>/`에서 뜬다. 폴더를 신뢰하지 않았으면 엔진이 `BLOCKED.md`를 쓰고 멈춘다.
 3. Claude Code 밖의 깨끗한 셸에서 `hc server stop`, 그다음 `hc server start`를 돌린다. Claude Code 안에서 hc 서버를 처음 띄우면 작업자가 그 세션의 환경 변수를 물려받는다. 그러면 작업자가 턴이 끝났다고 알리지 못한다(HANDOFF §6).
 4. 제품 저장소를 [docs/connect.md](docs/connect.md)의 다섯 단계로 연결한다. 4단계 전 확인으로 `python3 pipeline/engine.py doctor <제품 저장소>`가 통과해야 한다.
-5. office 체크아웃 루트에서 leader를 hc 터미널 `office-leader`로 띄우고, 붙어서 할 일을 말한다. 빠져나올 때는 `ctrl+\`를 누르고, 다시 볼 때는 `hc attach office-leader`를 돌린다.
+5. office 체크아웃 루트에서 leader를 hc 터미널 `office-leader`로 띄우고, 붙어서 할 일을 말한다. `jobs/`가 있는 그 체크아웃이어야 한다. 에이전트 worktree에서 띄우면 leader가 다른 `jobs/`를 본다. 빠져나올 때는 `ctrl+\`를 누르고, 다시 볼 때는 `hc attach office-leader`를 돌린다.
 
    ```bash
-   hc run --bg --no-parent --name office-leader --cwd "$PWD/leader" claude && hc attach office-leader
+   hc run --bg --no-parent --name office-leader --cwd "$PWD/leader" claude --model opus && hc attach office-leader
    ```
 
-   이 이름으로 띄우면 제품 저장소의 에이전트가 코드 작업을 `hc send office-leader`로 leader에 넘긴다([연결 5단계](docs/connect.md#5-코드-작업을-office로-보내게-한다)). `cd leader && claude`로 띄워도 leader는 돈다. 그때는 제품 저장소의 에이전트가 과제를 넘기지 못하고 사람에게 leader에 주라고 알린다.
+   `--model opus`는 `leader/.claude/settings.json`과 같은 값이다. 인자 없이 `claude`만 주면 Claude Code 2.1.325는 대화 세션이 아니라 세션 관리 화면(「describe a task for a new session」)을 연다(2026-11-15 확인). 그 화면에서 맡긴 일은 leader 규칙을 받는 세션이 아니다.
+
+   이 이름으로 띄우면 제품 저장소의 에이전트가 코드 작업을 `hc send office-leader`로 leader에 넘긴다([연결 5단계](docs/connect.md#5-코드-작업을-office로-보내게-한다)). `cd leader && claude --model opus`로 띄워도 leader는 돈다. 그때는 제품 저장소의 에이전트가 과제를 넘기지 못하고 사람에게 leader에 주라고 알린다.
 
 제품 저장소가 mise를 쓰면 과제마다 사람이 `mise trust jobs/<과제>/repo/.mise.toml`을 한 번 돌린다.
 
