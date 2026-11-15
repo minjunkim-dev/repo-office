@@ -1152,6 +1152,16 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.engine.stage_model(stage, self.job, {"easy_pr": "abc", "checked": "def"}, flow), "opus")  # a later commit
         self.assertNotIn("haiku", [self.engine.stage_model(stage, self.job, st, flow) for st in ({}, {"easy_pr": "a", "checked": "a"})])
 
+    def test_the_worker_gets_the_effort_its_stage_sets_for_its_model(self):
+        config, task = json.loads(self.engine.STAGES.read_text()), json.loads((self.job / "task.json").read_text())
+        stage = {"id": "review", "session": "review", "model": "door", "effort": {"opus": "high", "sonnet": "medium"}}
+        for state, want in (({}, "high"), ({"easy_pr": "a", "checked": "a"}, "medium")):
+            argv = self.engine.claude_argv(config, stage, self.job, task, {"sessions": [], **state})
+            self.assertEqual(argv[argv.index("--effort") + 1], want)
+        argv = self.engine.claude_argv(config, {**stage, "effort": {"opus": "high"}}, self.job, task,
+                                       {"sessions": [], "easy_pr": "a", "checked": "a"})
+        self.assertNotIn("--effort", argv)  # no entry for sonnet: the model's own default
+
     def test_a_failed_haiku_implement_reruns_once_on_sonnet_in_a_new_session(self):
         work, fresh = self.engine.session_id("search", "work"), self.engine.session_id("search", "work-sonnet")
         for mode in ("silent", "check", "blocked"):

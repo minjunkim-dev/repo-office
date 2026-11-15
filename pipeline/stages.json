@@ -46,7 +46,10 @@
    "session": "work",
    "prompt": "prompts/design.md",
    "out": "design.md",
-   "model": "opus"
+   "model": "opus",
+   "effort": {
+    "opus": "high"
+   }
   },
   {
    "id": "approve",
@@ -59,7 +62,11 @@
    "session": "work",
    "prompt": "prompts/implement.md",
    "out": "implement.md",
-   "model": "difficulty"
+   "model": "difficulty",
+   "effort": {
+    "sonnet": "high",
+    "haiku": "high"
+   }
   },
   {
    "id": "check",
@@ -86,7 +93,11 @@
    "session": "review",
    "prompt": "prompts/review.md",
    "out": "review.md",
-   "model": "door"
+   "model": "door",
+   "effort": {
+    "opus": "high",
+    "sonnet": "medium"
+   }
   },
   {
    "id": "post",

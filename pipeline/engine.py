@@ -125,8 +125,10 @@ def claude_argv(config, stage, job, task, state):
     """The worker command: a new session for the first use of a session key, --resume after that."""
     key = session_key(stage, state)
     flag = "--resume" if key in state["sessions"] else "--session-id"
-    argv = [*(fill(arg, job, task) for arg in config["runner"]), flag, session_id(task["name"], key),
-            "--model", stage_model(stage, job, state, config["flow"])]
+    model = stage_model(stage, job, state, config["flow"])
+    argv = [*(fill(arg, job, task) for arg in config["runner"]), flag, session_id(task["name"], key), "--model", model]
+    if model in stage.get("effort", {}):  # per stage and model: the same model may think harder in one stage than another
+        argv += ["--effort", stage["effort"][model]]
     # Normal development tools; deny rules hold in every permission mode, so only the engine pushes or edits the PR.
     return argv + ["--allowedTools", *config["allow"], "--disallowedTools", *config["deny"]]
 

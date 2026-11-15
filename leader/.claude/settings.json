@@ -1,5 +1,6 @@
 {
   "model": "opus",
+  "effortLevel": "medium",
   "permissions": {
     "allow": [
       "Bash(python3 ../pipeline/engine.py workers)",
