@@ -1162,6 +1162,13 @@ class PipelineTests(unittest.TestCase):
                                        {"sessions": [], "easy_pr": "a", "checked": "a"})
         self.assertNotIn("--effort", argv)  # no entry for sonnet: the model's own default
 
+    def test_the_stage_table_sets_a_valid_effort_for_every_model_a_worker_stage_can_run(self):
+        routes = {"difficulty": {"haiku", "sonnet"}, "door": {"opus", "sonnet"}}
+        for stage in (s for s in json.loads(self.engine.STAGES.read_text())["flow"] if s["by"] == "claude"):
+            effort = stage.get("effort", {})
+            self.assertEqual(set(effort), routes.get(stage["model"], {stage["model"]}), stage["id"])
+            self.assertLessEqual(set(effort.values()), {"low", "medium", "high", "xhigh", "max"}, stage["id"])
+
     def test_a_failed_haiku_implement_reruns_once_on_sonnet_in_a_new_session(self):
         work, fresh = self.engine.session_id("search", "work"), self.engine.session_id("search", "work-sonnet")
         for mode in ("silent", "check", "blocked"):

@@ -48,7 +48,7 @@
    "out": "design.md",
    "model": "opus",
    "effort": {
-    "opus": "high"
+    "opus": "medium"
    }
   },
   {
@@ -64,8 +64,8 @@
    "out": "implement.md",
    "model": "difficulty",
    "effort": {
-    "sonnet": "high",
-    "haiku": "high"
+    "sonnet": "medium",
+    "haiku": "medium"
    }
   },
   {
@@ -95,7 +95,7 @@
    "out": "review.md",
    "model": "door",
    "effort": {
-    "opus": "high",
+    "opus": "medium",
     "sonnet": "medium"
    }
   },

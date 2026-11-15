@@ -77,10 +77,11 @@ PR을 열기 전의 작업을 단계로 나눠 돌리는 실험 파이프라인�
 - 리뷰는 엔진이 검사한 그 커밋으로 쉬운 PR을 확인했으면(쉬움 판정) sonnet, 아니면 opus다. 리뷰에는 haiku를 쓰지 않는다.
 - 단계마다 쓴 모델과 다시 돌림은 `state.json`의 `models`에 남는다.
 - leader는 `leader/.claude/settings.json`의 `"model": "opus"`로 opus다.
-- 엔진은 단계표의 `effort`에서 그 단계·모델의 값을 `--effort`로 준다. 값이 없으면 모델 기본값(Claude Code는 medium)이다.
-- 설계 opus, 구현 sonnet·haiku, 리뷰 opus는 high다. 판단이 다음 단계로 이어지거나 긴 에이전트 작업이기 때문이다. 쉬움으로 확인된 리뷰 sonnet은 medium이다.
-- leader는 `leader/.claude/settings.json`의 `"effortLevel": "medium"`이다. 대화와 과제 등록이 대부분이기 때문이다.
-- 환경 변수 `CLAUDE_CODE_EFFORT_LEVEL`은 `--effort`보다 먼저다. 작업자 환경에 두지 않는다.
+- 엔진은 단계표의 `effort`에서 그 단계·모델의 값을 `--effort`로 준다. 값이 없으면 작업자의 프로젝트 설정(office의 `.claude/settings.json`)의 `effortLevel`, 그것도 없으면 모델 기본값(Claude Code는 medium)이다. `--resume`으로 이은 세션도 새로 준 `--effort`로 요청한다(2026-11-15 transcript로 확인).
+- 모든 작업자 단계는 medium이다. 2026-11-15 벤치마크(구현 5과제, 심은 버그 리뷰 2개, 설계 판정 6문항, 조합마다 3회)에서 high는 점수를 올리지 못하고 시간·비용만 늘렸다(구현 시간 1.3~3배).
+- 값을 적어 두는 것은 Claude Code 기본값이 바뀌어도 그대로 돌게 하려는 것이다. high로 올리려면 실제 과제에서 medium이 놓친 사례를 먼저 남긴다.
+- leader는 `leader/.claude/settings.json`의 `"effortLevel": "medium"`이다.
+- 환경 변수 `CLAUDE_CODE_EFFORT_LEVEL`은 `--effort`보다 먼저다. hc 터미널은 엔진을 부른 셸이 아니라 hc 서버의 환경을 받는다(2026-11-15 확인). 그래서 hc 서버를 띄우는 셸에 이 변수를 두지 않는다.
 
 ### 막힘과 다시 하기
 
