@@ -55,7 +55,7 @@ RETRY_WAIT = float(os.environ.get("OFFICE_RETRY_WAIT", "10"))
 # A worker turn longer than this is taken as hung: the engine closes it and blocks the task.
 WORKER_LIMIT = float(os.environ.get("OFFICE_WORKER_TIMEOUT", str(4 * 3600)))
 BOARD_EVERY = float(os.environ.get("OFFICE_BOARD_EVERY", "5"))  # seconds between board rewrites while a run goes
-MERGE_EVERY = 300  # seconds between asking gh whether a finished task's PR is merged
+MERGE_EVERY = 60  # seconds between asking gh how a finished task's PR stands (merged, behind, in conflict)
 # hc terminal names are global to the hc core; this tag keeps another checkout's jobs folder from sharing them.
 TAG = hashlib.sha256(str(JOBS.resolve()).encode()).hexdigest()[:4]
 
@@ -822,26 +822,39 @@ def doctor(repo):
     return 1 if missing_ else 0
 
 
-def merged(job, state):
-    """Whether a finished task's PR is merged. A person merges outside the engine, so no file says it: gh is asked,
-    at most every MERGE_EVERY seconds a task, and a yes is kept in .merged so it is asked once more at most."""
+def pr_state(job, state):
+    """(merged, merge) for a finished task's PR: merged is True once the PR is merged, merge is GitHub's
+    mergeStateStatus while it is open (CLEAN, BEHIND, DIRTY, BLOCKED, UNSTABLE, ...; "" if unknown). A person merges
+    outside the engine, so no file says it: gh is asked at most every MERGE_EVERY seconds a task, the last answer is
+    kept in .merge-asked, and a merged PR is kept in .merged and never asked again."""
     if (job / ".merged").exists():
-        return True
+        return True, ""
     pr, asked = job / "pr.txt", job / ".merge-asked"
     if state.get("stage") != "done" or not pr.exists():
-        return False
-    if asked.exists() and time.time() - asked.stat().st_mtime < MERGE_EVERY:
-        return False
-    asked.touch()
+        return False, ""
     try:
-        view = subprocess.run(["gh", "pr", "view", pr.read_text(encoding="utf-8").strip(), "--json", "state", "--jq", ".state"],
+        last = load(asked, {})
+    except (OSError, ValueError):  # an empty or half-written mark: as if never asked
+        last = {}
+    if not isinstance(last, dict):
+        last = {}
+    if asked.exists() and time.time() - asked.stat().st_mtime < MERGE_EVERY:
+        return False, str(last.get("merge", ""))
+    try:
+        view = subprocess.run(["gh", "pr", "view", pr.read_text(encoding="utf-8").strip(), "--json", "state,mergeStateStatus"],
                               cwd=job, capture_output=True, text=True, timeout=20)
-    except (OSError, subprocess.TimeoutExpired):  # no gh or no network: the task stays as it was, waiting to merge
-        return False
-    if view.stdout.strip() != "MERGED":
-        return False
-    (job / ".merged").touch()
-    return True
+        answer = json.loads(view.stdout) if view.returncode == 0 else {}
+    except (OSError, subprocess.TimeoutExpired, ValueError):  # no gh or no network: keep the last answer
+        answer = {}
+    if not isinstance(answer, dict) or not answer:
+        asked.touch()
+        return False, str(last.get("merge", ""))
+    if answer.get("state") == "MERGED":
+        (job / ".merged").touch()
+        return True, ""
+    merge = str(answer.get("mergeStateStatus") or "") if answer.get("state") == "OPEN" else str(answer.get("state") or "")
+    save(asked, {"merge": merge})
+    return False, merge
 
 
 def job_status(job):
@@ -871,9 +884,9 @@ def job_status(job):
             except BlockingIOError:
                 running = 1
     models = state.get("models") or [{"model": "-"}]
-    done = merged(job, state)
+    done, merge = pr_state(job, state)
     return {"name": job.name, "stage": "blocked" if blocked.exists() else "merged" if done else state["stage"], "at": state["stage"],
-            "merged": int(done),
+            "merged": int(done), "merge": merge,
             "minutes": int((time.time() - state["since"]) // 60),
             "model": state.get("working") or models[-1]["model"],
             # Every stage run, oldest first, as "stage=model" words; "+" marks the sonnet rerun after haiku gave up.
@@ -891,7 +904,7 @@ def tasks():
             rows.append({k: v if type(v) is int else str(v) for k, v in job_status(job).items()})  # not isinstance: bool must become text
         except Exception as error:  # one hand-edited state.json (since not a number, a key missing) must not hide the rest
             rows.append({"name": job.name, "stage": "unreadable", "at": "-", "minutes": 0, "model": "-", "last": "-",
-                         "ran": "", "running": 0, "worker": "", "merged": 0, "note": f"state.json을 읽지 못함: {type(error).__name__}"})
+                         "ran": "", "running": 0, "worker": "", "merged": 0, "merge": "", "note": f"state.json을 읽지 못함: {type(error).__name__}"})
     return rows
 
 

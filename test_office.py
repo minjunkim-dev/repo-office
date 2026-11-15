@@ -143,7 +143,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual((self.job / "pr.txt").read_text(), "https://github.com/O/R/pull/7\n")
         self.assertNotIn("branch.office/search.remote", subprocess.run(
             ["git", "-C", str(self.job / "repo"), "config", "--list"], capture_output=True, text=True).stdout)  # no -u
-        writes = [c[:2] for c in gh() if "state" not in c]  # the board's merge probe only reads
+        writes = [c[:2] for c in gh() if not any("mergeStateStatus" in a for a in c)]  # the board's merge probe only reads
         self.assertEqual(writes, [["pr", "create"], ["pr", "view"], ["pr", "comment"], ["pr", "edit"]])
         self.assertIn("@coderabbitai review", next(c for c in gh() if c[:2] == ["pr", "comment"]))
         report = (self.job / "REPORT.md").read_text()
@@ -1445,7 +1445,7 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         bin_dir, log = Path(self.tmp.name) / "mergedgh", Path(self.tmp.name) / "merged.log"
         bin_dir.mkdir()
         answer = Path(self.tmp.name) / "answer"
-        answer.write_text("OPEN\n", encoding="utf-8")
+        answer.write_text('{"state": "OPEN", "mergeStateStatus": "BEHIND"}\n', encoding="utf-8")
         (bin_dir / "gh").write_text(f"#!/bin/sh\necho \"$@\" >> {log}\ncat {answer}\n", encoding="utf-8")
         (bin_dir / "gh").chmod(0o755)
         patcher = unittest.mock.patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"})
@@ -1455,15 +1455,21 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         (self.job / "pr.txt").write_text("https://github.com/o/r/pull/7\n", encoding="utf-8")
         asked = lambda: len(log.read_text().splitlines()) if log.exists() else 0  # noqa: E731
         self.assertEqual(self.engine.tasks()[0]["stage"], "done")  # open: still waiting for a person to merge
-        self.assertEqual(self.engine.tasks()[0]["stage"], "done")
+        self.assertEqual((self.engine.tasks()[0]["stage"], self.engine.tasks()[0]["merge"]), ("done", "BEHIND"))
         self.assertEqual(asked(), 1)  # the board rewrites every 5 seconds: gh is not asked each time
-        answer.write_text("MERGED\n", encoding="utf-8")
+        texts = [e["text"] for e in self.run_page()]
+        self.assertIn("브랜치 갱신 필요", texts)  # not a plain 「병합 대기」 while the base is ahead
+        answer.write_text('{"state": "OPEN", "mergeStateStatus": "DIRTY"}\n', encoding="utf-8")
+        os.utime(self.job / ".merge-asked", (0, 0))
+        self.assertEqual(self.engine.tasks()[0]["merge"], "DIRTY")
+        self.assertIn("충돌", [e["text"] for e in self.run_page()])
+        answer.write_text('{"state": "MERGED", "mergeStateStatus": "UNKNOWN"}\n', encoding="utf-8")
         os.utime(self.job / ".merge-asked", (0, 0))
         row = self.engine.tasks()[0]
         self.assertEqual((row["stage"], row["merged"]), ("merged", 1))
         self.assertEqual(row["last"].split()[0], "pr.txt")  # the engine's own marks are not the task's last file
         self.engine.tasks()
-        self.assertEqual(asked(), 2)  # a yes is kept
+        self.assertEqual(asked(), 3)  # a yes is kept
         made = self.run_page()
         texts = [e["text"] for e in made]
         self.assertNotIn("search", texts)

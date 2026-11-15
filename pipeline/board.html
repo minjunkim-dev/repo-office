@@ -40,7 +40,7 @@ for (const [k, src] of Object.entries(ART)) { img[k] = new Image(); img[k].src =
 
 // The office in sprite pixels: six rooms in pipeline order, two across. A room is as wide as its desks: every room
 // has as many seats as the fullest room needs (2 to MAX_SLOTS), so parallel tasks in one stage all show.
-const T = 16, RH = 7 * T, COLS = 2, MAX_SLOTS = 4, GAP = 56;  // GAP: one seat to the next, a 48-pixel desk and a gap
+const T = 16, RH = 8 * T, COLS = 2, MAX_SLOTS = 4, GAP = 56;  // GAP: one seat to the next, a 48-pixel desk and a gap
 let SLOTS = 2, RW = 0, W = 0, H = 3 * RH;
 function size(n) { SLOTS = Math.max(2, Math.min(MAX_SLOTS, n)); RW = Math.ceil((24 + (SLOTS - 1) * GAP + 56) / T) * T; W = COLS * RW; }
 size(2);
@@ -118,8 +118,12 @@ const sprite = () => ctx.setTransform(DPR * S, 0, 0, DPR * S, DPR * OX, DPR * OY
 const screen = () => ctx.setTransform(DPR, 0, 0, DPR, DPR * OX, DPR * OY);
 const ready = k => img[k] && img[k].complete && img[k].naturalWidth;
 function draw(k, x, y) { if (ready(k)) ctx.drawImage(img[k], Math.round(x), Math.round(y)); }
+// A seated person is drawn SIT pixels higher, so head and shoulders show above the desk front drawn after it.
+const SIT = 12;
+const seated = p => p.x === p.tx && p.y === p.ty && !ROOMS.find(([id]) => id === p.lane)[2];
+const head = p => p.y - 32 - (seated(p) ? SIT : 0);  // the top of the drawn frame
 function person(p, col, row, flip) {  // one 16x32 frame of a character sheet, feet at p.y; flip turns right into left
-  const k = "char_" + p.sprite, x = Math.round(p.x), y = Math.round(p.y) - 32;
+  const k = "char_" + p.sprite, x = Math.round(p.x), y = Math.round(head(p));
   if (!ready(k)) return;
   ctx.save();
   if (flip) { ctx.translate(2 * x + 16, 0); ctx.scale(-1, 1); }
@@ -192,7 +196,7 @@ function labelsLayer() {
   });
   ctx.strokeStyle = "rgba(238, 240, 247, .45)"; ctx.lineWidth = 1;
   for (const b of boxes) {  // lines first, so a label in the second row covers a first-row line that passes behind it
-    ctx.beginPath(); ctx.moveTo(Math.round(b.cx) + .5, b.y + LH); ctx.lineTo(Math.round(b.cx) + .5, (b.p.y - 32) * S); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(Math.round(b.cx) + .5, b.y + LH); ctx.lineTo(Math.round(b.cx) + .5, head(b.p) * S); ctx.stroke();
   }
   for (const { p, t, x, y, w, name, sub } of boxes) {
     ctx.fillStyle = "rgba(20, 21, 31, .9)"; ctx.beginPath(); ctx.roundRect(x, y, w, LH, 5); ctx.fill();
@@ -203,7 +207,7 @@ function labelsLayer() {
       ctx.fillStyle = "#c9cde0"; ctx.font = `11px ${FONT}`; ctx.fillText(sub, x + 21, y + 23);
     }
     if (MARK[t.key]) {  // a mark beside the head for every state a person should notice
-      const bx = (p.x + 17) * S, by = (p.y - 28) * S;
+      const bx = (p.x + 17) * S, by = (head(p) + 4) * S;
       ctx.fillStyle = COLOR[t.key]; ctx.beginPath(); ctx.arc(bx, by, 8, 0, 7); ctx.fill();
       ctx.fillStyle = "#15161f"; ctx.font = `700 11px ${FONT}`; ctx.textAlign = "center";
       ctx.fillText(MARK[t.key], bx, by + 1); ctx.textAlign = "left";
