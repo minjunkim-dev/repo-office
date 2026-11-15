@@ -463,7 +463,7 @@ def run(name, runner=run_worker):
             stop.set()
             keeper.join()
             fcntl.flock(lock, fcntl.LOCK_UN)  # first, or the last board would still show this run in progress
-            refresh_board()  # a block or a wait changes what the board shows
+            refresh_board(ask=False)  # a block or a wait changes what the board shows
 
 
 def advance(job, name, runner):
@@ -476,7 +476,7 @@ def advance(job, name, runner):
     def move(stage_id):
         state.update(stage=stage_id, since=time.time())
         save(state_path, state)
-        refresh_board()
+        refresh_board(ask=False)  # the next stage must not wait on gh: the keeper thread asks
 
     def retry(error):
         """True once per stage for an error a second try may clear."""
@@ -855,12 +855,12 @@ def ci_state(checks):
     return "pass" if words else ""
 
 
-def pr_state(job, state):
+def pr_state(job, state, ask=True):
     """(merged, merge, ci) for a task's open PR, from the stage after the PR is opened: merged is True once a finished
     task's PR is merged, merge is GitHub's mergeStateStatus while it is open (CLEAN, BEHIND, DIRTY, BLOCKED, UNSTABLE,
     ...; "" if unknown), ci is ci_state of its checks. A person merges and CI runs outside the engine, so no file says
     it: gh is asked at most every MERGE_EVERY seconds a task, the last answer is kept in .merge-asked, and a merged PR
-    is kept in .merged and never asked again."""
+    is kept in .merged and never asked again. ask=False only reads the last answer: a caller that must not wait on gh."""
     if (job / ".merged").exists():
         return True, "", ""
     pr, asked, done = job / "pr.txt", job / ".merge-asked", state.get("stage") == "done"
@@ -873,7 +873,7 @@ def pr_state(job, state):
     if not isinstance(last, dict):
         last = {}
     kept = (False, str(last.get("merge", "")), str(last.get("ci", "")))
-    if asked.exists() and time.time() - asked.stat().st_mtime < MERGE_EVERY:
+    if not ask or asked.exists() and time.time() - asked.stat().st_mtime < MERGE_EVERY:
         return kept
     try:
         view = subprocess.run(["gh", "pr", "view", pr.read_text(encoding="utf-8").strip(), "--json",
@@ -893,7 +893,7 @@ def pr_state(job, state):
     return False, merge, ci
 
 
-def job_status(job):
+def job_status(job, ask=True):
     """What workers and the board show for one task, from its files, and for a finished one whether its PR is merged."""
     state = load(job / "state.json", {"stage": "-", "since": time.time()})
     blocked = job / "BLOCKED.md"
@@ -920,7 +920,7 @@ def job_status(job):
             except BlockingIOError:
                 running = 1
     models = state.get("models") or [{"model": "-"}]
-    done, merge, ci = pr_state(job, state)
+    done, merge, ci = pr_state(job, state, ask)
     return {"name": job.name, "stage": "blocked" if blocked.exists() else "merged" if done else state["stage"], "at": state["stage"],
             "merged": int(done), "merge": merge, "ci": ci,
             "minutes": int((time.time() - state["since"]) // 60),
@@ -932,12 +932,12 @@ def job_status(job):
             "last": f"{last} {datetime.fromtimestamp(when):%H:%M}", "note": note}
 
 
-def tasks():
+def tasks(ask=True):
     rows = []
     for job in sorted(p for p in JOBS.glob("*") if (p / "task.json").exists()):
         try:
             # state.json may hold any JSON (NaN, objects): give the views only text and whole numbers
-            rows.append({k: v if type(v) is int else str(v) for k, v in job_status(job).items()})  # not isinstance: bool must become text
+            rows.append({k: v if type(v) is int else str(v) for k, v in job_status(job, ask).items()})  # not isinstance: bool must become text
         except Exception as error:  # one hand-edited state.json (since not a number, a key missing) must not hide the rest
             rows.append({"name": job.name, "stage": "unreadable", "at": "-", "minutes": 0, "model": "-", "last": "-",
                          "ran": "", "running": 0, "worker": "", "merged": 0, "merge": "", "ci": "", "note": f"state.json을 읽지 못함: {type(error).__name__}"})
@@ -952,12 +952,12 @@ def workers():
     return 0
 
 
-def board():
+def board(ask=True):
     """Write jobs/board.html, one screen: a pixel office with one character per task, beside jobs/board-tasks.html,
     stage lanes and a card per task from files only, which reloads itself every 5 seconds and hands its rows to the office.
     run() rewrites both every BOARD_EVERY seconds while it goes; "stamp" lets the page tell data no engine rewrites."""
     flow = [{"id": s["id"], "by": s["by"]} for s in load(STAGES, {"flow": []})["flow"]]
-    data = json.dumps({"time": f"{datetime.now():%H:%M:%S}", "stamp": int(time.time()), "flow": flow, "tasks": tasks()}, ensure_ascii=False)
+    data = json.dumps({"time": f"{datetime.now():%H:%M:%S}", "stamp": int(time.time()), "flow": flow, "tasks": tasks(ask)}, ensure_ascii=False)
     # Inside <script>, a worker's text must not close the tag: escape <, > and & as JSON \u escapes.
     data = data.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     # The office's images go inline as data URIs: the page loads nothing from anywhere else.
@@ -972,11 +972,12 @@ def board():
     return JOBS / "board.html"
 
 
-def refresh_board():
+def refresh_board(ask=True):
     """The board is a view: failing to write it must not stop a task. It reads every task's files, so a malformed
-    state.json of another task (TypeError, AttributeError) must not replace this run's exit code either."""
+    state.json of another task (TypeError, AttributeError) must not replace this run's exit code either. ask=False
+    keeps gh out (pr_state): the stage loop calls it that way, so a stalled network never holds up the next stage."""
     try:
-        board()
+        board(ask)
     except Exception as error:
         print(f"board not written: {type(error).__name__}: {error}", file=sys.stderr)
 

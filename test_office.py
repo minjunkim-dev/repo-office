@@ -1561,6 +1561,36 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         (self.job / ".merge-asked").unlink()
         self.assertEqual(self.engine.tasks()[0]["merged"], 0)  # merged mid-review: the engine's stage still finishes
 
+    def test_a_stage_move_never_waits_on_gh_and_the_keeper_asks(self):
+        bin_dir, log = Path(self.tmp.name) / "slowgh", Path(self.tmp.name) / "slow.log"
+        bin_dir.mkdir()
+        (bin_dir / "gh").write_text(f"#!/bin/sh\necho \"$@\" >> {log}\n"
+                                    "echo '{\"state\": \"OPEN\", \"mergeStateStatus\": \"BLOCKED\", \"statusCheckRollup\": "
+                                    "[{\"__typename\": \"CheckRun\", \"status\": \"QUEUED\"}]}'\n", encoding="utf-8")
+        (bin_dir / "gh").chmod(0o755)
+        patcher = unittest.mock.patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.engine.save(self.job / "state.json", {"stage": "review", "since": 0})
+        (self.job / "pr.txt").write_text("https://github.com/o/r/pull/7\n", encoding="utf-8")
+        self.engine.refresh_board(ask=False)
+        self.assertFalse(log.exists())  # only the last answer, of which there is none yet
+        self.engine.refresh_board()
+        self.assertEqual(len(log.read_text().splitlines()), 1)
+        os.utime(self.job / ".merge-asked", (0, 0))  # stale: a move still keeps to the kept answer
+        self.engine.refresh_board(ask=False)
+        self.assertEqual(len(log.read_text().splitlines()), 1)
+        self.assertIn('"ci": "pending"', (self.engine.JOBS / "board-tasks.html").read_text(encoding="utf-8"))
+
+    def test_a_runs_own_board_rewrites_never_ask_gh(self):
+        calls = []  # each stage move and the last rewrite pass ask=False; only the keeper thread asks gh
+        self.engine.BOARD_EVERY = 1000
+        with unittest.mock.patch.object(self.engine, "refresh_board", lambda ask=True: calls.append(ask)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.engine.run("search", FakeWorker(self.job))  # design, then waits for approval
+        self.assertTrue(calls)
+        self.assertEqual(set(calls), {False})
+
     def test_board_watch_keeps_the_board_current_with_no_engine_and_runs_once(self):
         self.engine.BOARD_EVERY = 0.01
         self.engine.save(self.job / "state.json", {"stage": "design", "since": 0})
