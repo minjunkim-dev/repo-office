@@ -150,8 +150,13 @@ class PipelineTests(unittest.TestCase):
         for part in ("https://github.com/O/R/pull/7", f"gh pr merge https://github.com/O/R/pull/7 --squash --match-head-commit {head}", "- design: opus",
                      "- implement: sonnet", "- review: opus", "사람이 diff를 읽고 병합한다", "exit 0",
                      "리뷰가 고친 지적: P0 0, P1 1, P2 0", "남은 지적: [Spec] P1 y, a.py:3",
-                     "--full-index $(git merge-base origin/main <head>) <head>", "새 head SHA로 병합"):
+                     f"--full-index $(git merge-base origin/main {head}) {head}`", "<새 head>) <새 head>`",
+                     "새 base에서도 되돌리기·민감한 파일 판정이 그대로", "새 head SHA로 병합"):
             self.assertIn(part, report)
+        # The comparison names the task's own base, not main.
+        task = {**json.loads((self.job / "task.json").read_text()), "base": "origin/dev"}
+        self.engine.write_report(self.job, task, self.state(), [])
+        self.assertIn(f"$(git merge-base origin/dev {head}) {head}", (self.job / "REPORT.md").read_text())
         # Without the reviewed head in review.md there is no merge command: never a SHA read from repo/.
         (self.job / "review.md").write_text("리뷰한 head와 Door: abc1234, 되돌리기 어려움\n- 확인하지 않은 범위: z\n", encoding="utf-8")
         self.engine.write_report(self.job, json.loads((self.job / "task.json").read_text()), self.state(), [])
