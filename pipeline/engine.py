@@ -155,7 +155,8 @@ def run_worker(name, cwd, argv, message):
     hc("kill", name, check=False)
     hc("rm", name, check=False)
     try:
-        hc("run", "--bg", "--name", name, "--cwd", str(cwd), *argv)
+        # Without --no-parent, a leader in an hc terminal would own the worker: hc types notes into it, and the worker ends with it.
+        hc("run", "--bg", "--no-parent", "--name", name, "--cwd", str(cwd), *argv)
     except subprocess.CalledProcessError as error:
         return NotStarted(f"hc run failed: {(error.stderr or error.stdout or '').strip()}")
     try:

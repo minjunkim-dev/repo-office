@@ -188,7 +188,8 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(allowed, config["allow"])
             self.assertTrue({"Bash", "Read", "Edit", "Write"} <= set(allowed))
             denied = argv[argv.index("--disallowedTools") + 1:]
-            for rule in ("Bash(git push*)", "Bash(git * push*)", "Bash(gh pr merge*)", "Bash(gh pr edit*)", "Bash(gh api *-X*)"):
+            for rule in ("Bash(git push*)", "Bash(git * push*)", "Bash(gh pr merge*)", "Bash(gh pr edit*)", "Bash(gh api *-X*)",
+                         "Bash(hc *)"):  # a worker never needs hc: it must not type into the leader
                 self.assertIn(rule, denied)
             self.assertNotIn("--settings", argv)  # no sandbox, no read block
         self.assertIn(f"{office}/prompts/review.md", (self.job / "review.prompt.md").read_text())
@@ -844,6 +845,18 @@ class PipelineTests(unittest.TestCase):
         self.engine.hc = hc
         with unittest.mock.patch.dict(os.environ, {"PATH": f"{self.tmp.name}{os.pathsep}{os.environ['PATH']}"}):
             self.assertEqual(self.engine.run_worker("w", self.job, ["claude"], "hi"), "hc run failed: name in use")
+
+    def test_a_worker_is_not_a_child_of_the_terminal_that_ran_the_engine(self):
+        runs = []
+
+        def hc(*args, check=True):
+            if args[0] == "run":
+                runs.append(args)
+                raise subprocess.CalledProcessError(1, ["hc", *args], stderr="x")
+            return ""
+        self.engine.hc = hc
+        self.engine.run_worker("w", self.job, ["claude"], "hi")
+        self.assertIn("--no-parent", runs[0])  # a leader in hc would get notes typed into it and take the worker down
 
     def fake_hc(self, status, wait="done"):
         calls = []

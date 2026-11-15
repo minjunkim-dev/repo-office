@@ -21,7 +21,7 @@ PR을 열기 전의 작업을 단계로 나눠 돌리는 실험 파이프라인�
 | `pipeline/prompts/` | 단계별 지시서 |
 | `pipeline/board.html`, `pipeline/board-tasks.html` | 상태판 틀. `engine.py board`가 사무실 그림(`pipeline/office/`)과 과제 JSON을 넣어 `jobs/`에 쓴다 |
 | `pipeline/engine.py` | 단계표대로 다음 단계를 띄운다. 작업자는 `hc` 터미널의 대화형 Claude Code다 |
-| `docs/connect.md` | 제품 저장소를 연결하는 네 단계(새 것과 이미 쓰던 것이 같다), `engine.py doctor` |
+| `docs/connect.md` | 제품 저장소를 연결하는 다섯 단계(새 것과 이미 쓰던 것이 같다), 제품 에이전트가 과제를 넘기는 규칙, `engine.py doctor` |
 | `HANDOFF.md` | 이어받는 사람이 먼저 읽는 목표·구성 요소·스킬 배치·남은 결정·함정 |
 | `REVIEW.md` | 리뷰 기준. 리뷰할 때만 읽는다 |
 | `jobs/<과제>/` | 과제마다 `INTENT.md`, 단계 결과 파일, 작업 브랜치의 worktree `repo/`. git에 넣지 않는다 |
@@ -40,7 +40,7 @@ PR을 열기 전의 작업을 단계로 나눠 돌리는 실험 파이프라인�
 ### 작업자 권한
 
 - 작업자는 `--permission-mode dontAsk`에서 일반 개발 도구(단계표 `allow`: Bash, Read, Edit, Write 등)를 쓴다.
-- 거부 규칙(단계표 `deny`)은 push, `gh pr merge`, `gh pr edit`, `gh api` 쓰기만 막는다. Claude Code 문서는 거부 규칙이 모든 권한 모드에서 막는다고 적는다(permission-modes, 2026-11-14 확인).
+- 거부 규칙(단계표 `deny`)은 push, `gh pr merge`, `gh pr edit`, `gh api` 쓰기, `hc`만 막는다. `hc`를 막는 것은 작업자가 leader 입력창(`office-leader`)에 글을 치지 못하게 하려는 것이다. Claude Code 문서는 거부 규칙이 모든 권한 모드에서 막는다고 적는다(permission-modes, 2026-11-14 확인).
 - `dontAsk`는 그 밖에 허락을 물을 일을 거부한다. 그래서 hc 작업자가 멈추지 않는다.
 - 작업자는 사용자 전역 설정의 규칙을 읽지 않는다(`--setting-sources project`).
 - sandbox는 없다. 작업자와 테스트는 사용자 권한으로 돈다.
