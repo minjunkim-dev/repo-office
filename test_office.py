@@ -1542,6 +1542,12 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         ask("BLOCKED", running, "review")
         self.assertEqual(self.engine.tasks()[0]["ci"], "pending")  # asked from Ready on, not only once the review is done
         self.assertIn("PR의 CI: 진행 중 (1분마다 확인)", [e["text"] for e in self.run_page()])
+        with open(self.job / "run.lock", "w") as lock:  # the engine runs the review: the office label shows the CI
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            office = [json.loads(e["text"]) for e in self.run_page() if e["tag"] == "posted"][0]["office"]
+        self.assertEqual((office[0]["key"], office[0]["text"]), ("work", "CI 진행 중"))
+        ask("BEHIND", failed)
+        self.assertIn("CI 실패", [e["text"] for e in self.run_page()])  # failed CI needs a fix; updating the branch can wait
         ask("BLOCKED", running)
         self.assertIn("CI 진행 중", [e["text"] for e in self.run_page()])  # not 「병합 조건 대기」
         ask("UNSTABLE", failed)
