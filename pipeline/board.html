@@ -181,7 +181,9 @@ function labelsLayer() {
   const boxes = Object.values(people).map(p => {
     const t = p.task, cx = (p.x + 8) * S, row = Math.floor((p.y - 1) / RH), rx = Math.floor(p.x / RW) * RW * S;
     const line2 = [t.stage, t.model, t.text !== t.stage && t.text].filter(Boolean).join(" · ");  // not "병합 대기 · 병합 대기"
-    const max = 2 * GAP * S - 8;  // two seats: the next label in the same row starts there
+    // Seats k and k+2 share a row. The wall pushes the first seat's label (32 px from it) toward seat k+2, so with
+    // three or more seats a label stays under 96 px; with two, each row holds one label.
+    const max = (SLOTS > 2 ? 96 : 2 * GAP) * S - 8;
     ctx.font = `600 12px ${FONT}`; const name = fitText(t.name, max - 14); const w1 = ctx.measureText(name).width;
     ctx.font = `11px ${FONT}`; const sub = fitText(line2, max - 35); const w2 = ctx.measureText(sub).width + 12;
     const w = small ? w1 + 14 : Math.max(w1, w2) + 14;
