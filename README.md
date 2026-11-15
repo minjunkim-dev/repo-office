@@ -31,8 +31,14 @@ worktree는 한 git 저장소의 브랜치를 다른 폴더에 따로 꺼낸 작
 1. office 체크아웃 루트에 `baseline.path` 파일을 만든다. 그 안에 repo-baseline 클론의 절대 경로를 한 줄로 적는다. git은 이 파일을 무시한다.
 2. office 체크아웃에서 Claude Code를 한 번 열고 폴더를 신뢰한다. 작업자는 이 체크아웃 안의 `jobs/<과제>/`에서 뜬다. 폴더를 신뢰하지 않았으면 엔진이 `BLOCKED.md`를 쓰고 멈춘다.
 3. Claude Code 밖의 깨끗한 셸에서 `hc server stop`, 그다음 `hc server start`를 돌린다. Claude Code 안에서 hc 서버를 처음 띄우면 작업자가 그 세션의 환경 변수를 물려받는다. 그러면 작업자가 턴이 끝났다고 알리지 못한다(HANDOFF §6).
-4. 제품 저장소를 [docs/connect.md](docs/connect.md)의 네 단계로 연결한다. 마지막 확인으로 `python3 pipeline/engine.py doctor <제품 저장소>`가 통과해야 한다.
-5. `cd leader && claude`로 leader를 띄우고 할 일을 말한다.
+4. 제품 저장소를 [docs/connect.md](docs/connect.md)의 다섯 단계로 연결한다. 4단계 전 확인으로 `python3 pipeline/engine.py doctor <제품 저장소>`가 통과해야 한다.
+5. office 체크아웃 루트에서 leader를 hc 터미널 `office-leader`로 띄우고, 붙어서 할 일을 말한다. 빠져나올 때는 `ctrl+\`를 누르고, 다시 볼 때는 `hc attach office-leader`를 돌린다.
+
+   ```bash
+   hc run --bg --no-parent --name office-leader --cwd "$PWD/leader" claude && hc attach office-leader
+   ```
+
+   이 이름으로 띄우면 제품 저장소의 에이전트가 코드 작업을 `hc send office-leader`로 leader에 넘긴다([연결 5단계](docs/connect.md#5-코드-작업을-office로-보내게-한다)). `cd leader && claude`로 띄워도 leader는 돈다. 그때는 제품 저장소의 에이전트가 과제를 넘기지 못하고 사람에게 leader에 주라고 알린다.
 
 제품 저장소가 mise를 쓰면 과제마다 사람이 `mise trust jobs/<과제>/repo/.mise.toml`을 한 번 돌린다.
 

@@ -21,7 +21,7 @@ PR을 열기 전의 작업을 단계로 나눠 돌리는 실험 파이프라인�
 | `pipeline/prompts/` | 단계별 지시서 |
 | `pipeline/board.html`, `pipeline/board-tasks.html` | 상태판 틀. `engine.py board`가 사무실 그림(`pipeline/office/`)과 과제 JSON을 넣어 `jobs/`에 쓴다 |
 | `pipeline/engine.py` | 단계표대로 다음 단계를 띄운다. 작업자는 `hc` 터미널의 대화형 Claude Code다 |
-| `docs/connect.md` | 제품 저장소를 연결하는 네 단계(새 것과 이미 쓰던 것이 같다), `engine.py doctor` |
+| `docs/connect.md` | 제품 저장소를 연결하는 다섯 단계(새 것과 이미 쓰던 것이 같다), 제품 에이전트가 과제를 넘기는 규칙, `engine.py doctor` |
 | `HANDOFF.md` | 이어받는 사람이 먼저 읽는 목표·구성 요소·스킬 배치·남은 결정·함정 |
 | `REVIEW.md` | 리뷰 기준. 리뷰할 때만 읽는다 |
 | `jobs/<과제>/` | 과제마다 `INTENT.md`, 단계 결과 파일, 작업 브랜치의 worktree `repo/`. git에 넣지 않는다 |

@@ -845,6 +845,18 @@ class PipelineTests(unittest.TestCase):
         with unittest.mock.patch.dict(os.environ, {"PATH": f"{self.tmp.name}{os.pathsep}{os.environ['PATH']}"}):
             self.assertEqual(self.engine.run_worker("w", self.job, ["claude"], "hi"), "hc run failed: name in use")
 
+    def test_a_worker_is_not_a_child_of_the_terminal_that_ran_the_engine(self):
+        runs = []
+
+        def hc(*args, check=True):
+            if args[0] == "run":
+                runs.append(args)
+                raise subprocess.CalledProcessError(1, ["hc", *args], stderr="x")
+            return ""
+        self.engine.hc = hc
+        self.engine.run_worker("w", self.job, ["claude"], "hi")
+        self.assertIn("--no-parent", runs[0])  # a leader in hc would get notes typed into it and take the worker down
+
     def fake_hc(self, status, wait="done"):
         calls = []
 

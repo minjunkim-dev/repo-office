@@ -142,6 +142,7 @@
   - 구현 작업자는 `mattpocock-skills:tdd`로 빨강(`ImportError`) → 초록. 검사 통과, 엔진이 초안 PR을 열고 Ready를 기다렸다. 사람이 Ready로 바꾼 뒤 리뷰 작업자가 `engine.py skills` 종료 코드 0을 받고 `mattpocock-skills:code-review`를 불렀다. diff가 작아 축별 하위 에이전트는 띄우지 않고 두 축을 직접 봤다. CodeRabbit 건너뜀은 「없음(건너뜀)」으로 판정했다(repo-baseline #129 규칙대로).
 - 2026-11-14, 모델 배치: 작업자는 `--setting-sources project`로 hc에서 돌아 사용자의 모델 설정을 받지 않는다. 그래서 엔진이 단계마다 `--model`을 준다(`stage_model`). leader 폴더에서 `claude -p ... --output-format json`의 `modelUsage`는 `leader/.claude/settings.json`(`"model": "opus"`)이 있으면 `claude-opus-5-5`, 없으면 `claude-haiku-5-5`였다(Claude Code 2.1.323).
 - 2026-11-14, 사람 관문 둘: 설계 승인과 병합 말고는 엔진과 leader가 돈다. 엔진이 PR을 늘 Ready로 바꾸고, 쉬움이 아닌 PR이면 리뷰 봇에 한 번 요청한다. 다시 하면 풀릴 오류는 단계마다 한 번 다시 해 본다. 막힘의 답은 `INTENT.md` 결정 기록이고, 다시 띄운 작업자에게는 엔진이 첫 메시지로 다시 읽으라고 한다(지시서 문장만으로는 이어 받은 세션이 두 번 다시 읽지 않았다). 리뷰가 끝나면 `REPORT.md`를 쓴다. `new`는 `<base>`를 fetch하고, setup이 통과할 때까지 `BLOCKED.md`를 둔다(#33 리뷰의 P2 두 개).
+- 2026-11-15, 제품 에이전트의 과제 넘기기: 제품 저장소에서 연 에이전트는 코드 작업을 직접 하지 않고 `hc send office-leader "[office 접수] …"`로 leader에 넘긴다(연결 5단계). leader는 그 메시지를 새 과제로만 받고 방향을 사람에게 묻는다. hc 터미널 안에서 띄운 프로그램은 그 터미널을 부모로 잡는다(`parent`, `die_with_parent: true`, `notify: true`, hc 0.1.21로 확인). 그래서 엔진은 작업자를 `--no-parent`로 띄운다. 이 플래그가 없으면 hc의 leader가 작업자 소식을 입력창으로 받고, leader가 끝날 때 작업자도 끝난다.
 
 ## 7. 다시 재현하는 법
 

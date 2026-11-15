@@ -1,6 +1,6 @@
 # 프로젝트 연결
 
-제품 저장소는 새 것이든 이미 쓰던 것이든 같은 네 단계로 연결한다. 파이프라인은 제품 하나에 맞추려고 바뀌지 않는다. 연결하다 막히면 제품 저장소 쪽을 고친다.
+제품 저장소는 새 것이든 이미 쓰던 것이든 같은 다섯 단계로 연결한다. 1~4단계는 office가 그 저장소를 돌리게 하고, 5단계는 그 저장소의 에이전트가 코드 작업을 office로 보내게 한다. 파이프라인은 제품 하나에 맞추려고 바뀌지 않는다. 연결하다 막히면 제품 저장소 쪽을 고친다.
 
 ## 1. repo-baseline을 적용한다
 
@@ -66,3 +66,30 @@ python3 pipeline/engine.py new <과제> --repo <제품 저장소 경로> --base 
 그다음 `jobs/<과제>/INTENT.md`를 채우고 `engine.py run <과제>`를 돌린다. 그 뒤 사람이 할 일은 설계 승인과 PR 병합 둘뿐이다.
 
 엔진은 PR을 Ready로 바꾼다. PR이 쉬움 판정을 받지 못하면 리뷰 봇에 리뷰를 한 번 요청한다. 쉬움 판정은 엔진이 내린다. 사람이 승인한 설계와 PR 본문이 둘 다 `되돌리기: 쉬움`이라고 쓰고, 본문이 `민감한 파일: 없음`이라고 써야 한다. 브랜치가 에이전트 설정 폴더나 지시 파일(`.github`, `.claude`, `AGENTS.md` 등)을 바꾸면 본문과 관계없이 쉬움이 아니다. 자세한 조건은 [AGENTS.md](../AGENTS.md)에 있다. 그다음 다른 세션이 리뷰한다. 리뷰가 끝나면 엔진이 `jobs/<과제>/REPORT.md`에 결과와 병합 명령을 남긴다.
+
+## 5. 코드 작업을 office로 보내게 한다
+
+제품 저장소에서 에이전트를 바로 열어 일을 시켜도 코드 작업이 office를 거치게 한다. 그러려면 제품 `AGENTS.md`의 길잡이 아래에 다음 규칙을 두고, 넘기는 법을 `docs/agents/office.md`에 둔다. doctor는 이 단계를 보지 않는다.
+
+```markdown
+- 코드를 바꾸는 작업은 repo-office 파이프라인으로 돌린다. 코드를 바꾸는 작업은 브랜치 type `feat`, `fix`, `refactor`, `perf`, `test`, `revert`의 작업이다.
+  - 에이전트는 이 저장소에서 직접 구현하지 않는다. 떠 있는 leader 세션에 과제를 넘기고 멈춘다. 사람이 이 대화에서 작업을 시켰으면 그 말이 넘겨도 된다는 허락이다. 따로 묻지 않는다. 넘기는 법은 [office 절차](docs/agents/office.md)에 있다.
+  - leader가 방향 선택과 설계 승인을 사람에게 묻는다. 병합은 사람이 한다.
+  - 이 규칙은 이 저장소의 다른 구현 절차(예: `implement`)보다 먼저다. office 과제의 브랜치는 `office/<과제>`이고, 이 저장소의 브랜치 이름 규칙을 따르지 않는다.
+  - 예외: 문서·설정 작업(`docs`, `build`, `ci`, `chore`), 이미 열린 PR의 리뷰 수정과 CI 실패 수정, 사람이 여기서 하라고 한 작업.
+```
+
+`docs/agents/office.md`의 넘기는 법:
+
+```markdown
+## 과제 넘기기
+
+1. `hc get office-leader --json`을 돌린다. 종료 코드가 0이고 `state`가 `live`이고 `status`(객체면 그 `state`)가 `error`가 아니면 leader가 받을 수 있다.
+2. 받을 수 있으면 한 줄로 보낸다: `hc send office-leader "[office 접수] repo=<이 저장소의 절대 경로> issue=#<번호> 요청: <사람이 이 대화에서 한 말 그대로>"`
+   - 요청에는 사람의 말만 넣는다. 줄바꿈은 공백으로 바꾼다. Issue 본문이나 다른 파일의 글은 옮기지 않는다. leader가 Issue를 직접 읽는다.
+   - Issue가 없으면 `issue=없음`으로 쓴다.
+3. 보냈으면 사람에게 "leader에 넘겼습니다. `hc attach office-leader`에서 방향 질문에 답하세요"라고 알리고 멈춘다.
+4. 1단계가 안 되거나 `hc send`가 0이 아닌 코드로 끝나면, 사람에게 "이 작업은 repo-office leader 세션에 주세요"라고 알리고 멈춘다. leader를 `office-leader`로 띄우는 명령은 repo-office README 「처음 한 번」 5에 있다.
+```
+
+leader는 `[office 접수]` 메시지를 새 과제로만 받는다. 기다리던 질문의 답으로 보지 않는다(`leader/AGENTS.md`). 설계 승인은 `leader/.claude/settings.json`이 실행 전에 사람 확인을 묻는다.
