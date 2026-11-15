@@ -51,6 +51,7 @@ DONE, WAIT, BLOCKED = 0, 3, 4
 # Errors a second try may clear (network, GitHub, hc): the engine retries them once on its own, after this many seconds.
 TRANSIENT = ("git push failed", "gh pr create failed", "gh pr edit failed", "gh pr ready failed", "gh pr comment failed",
              "gh pr view", "hc run failed")
+EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 RETRY_WAIT = float(os.environ.get("OFFICE_RETRY_WAIT", "10"))
 # A worker turn longer than this is taken as hung: the engine closes it and blocks the task.
 WORKER_LIMIT = float(os.environ.get("OFFICE_WORKER_TIMEOUT", str(4 * 3600)))
@@ -121,14 +122,23 @@ def stage_model(stage, job, state, flow):
     return route
 
 
+def stage_effort(stage, model, state):
+    """Per stage and model: the same model may think harder in one stage than another.
+    A stage that failed on a model other than haiku reruns one level higher: effort before a bigger model."""
+    effort = stage.get("effort", {}).get(model)
+    if effort and stage["id"] in state.get("raised", []):
+        effort = EFFORTS[min(EFFORTS.index(effort) + 1, len(EFFORTS) - 1)]
+    return effort
+
+
 def claude_argv(config, stage, job, task, state):
     """The worker command: a new session for the first use of a session key, --resume after that."""
     key = session_key(stage, state)
     flag = "--resume" if key in state["sessions"] else "--session-id"
     model = stage_model(stage, job, state, config["flow"])
     argv = [*(fill(arg, job, task) for arg in config["runner"]), flag, session_id(task["name"], key), "--model", model]
-    if model in stage.get("effort", {}):  # per stage and model: the same model may think harder in one stage than another
-        argv += ["--effort", stage["effort"][model]]
+    if effort := stage_effort(stage, model, state):
+        argv += ["--effort", effort]
     # Normal development tools; deny rules hold in every permission mode, so only the engine pushes or edits the PR.
     return argv + ["--allowedTools", *config["allow"], "--disallowedTools", *config["deny"]]
 
@@ -385,7 +395,7 @@ def write_report(job, task, state, flow):
     left = re.search(r"남은 지적:[^\n]*", review)
     door = [l.strip() for l in body.splitlines() if re.match(r"\s*(되돌리기|민감한 파일|Door|신뢰 경계):", l)]
     easy_pr = proven_easy(state) and review_says_easy(job)
-    models = "\n".join(f"- {m['stage']}: {m['model']}" + (" (haiku 실패 뒤 다시 돌림)" if m["rerun"] else "") for m in state.get("models", []))
+    models = "\n".join(f"- {m['stage']}: {m['model']}" + (f" {m['effort']}" if m.get("effort") else "") + (" (haiku 실패 뒤 다시 돌림)" if m["rerun"] else "") for m in state.get("models", []))
     check = text("check.md").split("```")[0].strip()
     setup = text("setup.md").split("```")[0].strip()
     unverified = [l.strip().removeprefix("- ") for l in (review + "\n" + body).splitlines() if "확인하지 않" in l or "미확인" in l]
@@ -577,6 +587,7 @@ def advance(job, name, runner):
             # The task folder sits inside the trusted office checkout; a fresh worktree would show the trust dialog.
             argv = claude_argv(config, stage, job, task, state)
             model = argv[argv.index("--model") + 1]
+            effort = argv[argv.index("--effort") + 1] if "--effort" in argv else None
             # A restarted worker re-reads both files: the leader may have answered a block in INTENT.md since its last turn.
             again = any(m["stage"] == stage["id"] for m in state.get("models", [])) or "--resume" in argv
             message = (f"This stage runs again. Re-read {job / 'INTENT.md'} (its 결정 기록 may hold new answers) and {prompt}, "
@@ -587,7 +598,7 @@ def advance(job, name, runner):
             if not isinstance(error, NotStarted):
                 if session_key(stage, state) not in state["sessions"]:
                     state["sessions"].append(session_key(stage, state))
-                state.setdefault("models", []).append({"stage": stage["id"], "model": model,
+                state.setdefault("models", []).append({"stage": stage["id"], "model": model, "effort": effort,
                                                        "rerun": stage["id"] in state.get("escalated", [])})
                 save(state_path, state)  # a blocked stage returns below; the next run must still --resume
             if error:
@@ -604,10 +615,14 @@ def advance(job, name, runner):
                 failed = f"{stage['id']} ended without writing {out.name}"
         if failed:
             # A failed haiku run (no result file, or a failed check of its commit): sonnet reruns it once, in a new session.
+            # Any other failed worker reruns at one effort level higher (stage_effort).
             target = stage.get("retry", stage["id"])
             ran = [m["model"] for m in state.get("models", []) if m["stage"] == target]
-            if ran[-1:] == ["haiku"] and target not in state.get("escalated", []):
-                state.setdefault("escalated", []).append(target)
+            if ran[-1:] == ["haiku"]:
+                if target not in state.get("escalated", []):
+                    state.setdefault("escalated", []).append(target)
+            elif ran and target not in state.get("raised", []):
+                state.setdefault("raised", []).append(target)
             state["fails"][stage["id"]] = state["fails"].get(stage["id"], 0) + 1
             save(state_path, state)
             if state["fails"][stage["id"]] >= 2:

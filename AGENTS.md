@@ -75,13 +75,14 @@ PR을 열기 전의 작업을 단계로 나눠 돌리는 실험 파이프라인�
 - 구현은 승인된 `design.md`가 `난이도: 쉬움`이면 haiku다. 줄이 없거나 다른 값이면 sonnet이다.
 - haiku 구현이 실패하면(결과 파일 없음, `BLOCKED.md`, 검사 실패) 엔진이 새 세션의 sonnet으로 한 번 다시 돌린다. haiku의 `BLOCKED.md`는 `BLOCKED.haiku.md`로 남는다.
 - 리뷰는 엔진이 검사한 그 커밋으로 쉬운 PR을 확인했으면(쉬움 판정) sonnet, 아니면 opus다. 리뷰에는 haiku를 쓰지 않는다.
-- 단계마다 쓴 모델과 다시 돌림은 `state.json`의 `models`에 남는다.
+- 단계마다 쓴 모델·effort와 다시 돌림은 `state.json`의 `models`에 남는다.
 - leader는 `leader/.claude/settings.json`의 `"model": "opus"`로 opus다.
 - 엔진은 단계표의 `effort`에서 그 단계·모델의 값을 `--effort`로 준다. 값이 없으면 작업자의 프로젝트 설정(office의 `.claude/settings.json`)의 `effortLevel`, 그것도 없으면 모델 기본값(Claude Code는 medium)이다. `--resume`으로 이은 세션도 새로 준 `--effort`로 요청한다(2026-11-15 transcript로 확인).
 - 모든 작업자 단계는 medium이다. 2026-11-15 벤치마크(구현 5과제, 심은 버그 리뷰 2개, 설계 판정 6문항, 조합마다 3회)에서 high는 점수를 올리지 못하고 시간·비용만 늘렸다(어려운 구현 과제에서 시간이 최대 4배).
 - 값을 적어 두는 것은 Claude Code 기본값이 바뀌어도 그대로 돌게 하려는 것이다. high로 올리려면 실제 과제에서 medium이 놓친 사례를 먼저 남긴다.
 - leader는 `leader/.claude/settings.json`의 `"effortLevel": "medium"`이다.
 - 환경 변수 `CLAUDE_CODE_EFFORT_LEVEL`은 `--effort`보다 먼저다. hc 터미널은 엔진을 부른 셸이 아니라 hc 서버의 환경을 받는다(2026-11-15 확인). 그래서 hc 서버를 띄우는 셸에 이 변수를 두지 않는다.
+- haiku가 아닌 작업자 단계가 실패하면(결과 파일 없음, 검사 실패) 엔진은 다시 돌릴 때 effort를 한 단계 올린다(medium이면 high). 모델을 바꾸기 전에 effort부터 올리는 Anthropic 모델 선택 가이드의 순서다. haiku는 effort를 올리지 않고 sonnet medium으로 바꾼다. 올린 단계는 `state.json`의 `raised`에 남고, 그 과제에서는 내리지 않는다.
 
 ### 막힘과 다시 하기
 
@@ -129,7 +130,7 @@ PR을 열기 전의 작업을 단계로 나눠 돌리는 실험 파이프라인�
 - 다음 중 하나면 엔진은 push하지 않고 본문도 올리지 않고 `BLOCKED.md`를 쓴다. 원격에 그 브랜치가 없다. 리뷰 커밋이 `.github`을 바꾼다. 원격 기록과 갈라졌다. 이때도 force push하지 않는다.
 - 리뷰 작업자가 고친 커밋은 검사 단계를 다시 거치지 않는다. 리뷰 작업자의 `engine.py test`와 CI가 돌린다.
 - 리뷰가 되돌리기 어려움으로 보면(「리뷰한 head와 되돌리기」 줄, 그 줄이 없어도) 엔진은 `post` 단계에서 본문을 올린 뒤 리뷰 봇에 한 번 요청하고 `REPORT.md`에 사람이 diff를 읽고 병합한다고 적는다.
-- 리뷰가 끝나면 엔진이 `<과제>/REPORT.md`를 쓴다. 담는 것: PR 링크, 단계별 모델, 돌린 명령과 결과, 리뷰가 고친 지적 수와 남은 지적, 리뷰 보고, 리뷰 보고의 「리뷰한 head」, PR URL과 그 SHA의 병합 명령(40자 SHA가 없으면 병합 명령을 쓰지 않는다), base만 합쳐 head가 바뀌었을 때 두 diff를 비교하는 명령(POLICY §5 예외), 되돌리기와 민감한 파일, 확인하지 않은 것.
+- 리뷰가 끝나면 엔진이 `<과제>/REPORT.md`를 쓴다. 담는 것: PR 링크, 단계별 모델과 effort, 돌린 명령과 결과, 리뷰가 고친 지적 수와 남은 지적, 리뷰 보고, 리뷰 보고의 「리뷰한 head」, PR URL과 그 SHA의 병합 명령(40자 SHA가 없으면 병합 명령을 쓰지 않는다), base만 합쳐 head가 바뀌었을 때 두 diff를 비교하는 명령(POLICY §5 예외), 되돌리기와 민감한 파일, 확인하지 않은 것.
 
 ## 작업 방식
 
