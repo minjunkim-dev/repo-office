@@ -40,7 +40,7 @@ PR을 열기 전의 작업을 단계로 나눠 돌리는 실험 파이프라인�
 ### 작업자 권한
 
 - 작업자는 `--permission-mode dontAsk`에서 일반 개발 도구(단계표 `allow`: Bash, Read, Edit, Write 등)를 쓴다.
-- 거부 규칙(단계표 `deny`)은 push, `gh pr merge`, `gh pr edit`, `gh api` 쓰기만 막는다. Claude Code 문서는 거부 규칙이 모든 권한 모드에서 막는다고 적는다(permission-modes, 2026-11-14 확인).
+- 거부 규칙(단계표 `deny`)은 push, `gh pr merge`, `gh pr edit`, `gh api` 쓰기, `hc`만 막는다. `hc`를 막는 것은 작업자가 leader 입력창(`office-leader`)에 글을 치지 못하게 하려는 것이다. Claude Code 문서는 거부 규칙이 모든 권한 모드에서 막는다고 적는다(permission-modes, 2026-11-14 확인).
 - `dontAsk`는 그 밖에 허락을 물을 일을 거부한다. 그래서 hc 작업자가 멈추지 않는다.
 - 작업자는 사용자 전역 설정의 규칙을 읽지 않는다(`--setting-sources project`).
 - sandbox는 없다. 작업자와 테스트는 사용자 권한으로 돈다.

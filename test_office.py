@@ -188,7 +188,8 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(allowed, config["allow"])
             self.assertTrue({"Bash", "Read", "Edit", "Write"} <= set(allowed))
             denied = argv[argv.index("--disallowedTools") + 1:]
-            for rule in ("Bash(git push*)", "Bash(git * push*)", "Bash(gh pr merge*)", "Bash(gh pr edit*)", "Bash(gh api *-X*)"):
+            for rule in ("Bash(git push*)", "Bash(git * push*)", "Bash(gh pr merge*)", "Bash(gh pr edit*)", "Bash(gh api *-X*)",
+                         "Bash(hc *)"):  # a worker never needs hc: it must not type into the leader
                 self.assertIn(rule, denied)
             self.assertNotIn("--settings", argv)  # no sandbox, no read block
         self.assertIn(f"{office}/prompts/review.md", (self.job / "review.prompt.md").read_text())
