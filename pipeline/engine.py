@@ -377,6 +377,8 @@ def write_report(job, task, state, flow):
     # The owner merges the SHA the review names, never one read from repo/ (POLICY §5).
     head = re.search(r"리뷰한 head[^\n]*?\b([0-9a-f]{40})\b", review)
     head = head[1] if head else None
+    # The command names the remote base; the owner fetches it before running the command.
+    base = "origin/" + (task.get("base") or "main").removeprefix("origin/")
     counts = re.search(r"고친 것:[^\n]*?P0\s*(\d+)\D+P1\s*(\d+)\D+P2\s*(\d+)", review)
     left = re.search(r"남은 지적:[^\n]*", review)
     door = [l.strip() for l in body.splitlines() if re.match(r"\s*(되돌리기|민감한 파일|Door|신뢰 경계):", l)]
@@ -386,7 +388,13 @@ def write_report(job, task, state, flow):
     setup = text("setup.md").split("```")[0].strip()
     unverified = [l.strip().removeprefix("- ") for l in (review + "\n" + body).splitlines() if "확인하지 않" in l or "미확인" in l]
     report = (f"# {task['name']} 결과\n\n- PR: {url}\n"
-              + (f"- 리뷰한 head: `{head}`\n- 병합: `gh pr merge {url} --squash --match-head-commit {head}`\n" if head
+              + (f"- 리뷰한 head: `{head}`\n- 병합: `gh pr merge {url} --squash --match-head-commit {head}`\n"
+                 # Written once; a later base merge moves the head and the command above is refused (POLICY §5 exception).
+                 f"- base만 합쳐 head가 바뀌어 위 명령이 거절되면: `git fetch` 뒤 리뷰한 head로 "
+                 f"`git diff --no-ext-diff --no-textconv --full-index $(git merge-base {base} {head}) {head}`, "
+                 f"새 head로 `git diff --no-ext-diff --no-textconv --full-index $(git merge-base {base} <새 head>) <새 head>`를 만들어 `cmp`로 비교한다. "
+                 "새 커밋이 base 병합 커밋뿐이고, 새 base에서도 되돌리기·민감한 파일 판정이 그대로이며, 두 diff가 같으면 새 head의 필수 CI가 통과한 뒤 새 head SHA로 병합하고 "
+                 "두 SHA와 두 diff의 sha256을 PR 댓글에 남긴다. 아니면 다시 리뷰한다\n" if head
                  else "- 리뷰한 head: review.md에서 40자 SHA를 찾지 못함. 병합 명령을 만들지 않는다\n")
               + "- 리뷰가 고친 지적: " + (f"P0 {counts[1]}, P1 {counts[2]}, P2 {counts[3]}" if counts else "review.md에서 찾지 못함") + "\n"
               + f"- {left[0].strip() if left else '남은 지적: review.md에서 찾지 못함'}\n"
