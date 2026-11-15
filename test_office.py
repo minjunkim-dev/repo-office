@@ -1511,6 +1511,86 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         self.assertTrue(any("병합 끝나 숨김 1" in t for t in texts), texts)
         self.assertEqual([json.loads(e["text"]) for e in made if e["tag"] == "posted"], [{"office": []}])
 
+    def test_ci_state_puts_a_failure_before_a_running_check(self):
+        run = lambda **c: {"__typename": "CheckRun", **c}  # noqa: E731
+        self.assertEqual(self.engine.ci_state(None), "")
+        self.assertEqual(self.engine.ci_state([]), "")
+        self.assertEqual(self.engine.ci_state([run(status="COMPLETED", conclusion="SUCCESS"),
+                                               {"__typename": "StatusContext", "state": "SUCCESS"}]), "pass")
+        self.assertEqual(self.engine.ci_state([run(status="COMPLETED", conclusion="SKIPPED"), run(status="IN_PROGRESS")]), "pending")
+        self.assertEqual(self.engine.ci_state([{"__typename": "StatusContext", "state": "PENDING"}]), "pending")
+        self.assertEqual(self.engine.ci_state([run(status="QUEUED"), run(status="COMPLETED", conclusion="FAILURE")]), "fail")
+        self.assertEqual(self.engine.ci_state([{"__typename": "StatusContext", "state": "ERROR"}, "x"]), "fail")
+
+    def test_the_board_shows_a_prs_ci_while_it_reviews_and_waits(self):
+        bin_dir = Path(self.tmp.name) / "cigh"
+        bin_dir.mkdir()
+        answer = Path(self.tmp.name) / "ci-answer"
+        (bin_dir / "gh").write_text(f"#!/bin/sh\ncat {answer}\n", encoding="utf-8")
+        (bin_dir / "gh").chmod(0o755)
+        patcher = unittest.mock.patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        running = '[{"__typename": "CheckRun", "status": "IN_PROGRESS", "conclusion": ""}]'
+        failed = '[{"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "FAILURE"}]'
+        ask = lambda merge, checks, stage="done": (  # noqa: E731
+            answer.write_text(f'{{"state": "OPEN", "mergeStateStatus": "{merge}", "statusCheckRollup": {checks}}}\n',
+                              encoding="utf-8"),
+            self.engine.save(self.job / "state.json", {"stage": stage, "since": 0}),
+            (self.job / ".merge-asked").unlink(missing_ok=True))
+        (self.job / "pr.txt").write_text("https://github.com/o/r/pull/7\n", encoding="utf-8")
+        ask("BLOCKED", running, "review")
+        self.assertEqual(self.engine.tasks()[0]["ci"], "pending")  # asked from Ready on, not only once the review is done
+        self.assertIn("PR의 CI: 진행 중 (1분마다 확인)", [e["text"] for e in self.run_page()])
+        with open(self.job / "run.lock", "w") as lock:  # the engine runs the review: the office label shows the CI
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            office = [json.loads(e["text"]) for e in self.run_page() if e["tag"] == "posted"][0]["office"]
+        self.assertEqual((office[0]["key"], office[0]["text"]), ("work", "CI 진행 중"))
+        ask("BEHIND", failed)
+        self.assertIn("CI 실패", [e["text"] for e in self.run_page()])  # failed CI needs a fix; updating the branch can wait
+        ask("BLOCKED", running)
+        self.assertIn("CI 진행 중", [e["text"] for e in self.run_page()])  # not 「병합 조건 대기」
+        ask("UNSTABLE", failed)
+        self.assertIn("CI 실패", [e["text"] for e in self.run_page()])
+        ask("BEHIND", running)
+        self.assertIn("브랜치 갱신 필요", [e["text"] for e in self.run_page()])  # a person's step comes first
+        ask("DIRTY", failed)
+        self.assertIn("충돌", [e["text"] for e in self.run_page()])
+        answer.write_text('{"state": "MERGED", "mergeStateStatus": "UNKNOWN", "statusCheckRollup": []}\n', encoding="utf-8")
+        self.engine.save(self.job / "state.json", {"stage": "review", "since": 0})
+        (self.job / ".merge-asked").unlink()
+        self.assertEqual(self.engine.tasks()[0]["merged"], 0)  # merged mid-review: the engine's stage still finishes
+
+    def test_a_stage_move_never_waits_on_gh_and_the_keeper_asks(self):
+        bin_dir, log = Path(self.tmp.name) / "slowgh", Path(self.tmp.name) / "slow.log"
+        bin_dir.mkdir()
+        (bin_dir / "gh").write_text(f"#!/bin/sh\necho \"$@\" >> {log}\n"
+                                    "echo '{\"state\": \"OPEN\", \"mergeStateStatus\": \"BLOCKED\", \"statusCheckRollup\": "
+                                    "[{\"__typename\": \"CheckRun\", \"status\": \"QUEUED\"}]}'\n", encoding="utf-8")
+        (bin_dir / "gh").chmod(0o755)
+        patcher = unittest.mock.patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.engine.save(self.job / "state.json", {"stage": "review", "since": 0})
+        (self.job / "pr.txt").write_text("https://github.com/o/r/pull/7\n", encoding="utf-8")
+        self.engine.refresh_board(ask=False)
+        self.assertFalse(log.exists())  # only the last answer, of which there is none yet
+        self.engine.refresh_board()
+        self.assertEqual(len(log.read_text().splitlines()), 1)
+        os.utime(self.job / ".merge-asked", (0, 0))  # stale: a move still keeps to the kept answer
+        self.engine.refresh_board(ask=False)
+        self.assertEqual(len(log.read_text().splitlines()), 1)
+        self.assertIn('"ci": "pending"', (self.engine.JOBS / "board-tasks.html").read_text(encoding="utf-8"))
+
+    def test_a_runs_own_board_rewrites_never_ask_gh(self):
+        calls = []  # each stage move and the last rewrite pass ask=False; only the keeper thread asks gh
+        self.engine.BOARD_EVERY = 1000
+        with unittest.mock.patch.object(self.engine, "refresh_board", lambda ask=True: calls.append(ask)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.engine.run("search", FakeWorker(self.job))  # design, then waits for approval
+        self.assertTrue(calls)
+        self.assertEqual(set(calls), {False})
+
     def test_board_watch_keeps_the_board_current_with_no_engine_and_runs_once(self):
         self.engine.BOARD_EVERY = 0.01
         self.engine.save(self.job / "state.json", {"stage": "design", "since": 0})

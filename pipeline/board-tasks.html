@@ -94,10 +94,20 @@ const MERGE = {
   UNSTABLE: ["bad", "검사 실패", "실패한 검사를 확인해 주세요."],
   CLOSED: ["idle", "PR 닫힘", "PR이 병합되지 않고 닫혔습니다."],
 };
+// The PR's CI as GitHub last saw it (engine.py asks with the merge state, from Ready on).
+const CI = {
+  pending: ["work", "CI 진행 중", "CI가 끝나면 병합할 수 있습니다."],
+  fail: ["bad", "CI 실패", "PR에서 실패한 검사를 확인해 주세요."],
+};
+const CI_WORD = { pending: "진행 중", fail: "실패", pass: "통과" };
+// What stops a finished task's merge, most urgent first: a conflict, failed CI, a base that moved on, CI still running,
+// then the rest of GitHub's merge state. Nothing (CLEAN, unknown) is a plain 「병합 대기」.
+const holdup = t => t.merge === "DIRTY" ? MERGE.DIRTY : t.ci === "fail" ? CI.fail : t.merge === "BEHIND" ? MERGE.BEHIND
+                    : t.ci === "pending" ? CI.pending : MERGE[t.merge];
 function status(t) {
   if (t.stage === "blocked") return { key: "bad", text: "막힘" };
   if (t.stage === "unreadable") return { key: "bad", text: "읽기 실패" };
-  if (t.at === "done") return MERGE[t.merge] ? { key: MERGE[t.merge][0], text: MERGE[t.merge][1] } : { key: "done", text: "병합 대기" };
+  if (t.at === "done") return holdup(t) ? { key: holdup(t)[0], text: holdup(t)[1] } : { key: "done", text: "병합 대기" };
   if (BY[t.at] === "human") return { key: "wait", text: "사람 차례" };
   if (!t.running || !live) return { key: "idle", text: "멈춤" };
   return { key: "work", text: "진행 중" };
@@ -107,7 +117,7 @@ function status(t) {
 function now(t, st) {
   const by = BY[t.at];
   if (t.stage === "unreadable") return ["state.json을 읽지 못했습니다.", "파일을 고치면 다음 새로 고침에 다시 보입니다."];
-  if (t.at === "done" && t.stage !== "blocked" && MERGE[t.merge]) return ["리뷰까지 끝났습니다.", MERGE[t.merge][2]];
+  if (t.at === "done" && t.stage !== "blocked" && holdup(t)) return ["리뷰까지 끝났습니다.", holdup(t)[2]];
   if (st.key === "bad") return [`${name(t.at)} 단계에서 막혔습니다.`, "아래 이유와 BLOCKED.md를 보고 leader에게 답을 주세요."];
   if (st.key === "done") return ["리뷰까지 끝났습니다.", "REPORT.md와 PR diff를 읽고 병합해 주세요."];
   if (st.key === "wait") return [`${name(t.at)} 대기 중 (${t.minutes}분째)`, t.at === "approve"
@@ -173,6 +183,11 @@ function card(t) {
     w.textContent = `작업자 터미널: hc attach ${t.worker}`;
     c.append(w);
   }
+  if (CI_WORD[t.ci]) {
+    const ci = document.createElement("div"); ci.className = "row";
+    ci.textContent = `PR의 CI: ${CI_WORD[t.ci]} (1분마다 확인)`;
+    c.append(ci);
+  }
   if (t.note) {
     const note = document.createElement("div"); note.className = "row";
     if (/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/.test(t.note)) {
@@ -207,9 +222,11 @@ cards();
 // The office beside this page draws one character per task from these rows, with the same status as the cards.
 if (typeof window !== "undefined" && window.parent !== window) {
   // In the 병합 대기 room the room name says the stage: a label there shows only the state, e.g. 「충돌」.
+  // In PR·리뷰 a running stage shows its PR's CI instead of a plain 「진행 중」, since CI runs while the review does.
   window.parent.postMessage({ office: D.tasks.map(t => {
     const st = status(t);
-    return { name: t.name, lane: LANE_OF[t.at] || "design", stage: t.at === "done" ? "" : name(t.at), key: st.key, text: st.text,
+    const text = LANE_OF[t.at] === "pr" && st.key === "work" && CI_WORD[t.ci] ? `CI ${CI_WORD[t.ci]}` : st.text;
+    return { name: t.name, lane: LANE_OF[t.at] || "design", stage: t.at === "done" ? "" : name(t.at), key: st.key, text,
              model: BY[t.at] === "claude" ? t.model : "", by: BY[t.at] || "" };
   }) }, location.protocol === "file:" ? "*" : location.origin);  // over http only our own origin gets the rows; file:// has no origin to name
 }
