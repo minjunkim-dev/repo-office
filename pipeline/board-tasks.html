@@ -76,16 +76,28 @@ const BY = Object.fromEntries(D.flow.map(s => [s.id, s.by]));
 const COLOR = { work: "#5ad1a0", wait: "#ffc857", bad: "#ff6b6b", done: "#7aa7ff", idle: "#8a90a8" };
 const name = id => STAGE_NAME[id] || id;
 const IDS = D.flow.map(s => s.id).concat(["done"]);
+// A merged PR leaves nothing for anyone to do: its task leaves the lanes, the cards and the office; the header counts it.
+const MERGED = D.tasks.filter(t => t.merged).length;
+D.tasks = D.tasks.filter(t => !t.merged);
 // No state.json yet: the engine has just started the first stage.
 D.tasks.forEach(t => { if (t.stage !== "unreadable" && !IDS.includes(t.at)) t.at = IDS[0]; });
 // A running engine rewrites this data every 5 seconds. Older data means no engine runs: nothing is in progress.
 const age = Math.max(0, Math.round(Date.now() / 1000 - D.stamp));
 const live = age < 20;
 
+// A finished task's PR as GitHub last saw it (engine.py asks once a minute): only CLEAN and unknown are plain
+// "병합 대기"; the rest say what stops the merge and what a person does about it.
+const MERGE = {
+  DIRTY: ["bad", "충돌", "PR 브랜치에 충돌이 있습니다. 충돌을 풀어야 병합할 수 있습니다."],
+  BEHIND: ["wait", "브랜치 갱신 필요", "base가 앞서 있습니다. PR에서 Update branch를 누른 뒤 병합해 주세요."],
+  BLOCKED: ["wait", "병합 조건 대기", "필수 검사나 필수 리뷰가 아직 끝나지 않았습니다."],
+  UNSTABLE: ["bad", "검사 실패", "실패한 검사를 확인해 주세요."],
+  CLOSED: ["idle", "PR 닫힘", "PR이 병합되지 않고 닫혔습니다."],
+};
 function status(t) {
   if (t.stage === "blocked") return { key: "bad", text: "막힘" };
   if (t.stage === "unreadable") return { key: "bad", text: "읽기 실패" };
-  if (t.at === "done") return { key: "done", text: "병합 대기" };
+  if (t.at === "done") return MERGE[t.merge] ? { key: MERGE[t.merge][0], text: MERGE[t.merge][1] } : { key: "done", text: "병합 대기" };
   if (BY[t.at] === "human") return { key: "wait", text: "사람 차례" };
   if (!t.running || !live) return { key: "idle", text: "멈춤" };
   return { key: "work", text: "진행 중" };
@@ -95,6 +107,7 @@ function status(t) {
 function now(t, st) {
   const by = BY[t.at];
   if (t.stage === "unreadable") return ["state.json을 읽지 못했습니다.", "파일을 고치면 다음 새로 고침에 다시 보입니다."];
+  if (t.at === "done" && t.stage !== "blocked" && MERGE[t.merge]) return ["리뷰까지 끝났습니다.", MERGE[t.merge][2]];
   if (st.key === "bad") return [`${name(t.at)} 단계에서 막혔습니다.`, "아래 이유와 BLOCKED.md를 보고 leader에게 답을 주세요."];
   if (st.key === "done") return ["리뷰까지 끝났습니다.", "REPORT.md와 PR diff를 읽고 병합해 주세요."];
   if (st.key === "wait") return [`${name(t.at)} 대기 중 (${t.minutes}분째)`, t.at === "approve"
@@ -187,7 +200,7 @@ function cards() {
 
 const count = k => D.tasks.filter(t => status(t).key === k).length;
 document.getElementById("meta").textContent =
-  `과제 ${D.tasks.length}개 · 진행 중 ${count("work")} · 사람 차례 ${count("wait") + count("done")} · 멈춤 ${count("idle")} · 막힘 ${count("bad")}`
+  `과제 ${D.tasks.length}개 · 진행 중 ${count("work")} · 사람 차례 ${count("wait") + count("done")} · 멈춤 ${count("idle")} · 막힘 ${count("bad")}` + (MERGED ? ` · 병합 끝나 숨김 ${MERGED}` : "")
   + (live ? ` · ${D.time} 기준 (엔진이 5초마다 갱신)` : ` · ${D.time} 뒤로 바뀐 것 없음 (도는 엔진 없음)`);
 lanes();
 cards();

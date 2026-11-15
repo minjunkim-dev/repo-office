@@ -38,19 +38,22 @@ const ART = /*ART*/;  // engine.py board inlines pipeline/office/*.png as data U
 const img = {};
 for (const [k, src] of Object.entries(ART)) { img[k] = new Image(); img[k].src = src; }
 
-// The office in sprite pixels: six 8x6-tile rooms in pipeline order, two across.
-const T = 16, RW = 8 * T, RH = 6 * T, COLS = 2, W = COLS * RW, H = 3 * RH;
+// The office in sprite pixels: six rooms in pipeline order, two across. A room is as wide as its desks: every room
+// has as many seats as the fullest room needs (2 to MAX_SLOTS), so parallel tasks in one stage all show.
+const T = 16, RH = 8 * T, COLS = 2, MAX_SLOTS = 4, GAP = 56;  // GAP: one seat to the next, a 48-pixel desk and a gap
+let SLOTS = 2, RW = 0, W = 0, H = 3 * RH;
+function size(n) { SLOTS = Math.max(2, Math.min(MAX_SLOTS, n)); RW = Math.ceil((24 + (SLOTS - 1) * GAP + 56) / T) * T; W = COLS * RW; }
+size(2);
 const ROOMS = [["design", "설계", false], ["approve", "설계 승인", true], ["implement", "구현", false],
                ["check", "검사", false], ["pr", "PR·리뷰", false], ["done", "병합 대기", true]];  // true: people act here
 const COLOR = { work: "#5ad1a0", wait: "#ffc857", bad: "#ff6b6b", done: "#7aa7ff", idle: "#8a90a8" };
 const MARK = { work: "", wait: "!", bad: "!", done: "✓", idle: "z" };
-const SLOTS = 2;  // two desks a room; more tasks in one room show as "+N"
 const FONT = "-apple-system, system-ui, 'Apple SD Gothic Neo', sans-serif";
 
 const room = i => ({ x: (i % COLS) * RW, y: Math.floor(i / COLS) * RH });
 function slot(lane, k) {  // where the k-th task of a room sits or stands, in sprite pixels (feet at y)
   const r = room(ROOMS.findIndex(([id]) => id === lane));
-  return { x: r.x + 24 + k * 64, y: r.y + RH - 22 };
+  return { x: r.x + 24 + k * GAP, y: r.y + RH - 22 };
 }
 const hash = s => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
 
@@ -62,6 +65,12 @@ window.addEventListener("message", e => {
   tasks = e.data.office.filter(t => t && typeof t.name === "string" && ROOMS.some(([id]) => id === t.lane))
                        .map(t => ({ name: t.name, lane: t.lane, stage: String(t.stage), key: COLOR[t.key] ? t.key : "idle",
                                     text: String(t.text), model: String(t.model || ""), by: String(t.by || "") }));
+  const most = Math.max(0, ...ROOMS.map(([id]) => tasks.filter(t => t.lane === id).length));
+  if (Math.max(2, Math.min(MAX_SLOTS, most)) !== SLOTS) {  // rooms change size: everyone takes a seat afresh
+    size(most);
+    for (const n of Object.keys(people)) delete people[n];
+    fit();
+  }
   place();
 });
 
@@ -109,8 +118,12 @@ const sprite = () => ctx.setTransform(DPR * S, 0, 0, DPR * S, DPR * OX, DPR * OY
 const screen = () => ctx.setTransform(DPR, 0, 0, DPR, DPR * OX, DPR * OY);
 const ready = k => img[k] && img[k].complete && img[k].naturalWidth;
 function draw(k, x, y) { if (ready(k)) ctx.drawImage(img[k], Math.round(x), Math.round(y)); }
+// A seated person is drawn SIT pixels higher, so head and shoulders show above the desk front drawn after it.
+const SIT = 12;
+const seated = p => p.x === p.tx && p.y === p.ty && !ROOMS.find(([id]) => id === p.lane)[2];
+const head = p => p.y - 32 - (seated(p) ? SIT : 0);  // the top of the drawn frame
 function person(p, col, row, flip) {  // one 16x32 frame of a character sheet, feet at p.y; flip turns right into left
-  const k = "char_" + p.sprite, x = Math.round(p.x), y = Math.round(p.y) - 32;
+  const k = "char_" + p.sprite, x = Math.round(p.x), y = Math.round(head(p));
   if (!ready(k)) return;
   ctx.save();
   if (flip) { ctx.translate(2 * x + 16, 0); ctx.scale(-1, 1); }
@@ -156,25 +169,45 @@ function peopleLayer(now, dt) {
   ROOMS.forEach(([id, , human]) => { if (!human) for (let k = 0; k < SLOTS; k++) { const s = slot(id, k); draw("DESK_FRONT", s.x - 16, s.y - 25); } });
 }
 
-// Two short lines over each head: the exact task name, then stage · model · state. Text goes only through fillText.
+// Two short lines for each task: the exact task name, then stage · model · state. Text goes only through fillText.
+// Labels sit in two rows under the room's wall, above the desks, never over a person or a desk: even seats in the
+// first row, odd seats in the second, so neighbours never share a row. A thin line drops from each label to its person.
+// A small office has no room for two lines: the label keeps only the name, and the cards beside it say the rest.
+const fitText = (text, max) => {  // the whole text if it fits, else as much as fits and "…"
+  if (ctx.measureText(text).width <= max) return text;
+  let n = text.length;
+  while (n > 1 && ctx.measureText(text.slice(0, n) + "…").width > max) n--;
+  return text.slice(0, n) + "…";
+};
 function labelsLayer() {
   ctx.textBaseline = "middle";
-  for (const p of Object.values(people)) {
-    const t = p.task, cx = (p.x + 8) * S;
+  const small = S < 1.8, LH = small ? 18 : 32;
+  const boxes = Object.values(people).map(p => {
+    const t = p.task, cx = (p.x + 8) * S, row = Math.floor((p.y - 1) / RH), rx = Math.floor(p.x / RW) * RW * S;
     const line2 = [t.stage, t.model, t.text !== t.stage && t.text].filter(Boolean).join(" · ");  // not "병합 대기 · 병합 대기"
-    ctx.font = `600 12px ${FONT}`; const w1 = ctx.measureText(t.name).width;
-    ctx.font = `11px ${FONT}`; const w2 = ctx.measureText(line2).width + 12;
-    // Two seats share a room: the first seat's label sits above the head, the second's over the desk front, so the
-    // two never share a line; each stays inside the room it is in.
-    const rx = Math.floor(p.x / RW) * RW * S, w = Math.max(w1, w2) + 14;
-    const x = Math.max(Math.min(cx - w / 2, rx + RW * S - w - 2), rx + 2), y = p.k ? (p.y - 2) * S : (p.y - 34) * S - 36;
-    ctx.fillStyle = "rgba(20, 21, 31, .9)"; ctx.beginPath(); ctx.roundRect(x, y, w, 32, 5); ctx.fill();
-    ctx.fillStyle = COLOR[t.key]; ctx.fillRect(x, y, 3, 32);
-    ctx.fillStyle = "#eef0f7"; ctx.font = `600 12px ${FONT}`; ctx.fillText(t.name, x + 9, y + 9);
-    ctx.fillStyle = COLOR[t.key]; ctx.beginPath(); ctx.arc(x + 13, y + 23, 3.5, 0, 7); ctx.fill();
-    ctx.fillStyle = "#c9cde0"; ctx.font = `11px ${FONT}`; ctx.fillText(line2, x + 21, y + 23);
+    // Seats k and k+2 share a row. The wall pushes the first seat's label (32 px from it) toward seat k+2, so with
+    // three or more seats a label stays under 96 px; with two, each row holds one label.
+    const max = (SLOTS > 2 ? 96 : 2 * GAP) * S - 8;
+    ctx.font = `600 12px ${FONT}`; const name = fitText(t.name, max - 14); const w1 = ctx.measureText(name).width;
+    ctx.font = `11px ${FONT}`; const sub = fitText(line2, max - 35); const w2 = ctx.measureText(sub).width + 12;
+    const w = small ? w1 + 14 : Math.max(w1, w2) + 14;
+    const x = Math.max(Math.min(cx - w / 2, rx + RW * S - w - 2), rx + 2), y = (row * RH + T) * S + 4 + (p.k % 2) * (LH + 4);
+    return { p, t, cx, x, y, w, name, sub };
+  });
+  ctx.strokeStyle = "rgba(238, 240, 247, .45)"; ctx.lineWidth = 1;
+  for (const b of boxes) {  // lines first, so a label in the second row covers a first-row line that passes behind it
+    ctx.beginPath(); ctx.moveTo(Math.round(b.cx) + .5, b.y + LH); ctx.lineTo(Math.round(b.cx) + .5, head(b.p) * S); ctx.stroke();
+  }
+  for (const { p, t, x, y, w, name, sub } of boxes) {
+    ctx.fillStyle = "rgba(20, 21, 31, .9)"; ctx.beginPath(); ctx.roundRect(x, y, w, LH, 5); ctx.fill();
+    ctx.fillStyle = COLOR[t.key]; ctx.fillRect(x, y, 3, LH);
+    ctx.fillStyle = "#eef0f7"; ctx.font = `600 12px ${FONT}`; ctx.fillText(name, x + 9, y + 9);
+    if (!small) {
+      ctx.fillStyle = COLOR[t.key]; ctx.beginPath(); ctx.arc(x + 13, y + 23, 3.5, 0, 7); ctx.fill();
+      ctx.fillStyle = "#c9cde0"; ctx.font = `11px ${FONT}`; ctx.fillText(sub, x + 21, y + 23);
+    }
     if (MARK[t.key]) {  // a mark beside the head for every state a person should notice
-      const bx = (p.x + 17) * S, by = (p.y - 28) * S;
+      const bx = (p.x + 17) * S, by = (head(p) + 4) * S;
       ctx.fillStyle = COLOR[t.key]; ctx.beginPath(); ctx.arc(bx, by, 8, 0, 7); ctx.fill();
       ctx.fillStyle = "#15161f"; ctx.font = `700 11px ${FONT}`; ctx.textAlign = "center";
       ctx.fillText(MARK[t.key], bx, by + 1); ctx.textAlign = "left";
