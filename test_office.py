@@ -1234,12 +1234,17 @@ class PipelineTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(self.engine.doctor(str(repo)), 1)
         self.assertIn("확인 못 함 (unverified): FAILED: HTTP 403", out.getvalue())
+        self.contract_tool(1, err="ModuleNotFoundError: No module named 'check_github_settings'")  # a crash exits 1 too
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(self.engine.doctor(str(repo)), 1)
+        self.assertIn("확인 못 함 (unverified): ModuleNotFoundError", out.getvalue())
+        self.assertNotIn("the owner applies it", out.getvalue())
         (self.baseline / "tools/apply_github_settings.py").unlink()  # a clone without the tool: also unverified
         with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(self.engine.doctor(str(repo)), 1)
         self.assertIn("확인 못 함", out.getvalue())
         # The tool read a fresh checkout of origin/main, one argument and no --apply, every time; the checkout is gone.
-        self.assertEqual([len(a) for a in ran()], [1, 1, 1])
+        self.assertEqual([len(a) for a in ran()], [1, 1, 1, 1])
         self.assertTrue(all(a[0].endswith("/main") and not Path(a[0]).exists() for a in ran()), ran())
 
     def test_doctor_contract_reads_main_and_refuses_another_repositorys_settings(self):

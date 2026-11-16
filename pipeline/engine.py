@@ -924,7 +924,8 @@ def contract(checkout, repo_slug, report):
         code, out, err = planned.returncode, planned.stdout, planned.stderr
     except (OSError, subprocess.TimeoutExpired) as error:
         code, out, err = None, "", f"{type(error).__name__}: {error}"
-    if code == 1:
+    # A crash (an import error) also exits 1: a difference is only one the plan printed.
+    if code == 1 and any(l.startswith(("DIFF:", "MANUAL:", "PLAN:")) for l in out.splitlines()):
         return report(False, what, "the owner applies it as repo-baseline README says\n"
                       + "\n".join(l for l in out.splitlines() if l.startswith(("DIFF:", "MANUAL:"))))
     report(code == 0, what, "확인 못 함 (unverified): " + ((err or out).strip().splitlines() or [f"exit {code}"])[-1])
