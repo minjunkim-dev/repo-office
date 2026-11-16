@@ -526,6 +526,11 @@ def advance(job, name, runner):
         time.sleep(RETRY_WAIT)
         return True
 
+    def record(reason, run, **extra):
+        """Keep every failure, unlike fails: why it failed, when, and the worker run (model, effort) it counts against."""
+        state.setdefault("failures", []).append({"stage": state["stage"], "reason": reason, "at": int(time.time()),
+                                                 "model": run.get("model"), "effort": run.get("effort"), **extra})
+
     if state["stage"] == "pr":  # a task saved before the ready stage replaced the person's Ready
         move("ready")
     blocked, intent = job / "BLOCKED.md", job / "INTENT.md"
@@ -555,7 +560,7 @@ def advance(job, name, runner):
             continue
         stage = flow[index]
         following = ids[index + 1] if index + 1 < len(ids) else "done"
-        failed = None
+        failed, detail, began = None, {}, int(time.time())
         if stage["by"] == "human":
             if stage.get("approve") and sha(job / stage["approve"]) != state.get("approved", {}).get(stage["id"]):
                 print(f"waiting: a person reads {job / stage['approve']} and runs engine.py approve {name}")
@@ -614,6 +619,10 @@ def advance(job, name, runner):
                 f"- 커밋하지 않은 변경: {dirty or '없음'}\n\n```\n{(result.stdout + result.stderr)[-4000:]}\n```\n", encoding="utf-8")
             if result.returncode or dirty:
                 failed = f"`{task['test']}` exit {result.returncode}" + (", uncommitted changes" if dirty else "")
+                # The next check rewrites check.md: the full output of this failed one stays beside it, outside repo/.
+                log = f"test.fail-{sum(f['stage'] == stage['id'] for f in state.get('failures', [])) + 1}.log"
+                (job / log).write_text(result.stdout + result.stderr, encoding="utf-8")
+                detail = {"exit": result.returncode, "log": log}
             else:
                 state.update(checked=head)  # saved by move() below
         else:
@@ -636,18 +645,28 @@ def advance(job, name, runner):
                        f"then follow {prompt} exactly." if again else f"Read {prompt} and follow it exactly.")
             state["working"] = model  # the board names the model of the worker now running, before models records it
             save(state_path, state)
+            start = int(time.time())
             error = runner(f"{TAG}-{name}-{stage['id']}"[:32], job, argv, message)
             if not isinstance(error, NotStarted):
                 if session_key(stage, state) not in state["sessions"]:
                     state["sessions"].append(session_key(stage, state))
                 state.setdefault("models", []).append({"stage": stage["id"], "model": model, "effort": effort,
-                                                       "rerun": stage["id"] in state.get("escalated", [])})
+                                                       "rerun": stage["id"] in state.get("escalated", []),
+                                                       "start": start, "end": int(time.time())})
                 save(state_path, state)  # a blocked stage returns below; the next run must still --resume
             if error:
+                # A block, not a failed try (usage limit, timeout, hc): "blocked" keeps it apart from the stage's own failures.
+                record(str(error), {"model": model, "effort": effort}, blocked=True)
+                save(state_path, state)
                 if retry(error):
                     continue
                 return block(job, error)
             if (job / "BLOCKED.md").exists():
+                reason = next((l.strip() for l in (job / "BLOCKED.md").read_text(encoding="utf-8", errors="replace").splitlines()
+                               if l.strip() and not l.startswith("#")), "BLOCKED.md")
+                # A haiku worker that gives up is a failed try (sonnet reruns it), not a block.
+                record(reason, {"model": model, "effort": effort}, **({} if model == "haiku" else {"blocked": True}))
+                save(state_path, state)
                 if model == "haiku":  # a haiku worker that gave up: sonnet tries once in a new session
                     (job / "BLOCKED.md").replace(job / "BLOCKED.haiku.md")
                     state.setdefault("escalated", []).append(stage["id"])
@@ -655,11 +674,15 @@ def advance(job, name, runner):
                 continue
             if not out.exists():
                 failed = f"{stage['id']} ended without writing {out.name}"
+        if stage["by"] == "script":  # a script stage that returns early (a block, a wait, a retry) leaves no timing
+            state.setdefault("timings", []).append({"stage": stage["id"], "start": began, "end": int(time.time())})
         if failed:
             # A failed haiku run (no result file, or a failed check of its commit): sonnet reruns it once, in a new session.
             # Any other failed worker reruns at one effort level higher (stage_effort).
             target = stage.get("retry", stage["id"])
             ran = [m["model"] for m in state.get("models", []) if m["stage"] == target]
+            # A failed check counts against the implement run whose commit it checked.
+            record(failed, next((m for m in reversed(state.get("models", [])) if m["stage"] == target), {}), **detail)
             if ran[-1:] == ["haiku"]:
                 if target not in state.get("escalated", []):
                     state.setdefault("escalated", []).append(target)
@@ -949,8 +972,12 @@ def job_status(job, ask=True):
     if blocked.exists():
         note = next((l.strip() for l in blocked.read_text(encoding="utf-8", errors="replace").splitlines()
                      if l.strip() and not l.startswith("#")), "")[:60]  # block() writes a 「# 막힘」 heading first
-    else:
-        note = (job / "pr.txt").read_text(encoding="utf-8").strip() if (job / "pr.txt").exists() else ""
+    elif (job / "pr.txt").exists():
+        note = (job / "pr.txt").read_text(encoding="utf-8").strip()
+    else:  # fails counts tries since the last pass or answer: while it does, the last failure says why a stage runs again
+        failures = state.get("failures") or []
+        note = (f"직전 실패: {failures[-1].get('reason', '')}"[:60]
+                if state.get("fails") and failures and isinstance(failures[-1], dict) else "")
     # run() holds run.lock while it works (this process too, on another descriptor): a lock we cannot share means an engine runs.
     running = 0
     if (job / "run.lock").exists():
