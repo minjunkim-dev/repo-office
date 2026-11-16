@@ -1504,7 +1504,8 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         self.assertEqual((self.engine.tasks()[0]["stage"], self.engine.tasks()[0]["merge"]), ("done", "BEHIND"))
         self.assertEqual(asked(), 1)  # the board rewrites every 5 seconds: gh is not asked each time
         texts = [e["text"] for e in self.run_page()]
-        self.assertIn("브랜치 갱신 필요", texts)  # not a plain 「병합 대기」 while the base is ahead
+        self.assertIn("병합 대기", texts)  # the merge queue merges a PR whose base moved on (POLICY §5)
+        self.assertNotIn("브랜치 갱신 필요", texts)
         answer.write_text('{"state": "OPEN", "mergeStateStatus": "DIRTY"}\n', encoding="utf-8")
         os.utime(self.job / ".merge-asked", (0, 0))
         self.assertEqual(self.engine.tasks()[0]["merge"], "DIRTY")
@@ -1558,13 +1559,17 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
             office = [json.loads(e["text"]) for e in self.run_page() if e["tag"] == "posted"][0]["office"]
         self.assertEqual((office[0]["key"], office[0]["text"]), ("work", "CI 진행 중"))
         ask("BEHIND", failed)
-        self.assertIn("CI 실패", [e["text"] for e in self.run_page()])  # failed CI needs a fix; updating the branch can wait
+        self.assertIn("CI 실패", [e["text"] for e in self.run_page()])
         ask("BLOCKED", running)
         self.assertIn("CI 진행 중", [e["text"] for e in self.run_page()])  # not 「병합 조건 대기」
         ask("UNSTABLE", failed)
         self.assertIn("CI 실패", [e["text"] for e in self.run_page()])
         ask("BEHIND", running)
-        self.assertIn("브랜치 갱신 필요", [e["text"] for e in self.run_page()])  # a person's step comes first
+        self.assertIn("CI 진행 중", [e["text"] for e in self.run_page()])
+        ask("BEHIND", "[]")  # the merge queue merges it; updating the branch would move the reviewed head
+        texts = [e["text"] for e in self.run_page()]
+        self.assertIn("병합 대기", texts)
+        self.assertNotIn("브랜치 갱신 필요", texts)
         ask("DIRTY", failed)
         self.assertIn("충돌", [e["text"] for e in self.run_page()])
         answer.write_text('{"state": "MERGED", "mergeStateStatus": "UNKNOWN", "statusCheckRollup": []}\n', encoding="utf-8")
