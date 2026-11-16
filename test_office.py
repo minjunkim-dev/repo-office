@@ -1813,6 +1813,52 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         self.assertNotIn("mutation", calls)
         self.assertFalse([c for c in map(json.loads, calls.splitlines()) if c[:2] == ["pr", "merge"]])
 
+    def test_a_queue_block_clears_once_the_pr_is_back_in_the_queue_or_merged(self):
+        bin_dir = Path(self.tmp.name) / "unblockgh"
+        bin_dir.mkdir()
+        view, queue = Path(self.tmp.name) / "view.json", Path(self.tmp.name) / "unqueue.json"
+        (bin_dir / "gh").write_text(
+            "#!/usr/bin/env python3\nimport sys\n"
+            f"print(open({str(queue)!r} if sys.argv[1:3] == ['api', 'graphql'] else {str(view)!r}).read())\n", encoding="utf-8")
+        (bin_dir / "gh").chmod(0o755)
+        patcher = unittest.mock.patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.engine.save(self.job / "state.json", {"stage": "done", "since": 0})
+        (self.job / "pr.txt").write_text("https://github.com/o/r/pull/7\n", encoding="utf-8")
+        blocked = self.job / "BLOCKED.md"
+        aside = lambda: sorted(p.name for p in self.job.glob("BLOCKED.*.md"))  # noqa: E731
+
+        def ask(state="OPEN", in_queue=False, removed="E1"):
+            view.write_text(json.dumps({"state": state, "mergeStateStatus": "CLEAN"}), encoding="utf-8")
+            node = ({"__typename": "RemovedFromMergeQueueEvent", "id": removed, "createdAt": "2026-11-17T01:00:00Z",
+                     "reason": "The merge queue CI failed"} if removed else {"__typename": "AddedToMergeQueueEvent"})
+            queue.write_text(json.dumps({"data": {"repository": {"pullRequest": {
+                "state": state, "isInMergeQueue": in_queue, "timelineItems": {"nodes": [node]}}}}}), encoding="utf-8")
+            (self.job / ".merge-asked").unlink(missing_ok=True)
+            return self.engine.tasks()[0]
+
+        self.assertEqual(ask()["stage"], "blocked")
+        row = ask(in_queue=True, removed=None)  # a person fixed it and put it back in the queue
+        self.assertEqual(row["stage"], "done")
+        self.assertFalse(blocked.exists())
+        self.assertEqual(len(aside()), 1)  # moved aside like an answered block, not deleted
+        self.assertEqual(ask(removed="E2")["stage"], "blocked")  # out again: a new removal blocks again
+        os.utime(blocked, (1, 1))  # another mtime than the first note, so the two kept notes do not share a name
+        row = ask(state="MERGED", removed=None)
+        self.assertEqual((row["stage"], row["merged"]), ("merged", 1))
+        self.assertFalse(blocked.exists())
+        self.assertEqual(len(aside()), 2)
+        # A block that is not the queue note stays, even on a merged task: only a person's answer clears it.
+        blocked.write_text("# 막힘\n\nCI failed on abc: ci https://x\n", encoding="utf-8")
+        self.assertEqual(self.engine.tasks()[0]["stage"], "blocked")
+        self.assertTrue(blocked.exists())
+        # A task merged before this fix, with the queue note still standing: the next look clears it without asking gh.
+        blocked.write_text("# 막힘\n\nremoved from merge queue at 2026-11-17T01:00:00Z: x https://github.com/o/r/pull/7\n",
+                           encoding="utf-8")
+        view.write_text("not json", encoding="utf-8")
+        self.assertEqual(self.engine.tasks()[0]["stage"], "merged")
+
     def test_ci_state_puts_a_failure_before_a_running_check(self):
         run = lambda **c: {"__typename": "CheckRun", **c}  # noqa: E731
         self.assertEqual(self.engine.ci_state(None), "")
