@@ -1016,6 +1016,13 @@ def set_aside(blocked):
             break
         except FileExistsError:
             n += 1
+        except OSError:  # no archive (disk full, no hard links): the note goes back to BLOCKED.md unless a new block took it
+            try:
+                os.link(held, blocked)
+                held.unlink()
+            except OSError:
+                pass
+            raise
     held.unlink()
 
 

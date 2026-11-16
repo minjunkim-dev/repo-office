@@ -1852,6 +1852,20 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         self.assertEqual([p.name for p in self.job.glob(".BLOCKED.*")], [])  # no held copy left behind
         self.engine.set_aside(self.job / "BLOCKED.gone.md")  # already set aside by another mover: nothing to do
 
+    def test_a_note_that_cannot_be_archived_stays_the_block(self):
+        blocked, link = self.job / "BLOCKED.md", os.link
+        note = f"# 막힘\n\n{self.engine.QUEUE_BLOCK}2026-11-17T00:00:00Z: x https://github.com/o/r/pull/7\n"
+        blocked.write_text(note, encoding="utf-8")
+
+        def full(src, dst):  # the archive name cannot be made (disk full); putting the note back still works
+            if Path(dst).name != "BLOCKED.md":
+                raise OSError(28, "No space left on device")
+            link(src, dst)
+        with unittest.mock.patch.object(self.engine.os, "link", full):
+            self.assertFalse(self.engine.clear_queue_block(self.job))  # not cleared: the next check tries again
+        self.assertEqual(blocked.read_text(encoding="utf-8"), note)
+        self.assertEqual([p.name for p in [*self.job.glob(".BLOCKED.*"), *self.job.glob("BLOCKED.*.md")]], [])
+
     def test_a_queue_block_clears_once_the_pr_is_back_in_the_queue_or_merged(self):
         bin_dir = Path(self.tmp.name) / "unblockgh"
         bin_dir.mkdir()
