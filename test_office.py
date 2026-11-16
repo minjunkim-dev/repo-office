@@ -1740,7 +1740,7 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         self.assertIn("removed from merge queue at 2026-11-16T10:00:00Z: The merge queue CI failed https://github.com/O/R/pull/7", text)
         self.assertIn("removed from merge queue", row["note"])
         graphql = [c for c in map(json.loads, log.read_text().splitlines()) if c[:2] == ["api", "graphql"]][-1]
-        self.assertEqual(graphql[graphql.index("-F") + 1:][::2], ["o=o", "r=r", "n=7"])
+        self.assertEqual(list(zip(graphql[4::2], graphql[5::2])), [("-f", "o=o"), ("-f", "r=r"), ("-F", "n=7")])
         # The leader answers (the engine moves BLOCKED.md aside): the same removal does not block again, a new one does.
         blocked.rename(self.job / "BLOCKED.1.md")
         ask("RemovedFromMergeQueueEvent", reason="The merge queue CI failed")

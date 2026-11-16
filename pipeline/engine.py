@@ -990,7 +990,8 @@ def queue_removed(job, url):
         return
     owner, name = repo_slug.split("/")
     try:
-        view = subprocess.run(["gh", "api", "graphql", "-f", f"query={QUEUE_QUERY}", "-F", f"o={owner}", "-F", f"r={name}",
+        # -f keeps owner and name strings (-F would turn a repo named 2048 or true into a number or a bool); n is an Int.
+        view = subprocess.run(["gh", "api", "graphql", "-f", f"query={QUEUE_QUERY}", "-f", f"o={owner}", "-f", f"r={name}",
                                "-F", f"n={found[1]}"], cwd=job, capture_output=True, text=True, timeout=20)
         pull = json.loads(view.stdout)["data"]["repository"]["pullRequest"] if view.returncode == 0 else None
         last = pull["timelineItems"]["nodes"][-1]
