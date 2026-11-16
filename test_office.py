@@ -87,6 +87,10 @@ class PipelineTests(unittest.TestCase):
     def state(self):
         return json.loads((self.job / "state.json").read_text())
 
+    def runs(self):
+        """state.json models without their start and end times."""
+        return [{k: v for k, v in m.items() if k not in ("start", "end")} for m in self.state()["models"]]
+
     def fake_github(self):
         """origin is a GitHub URL whose pushes land in a local bare repository; gh records its calls."""
         bare, bin_dir = Path(self.tmp.name) / "origin.git", Path(self.tmp.name) / "ghbin"
@@ -238,6 +242,49 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual([c[0] for c in worker.calls], ["design", "implement", "implement"])
         self.assertIn("twice in a row", (self.job / "BLOCKED.md").read_text())
         self.assertEqual(self.state()["fails"], {})
+
+    def test_every_failure_is_kept_with_its_reason_time_exit_and_log(self):
+        worker = FakeWorker(self.job)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.engine.run("search", worker)
+            self.engine.approve("search")
+            (self.job / "repo/pass").unlink()
+            self.assertEqual(self.engine.run("search", worker), self.engine.BLOCKED)
+        failures = self.state()["failures"]
+        self.assertEqual([(f["stage"], f["exit"], f["log"]) for f in failures],
+                         [("check", 1, "test.fail-1.log"), ("check", 1, "test.fail-2.log")])
+        self.assertIn("exit 1", failures[0]["reason"])
+        self.assertEqual(failures[0]["model"], self.state()["models"][1]["model"])  # the implement run it checked
+        self.assertTrue(all((self.job / f["log"]).exists() for f in failures))
+        self.assertLessEqual(failures[0]["at"], failures[1]["at"])
+        for m in self.state()["models"]:
+            self.assertLessEqual(m["start"], m["end"])
+        self.assertEqual({t["stage"] for t in self.state()["timings"]}, {"check"})
+        # An answer clears fails for two fresh tries; the failures list keeps the earlier ones.
+        intent = self.job / "INTENT.md"
+        intent.write_text(intent.read_text() + "- 답\n", encoding="utf-8")
+        os.utime(intent, (time.time() + 5, time.time() + 5))
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.engine.run("search", worker), self.engine.BLOCKED)
+        self.assertEqual(len(self.state()["failures"]), 4)
+        self.assertTrue((self.job / "test.fail-4.log").exists())
+        (self.job / "BLOCKED.md").unlink()  # a block's own reason comes first; without one, workers shows the last failure
+        self.assertIn("직전 실패", self.engine.job_status(self.job, ask=False)["note"])
+
+    def test_a_block_from_hc_is_kept_apart_from_failed_tries(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.engine.run("search", lambda *a: "You've hit your 5-hour limit")
+        failure, = self.state()["failures"]
+        self.assertEqual((failure["stage"], failure["blocked"]), ("design", True))
+        self.assertEqual(self.state()["fails"], {})
+
+    def test_a_state_json_from_before_the_failure_log_still_runs(self):
+        self.engine.save(self.job / "state.json", {"stage": "design", "since": 0, "fails": {}, "sessions": [],
+                                                   "models": [{"stage": "design", "model": "opus"}]})
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.engine.run("search", FakeWorker(self.job)), self.engine.WAIT)
+        self.assertEqual(self.engine.job_status(self.job, ask=False)["note"], "")
+        self.assertIn("start", self.state()["models"][-1])
 
     def test_uncommitted_changes_fail_the_check(self):
         worker = FakeWorker(self.job)
@@ -1145,8 +1192,8 @@ class PipelineTests(unittest.TestCase):
     def test_each_stage_gets_its_model_from_the_approved_difficulty(self):
         work = self.engine.session_id("search", "work")
         self.assertEqual(self.routed("# d\n\n난이도: 쉬움\n"), [("design", "opus", work), ("implement", "haiku", work)])
-        self.assertEqual(self.state()["models"], [{"stage": "design", "model": "opus", "effort": "medium", "rerun": False},
-                                                  {"stage": "implement", "model": "haiku", "effort": "medium", "rerun": False}])
+        self.assertEqual(self.runs(), [{"stage": "design", "model": "opus", "effort": "medium", "rerun": False},
+                                   {"stage": "implement", "model": "haiku", "effort": "medium", "rerun": False}])
         for text in ("# d\n", "난이도: 보통\n", "난이도: 어려움\n", "난이도: easy\n", "난이도: 쉬움\n난이도: 보통\n", "- 난이도: 쉬움\n"):
             with self.subTest(text=text):
                 shutil.rmtree(self.job / "repo")
@@ -1193,7 +1240,7 @@ class PipelineTests(unittest.TestCase):
                     self.setUp()
                 calls = self.routed("난이도: 쉬움\n", fail_haiku=mode)
                 self.assertEqual(calls, [("design", "opus", work), ("implement", "haiku", work), ("implement", "sonnet", fresh)])
-                self.assertEqual(self.state()["models"][-1], {"stage": "implement", "model": "sonnet", "effort": "medium", "rerun": True})
+                self.assertEqual(self.runs()[-1], {"stage": "implement", "model": "sonnet", "effort": "medium", "rerun": True})
                 self.assertIn("exit 0", (self.job / "check.md").read_text())  # the sonnet run passed the check
                 self.assertNotIn("gave up", (self.job / "BLOCKED.md").read_text() if (self.job / "BLOCKED.md").exists() else "")
         self.assertTrue((self.job / "BLOCKED.haiku.md").exists())
