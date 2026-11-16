@@ -1832,6 +1832,24 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         self.assertEqual(kept, {"BLOCKED.100.md": notes[0], "BLOCKED.100.1.md": notes[1],
                                 "BLOCKED.100.2.md": "# 막힘\n\nwhich API?\n"})
 
+    def test_a_note_set_aside_at_the_same_moment_elsewhere_is_never_overwritten(self):
+        blocked, link = self.job / "BLOCKED.md", os.link
+        blocked.write_text("# 막힘\n\nmine\n", encoding="utf-8")
+        os.utime(blocked, (200, 200))
+        taken = []
+
+        def racing(src, dst):  # another process (the board) takes the free name just before this one moves onto it
+            if not taken:
+                taken.append(dst)
+                Path(dst).write_text("theirs\n", encoding="utf-8")
+            link(src, dst)
+            Path(src).unlink()  # and it removes this BLOCKED.md too: this mover's own unlink then finds nothing
+        with unittest.mock.patch.object(self.engine.os, "link", racing):
+            self.engine.set_aside(blocked)
+        self.assertEqual({p.name: p.read_text(encoding="utf-8") for p in self.job.glob("BLOCKED.*.md")},
+                         {"BLOCKED.200.md": "theirs\n", "BLOCKED.200.1.md": "# 막힘\n\nmine\n"})
+        self.assertFalse(blocked.exists())
+
     def test_a_queue_block_clears_once_the_pr_is_back_in_the_queue_or_merged(self):
         bin_dir = Path(self.tmp.name) / "unblockgh"
         bin_dir.mkdir()
