@@ -1848,6 +1848,14 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         os.utime(blocked, (2, 2))
         self.assertEqual(ask(in_queue=True, removed=None)["stage"], "done")
         self.assertEqual(ask(removed="E2")["stage"], "blocked")
+        # An in-queue answer that moves nothing keeps the mark, so the same event never overwrites another block.
+        note = blocked.read_text(encoding="utf-8")
+        other = "# 막힘\n\nCI failed on abc: ci https://x\n"
+        blocked.write_text(other, encoding="utf-8")
+        ask(in_queue=True, removed=None)
+        ask(removed="E2")
+        self.assertEqual(blocked.read_text(encoding="utf-8"), other)
+        blocked.write_text(note, encoding="utf-8")
         os.utime(blocked, (1, 1))  # another mtime than the first note, so the two kept notes do not share a name
         row = ask(state="MERGED", removed=None)
         self.assertEqual((row["stage"], row["merged"]), ("merged", 1))
