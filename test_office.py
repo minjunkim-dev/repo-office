@@ -1323,6 +1323,10 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.engine.job_status(self.job, ask=False)["note"], "")
         self.engine.save(self.job / "state.json", {**self.state(), "stage": "implement", "fails": {}})
         self.assertIn("직전 실패", self.engine.job_status(self.job, ask=False)["note"])
+        # A haiku run that stopped on a block (hc error, usage limit) is not a failed try: no note for it.
+        *earlier, last = self.state()["failures"]
+        self.engine.save(self.job / "state.json", {**self.state(), "failures": [*earlier, {**last, "blocked": True}]})
+        self.assertEqual(self.engine.job_status(self.job, ask=False)["note"], "")
 
     def test_a_transient_error_is_retried_once_then_blocks(self):
         self.fake_github()
