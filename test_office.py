@@ -658,11 +658,22 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.post(), self.engine.DONE)
         self.assertIn("체크 없음", (self.job / "REPORT.md").read_text())
 
+    def test_a_pr_without_checks_yet_is_waited_on(self):
+        # GitHub starts the checks a while after the push: no checks before CI_NONE is not yet "no CI".
+        self.at_post()
+        self.checks.write_text("[]", encoding="utf-8")
+        self.engine.CI_LIMIT = 0.05
+        self.assertEqual(self.post(), self.engine.BLOCKED)
+        self.assertIn("did not finish", (self.job / "BLOCKED.md").read_text())
+        self.assertNotIn("## CI", (self.job / "REPORT.md").read_text())
+
     def test_checks_of_an_older_head_are_not_waited_on(self):
         self.at_post()
         self.engine.CI_LIMIT = 0.05
         real = subprocess.run
-        old = lambda argv, **kw: (subprocess.CompletedProcess(argv, 0, '{"headRefOid": "old", "statusCheckRollup": []}', "")  # noqa: E731
+        # The old head's checks are green: only the head comparison keeps them from ending the run.
+        green = '[{"name": "CI", "status": "COMPLETED", "conclusion": "SUCCESS"}]'
+        old = lambda argv, **kw: (subprocess.CompletedProcess(argv, 0, f'{{"headRefOid": "old", "statusCheckRollup": {green}}}', "")  # noqa: E731
                                   if "headRefOid,statusCheckRollup" in argv else real(argv, **kw))
         with unittest.mock.patch.object(self.engine.subprocess, "run", side_effect=old):
             self.assertEqual(self.post(), self.engine.BLOCKED)
