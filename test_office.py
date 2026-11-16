@@ -1838,17 +1838,33 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         os.utime(blocked, (200, 200))
         taken = []
 
-        def racing(src, dst):  # another process (the board) takes the free name just before this one moves onto it
-            if not taken:
+        def racing(src, dst):  # another process (the board) takes the free name just before this one moves onto it,
+            if not taken:      # and run blocks again with block(), which writes BLOCKED.md in place
                 taken.append(dst)
                 Path(dst).write_text("theirs\n", encoding="utf-8")
+                blocked.write_text("# 막힘\n\nnew block\n", encoding="utf-8")
             link(src, dst)
-            Path(src).unlink()  # and it removes this BLOCKED.md too: this mover's own unlink then finds nothing
         with unittest.mock.patch.object(self.engine.os, "link", racing):
             self.engine.set_aside(blocked)
         self.assertEqual({p.name: p.read_text(encoding="utf-8") for p in self.job.glob("BLOCKED.*.md")},
                          {"BLOCKED.200.md": "theirs\n", "BLOCKED.200.1.md": "# 막힘\n\nmine\n"})
-        self.assertFalse(blocked.exists())
+        self.assertEqual(blocked.read_text(encoding="utf-8"), "# 막힘\n\nnew block\n")  # the new block still shows
+        self.assertEqual([p.name for p in self.job.glob(".BLOCKED.*")], [])  # no held copy left behind
+        self.engine.set_aside(self.job / "BLOCKED.gone.md")  # already set aside by another mover: nothing to do
+
+    def test_a_note_that_cannot_be_archived_stays_the_block(self):
+        blocked, link = self.job / "BLOCKED.md", os.link
+        note = f"# 막힘\n\n{self.engine.QUEUE_BLOCK}2026-11-17T00:00:00Z: x https://github.com/o/r/pull/7\n"
+        blocked.write_text(note, encoding="utf-8")
+
+        def full(src, dst):  # the archive name cannot be made (disk full); putting the note back still works
+            if Path(dst).name != "BLOCKED.md":
+                raise OSError(28, "No space left on device")
+            link(src, dst)
+        with unittest.mock.patch.object(self.engine.os, "link", full):
+            self.assertFalse(self.engine.clear_queue_block(self.job))  # not cleared: the next check tries again
+        self.assertEqual(blocked.read_text(encoding="utf-8"), note)
+        self.assertEqual([p.name for p in [*self.job.glob(".BLOCKED.*"), *self.job.glob("BLOCKED.*.md")]], [])
 
     def test_a_queue_block_clears_once_the_pr_is_back_in_the_queue_or_merged(self):
         bin_dir = Path(self.tmp.name) / "unblockgh"
