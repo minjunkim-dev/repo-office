@@ -40,7 +40,7 @@ worktree는 한 git 저장소의 브랜치를 다른 폴더에 따로 꺼낸 작
 
    `--model opus`는 `leader/.claude/settings.json`과 같은 값이다. 인자 없이 `claude`만 주면 Claude Code 2.1.325는 대화 세션이 아니라 세션 관리 화면(「describe a task for a new session」)을 연다(2026-11-15 확인). 그 화면에서 맡긴 일은 leader 규칙을 받는 세션이 아니다.
 
-   이 이름으로 띄우면 제품 저장소의 에이전트가 코드 작업을 `hc send office-leader`로 leader에 넘긴다([연결 5단계](docs/connect.md#5-코드-작업을-office로-보내게-한다)). `cd leader && claude --model opus`로 띄워도 leader는 돈다. 그때는 제품 저장소의 에이전트가 과제를 넘기지 못하고 사람에게 leader에 주라고 알린다.
+   이 이름으로 띄우면 사람이 office로 돌리라고 할 때 제품 저장소의 에이전트가 코드 작업을 `hc send office-leader`로 leader에 넘긴다([연결 5단계](docs/connect.md#5-원하면-코드-작업을-office로-보내게-한다)). `cd leader && claude --model opus`로 띄워도 leader는 돈다. 그때는 제품 저장소의 에이전트가 과제를 넘기지 못하고 사람에게 leader에 주라고 알린다.
 
 제품 저장소가 mise를 쓰면 과제마다 사람이 `mise trust jobs/<과제>/repo/.mise.toml`을 한 번 돌린다.
 
