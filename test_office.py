@@ -1226,8 +1226,8 @@ class PipelineTests(unittest.TestCase):
 
     def routed(self, design_text, fail_haiku=None, fail_model="haiku"):
         """Run to the draft wait with a design that says design_text; fail_haiku: "silent", "blocked" or "check" for the first
-        implement on fail_model."""
-        job, failed = self.job, []
+        implement on fail_model. self.notes gets the board note each later implement run sees as it starts."""
+        job, failed, engine, self.notes = self.job, [], self.engine, []
 
         class Worker(FakeWorker):
             def __call__(self, name, cwd, argv, message):
@@ -1236,6 +1236,8 @@ class PipelineTests(unittest.TestCase):
                 fails = stage == "implement" and model == fail_model and fail_haiku and not failed
                 if fails:
                     failed.append(model)
+                elif stage == "implement" and failed:
+                    test_notes.append(engine.job_status(job, ask=False)["note"])
                 if fails and fail_haiku == "check":
                     result = super().__call__(name, cwd, argv, message)
                     (job / "repo/pass").unlink()  # writes its result but leaves a commit whose test fails
@@ -1252,6 +1254,7 @@ class PipelineTests(unittest.TestCase):
                     (job / "repo/pass").write_text("")
                 return result
 
+        test_notes = self.notes
         worker = Worker(job)
         self.engine.run("search", worker)
         self.engine.approve("search")
@@ -1316,6 +1319,8 @@ class PipelineTests(unittest.TestCase):
                 self.assertNotIn("gave up", (self.job / "BLOCKED.md").read_text() if (self.job / "BLOCKED.md").exists() else "")
                 # The haiku try that failed is kept as a failure, never as a block.
                 self.assertEqual([(f["model"], f.get("blocked")) for f in self.state()["failures"]][:1], [("haiku", None)])
+                if mode == "blocked":  # the engine flow itself: sonnet starts with since unchanged, so the board says why
+                    self.assertEqual(self.notes, ["직전 실패: gave up"])
         self.assertTrue((self.job / "BLOCKED.haiku.md").exists())
         # While sonnet reruns the stage haiku gave up on, the board says why; once the stage moves on, it does not.
         (self.job / "pr.txt").unlink(missing_ok=True)
@@ -1335,6 +1340,30 @@ class PipelineTests(unittest.TestCase):
         *earlier, last = self.state()["failures"]
         self.engine.save(self.job / "state.json", {**self.state(), "failures": [*earlier, {**last, "blocked": True}]})
         self.assertEqual(self.engine.job_status(self.job, ask=False)["note"], "")
+
+    def test_the_failure_note_without_fails_is_only_the_haiku_give_up_being_rerun(self):
+        since = 1000.6
+        self.engine.save(self.job / "state.json", {"stage": "implement", "since": since})
+        (self.job / "BLOCKED.md").unlink(missing_ok=True)
+        (self.job / "pr.txt").unlink(missing_ok=True)
+
+        def note(fails=None, **fail):
+            self.engine.save(self.job / "state.json", {"stage": "implement", "since": since, "fails": fails or {},
+                                                       "failures": [{"stage": "implement", "reason": "why", "model": "haiku",
+                                                                     "at": 1003, **fail}]})
+            return self.engine.job_status(self.job, ask=False)["note"]
+        self.assertEqual(note(), "직전 실패: why")
+        # Twice failed then answered: fails is cleared twice and since is kept, but a sonnet failure is no give-up.
+        self.assertEqual(note(model="sonnet"), "")
+        self.assertEqual(note(at=1000), "직전 실패: why")  # the same second as since: at is whole seconds
+        old = note(); fail = self.state()["failures"][0]; del fail["at"]
+        self.engine.save(self.job / "state.json", {**self.state(), "failures": [fail]})
+        self.assertEqual((old, self.engine.job_status(self.job, ask=False)["note"]), ("직전 실패: why", ""))  # no at: hidden
+        # Another stage gave up: record() runs before move(), so only a sonnet pass in the give-up's second gets here.
+        self.engine.save(self.job / "state.json", {"stage": "check", "since": since, "fails": {}, "failures": [
+            {"stage": "implement", "reason": "why", "model": "haiku", "at": 1000}]})
+        self.assertEqual(self.engine.job_status(self.job, ask=False)["note"], "")
+        self.assertEqual(note(fails={"implement": 1}, model="sonnet"), "직전 실패: why")  # fails shows any failure
 
     def test_a_transient_error_is_retried_once_then_blocks(self):
         self.fake_github()
