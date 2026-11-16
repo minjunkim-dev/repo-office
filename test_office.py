@@ -1844,11 +1844,15 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         self.assertFalse(blocked.exists())
         self.assertEqual(len(aside()), 1)  # moved aside like an answered block, not deleted
         self.assertEqual(ask(removed="E2")["stage"], "blocked")  # out again: a new removal blocks again
+        # Two readers at once: one holding an older in-queue answer moves the newer E2 note aside. The next look restores it.
+        os.utime(blocked, (2, 2))
+        self.assertEqual(ask(in_queue=True, removed=None)["stage"], "done")
+        self.assertEqual(ask(removed="E2")["stage"], "blocked")
         os.utime(blocked, (1, 1))  # another mtime than the first note, so the two kept notes do not share a name
         row = ask(state="MERGED", removed=None)
         self.assertEqual((row["stage"], row["merged"]), ("merged", 1))
         self.assertFalse(blocked.exists())
-        self.assertEqual(len(aside()), 2)
+        self.assertEqual(len(aside()), 3)
         # A block that is not the queue note stays, even on a merged task: only a person's answer clears it.
         blocked.write_text("# 막힘\n\nCI failed on abc: ci https://x\n", encoding="utf-8")
         self.assertEqual(self.engine.tasks()[0]["stage"], "blocked")

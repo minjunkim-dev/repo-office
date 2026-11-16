@@ -1029,7 +1029,9 @@ def queue_removed(job, url):
     except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, IndexError, TypeError):
         return
     if pull.get("state") == "OPEN" and pull.get("isInMergeQueue") is True:  # a person fixed it and put it back
-        return clear_queue_block(job)
+        clear_queue_block(job)
+        # After the move: a stale in-queue answer that moved a newer note aside lets the next look write it again.
+        return (job / ".queue-removed").unlink(missing_ok=True)
     # GitHub logs a merge as a removal too (reason "merged"), sometimes before the PR reads MERGED.
     if (not isinstance(last, dict) or last.get("__typename") != "RemovedFromMergeQueueEvent" or pull.get("state") != "OPEN"
             or pull.get("isInMergeQueue") is not False or str(last.get("reason") or "").lower() == "merged"):
