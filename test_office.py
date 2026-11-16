@@ -148,7 +148,9 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("@coderabbitai review", next(c for c in gh() if c[:2] == ["pr", "comment"]))
         report = (self.job / "REPORT.md").read_text()
         head = subprocess.run(["git", "-C", str(self.job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-        for part in ("https://github.com/O/R/pull/7", f"gh pr view https://github.com/O/R/pull/7 --json id --jq .id)\" -f sha={head}`", "enqueuePullRequest", "- design: opus",
+        for part in ("https://github.com/O/R/pull/7", f"gh pr view https://github.com/O/R/pull/7 --json id --jq .id)\" -f sha={head}`",
+                     # The queue refuses another head only when the mutation passes the reviewed SHA.
+                     "enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$sha})", "- design: opus",
                      "- implement: sonnet", "- review: opus", "사람이 diff를 읽고 병합한다", "exit 0",
                      "리뷰가 고친 지적: P0 0, P1 1, P2 0", "남은 지적: [Spec] P1 y, a.py:3",
                      "PR 브랜치에 base를 합치지 않는다"):
