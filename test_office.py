@@ -1317,6 +1317,12 @@ class PipelineTests(unittest.TestCase):
                 # The haiku try that failed is kept as a failure, never as a block.
                 self.assertEqual([(f["model"], f.get("blocked")) for f in self.state()["failures"]][:1], [("haiku", None)])
         self.assertTrue((self.job / "BLOCKED.haiku.md").exists())
+        # While sonnet reruns the stage haiku gave up on, the board says why; once the stage moves on, it does not.
+        (self.job / "pr.txt").unlink(missing_ok=True)
+        (self.job / "BLOCKED.md").unlink(missing_ok=True)  # a block's own reason comes first
+        self.assertEqual(self.engine.job_status(self.job, ask=False)["note"], "")
+        self.engine.save(self.job / "state.json", {**self.state(), "stage": "implement", "fails": {}})
+        self.assertIn("직전 실패", self.engine.job_status(self.job, ask=False)["note"])
 
     def test_a_transient_error_is_retried_once_then_blocks(self):
         self.fake_github()
