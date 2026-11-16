@@ -38,11 +38,12 @@ const ART = /*ART*/;  // engine.py board inlines pipeline/office/*.png as data U
 const img = {};
 for (const [k, src] of Object.entries(ART)) { img[k] = new Image(); img[k].src = src; }
 
-// The office in sprite pixels: six rooms in pipeline order, two across. A room is as wide as its desks: every room
-// has as many seats as the fullest room needs (2 to MAX_SLOTS), so parallel tasks in one stage all show.
-const T = 16, RH = 8 * T, COLS = 2, MAX_SLOTS = 4, GAP = 56;  // GAP: one seat to the next, a 48-pixel desk and a gap
-let SLOTS = 2, RW = 0, W = 0, H = 3 * RH;
-function size(n) { SLOTS = Math.max(2, Math.min(MAX_SLOTS, n)); RW = Math.ceil((24 + (SLOTS - 1) * GAP + 56) / T) * T; W = COLS * RW; }
+// The office in sprite pixels: six rooms in pipeline order. A room is as wide as its desks: every room has as many
+// seats as the fullest room needs (at least 2), so every task in a stage shows. fit() lays the rooms 1, 2 or 3 across,
+// whichever draws them biggest in the panel, so wide rooms stack down a tall panel.
+const T = 16, RH = 8 * T, GAP = 56;  // GAP: one seat to the next, a 48-pixel desk and a gap
+let SLOTS = 2, RW = 0, COLS = 2, W = 0, H = 0;
+function size(n) { SLOTS = Math.max(2, n); RW = Math.ceil((24 + (SLOTS - 1) * GAP + 56) / T) * T; }
 size(2);
 const ROOMS = [["design", "설계", false], ["approve", "설계 승인", true], ["implement", "구현", false],
                ["check", "검사", false], ["pr", "PR·리뷰", false], ["done", "병합 대기", true]];  // true: people act here
@@ -66,7 +67,7 @@ window.addEventListener("message", e => {
                        .map(t => ({ name: t.name, lane: t.lane, stage: String(t.stage), key: COLOR[t.key] ? t.key : "idle",
                                     text: String(t.text), model: String(t.model || ""), by: String(t.by || "") }));
   const most = Math.max(0, ...ROOMS.map(([id]) => tasks.filter(t => t.lane === id).length));
-  if (Math.max(2, Math.min(MAX_SLOTS, most)) !== SLOTS) {  // rooms change size: everyone takes a seat afresh
+  if (Math.max(2, most) !== SLOTS) {  // rooms change size: everyone takes a seat afresh
     size(most);
     for (const n of Object.keys(people)) delete people[n];
     fit();
@@ -109,7 +110,11 @@ function fit() {
   const box = document.getElementById("room").getBoundingClientRect();
   DPR = window.devicePixelRatio || 1;
   canvas.width = Math.round(box.width * DPR); canvas.height = Math.round(box.height * DPR);
-  S = Math.max(1, Math.min(box.width / W, box.height / H));
+  const scale = c => Math.min(box.width / (c * RW), box.height / (Math.ceil(ROOMS.length / c) * RH));
+  const cols = [2, 1, 3].reduce((a, c) => scale(c) > scale(a) ? c : a);  // ties keep two across
+  if (cols !== COLS) { COLS = cols; for (const n of Object.keys(people)) delete people[n]; place(); }  // rooms moved: seat afresh
+  W = COLS * RW; H = Math.ceil(ROOMS.length / COLS) * RH;
+  S = scale(COLS) || 1;  // may go under 1 when even the best layout is too small: everyone still shows, only smaller
   OX = Math.round((box.width - W * S) / 2); OY = Math.round((box.height - H * S) / 2);
 }
 new ResizeObserver(fit).observe(document.getElementById("room"));
@@ -173,6 +178,7 @@ function peopleLayer(now, dt) {
 // Labels sit in two rows under the room's wall, above the desks, never over a person or a desk: even seats in the
 // first row, odd seats in the second, so neighbours never share a row. A thin line drops from each label to its person.
 // A small office has no room for two lines: the label keeps only the name, and the cards beside it say the rest.
+// Under scale 1 a label would cover its person (labels do not shrink with the office), so none is drawn.
 const fitText = (text, max) => {  // the whole text if it fits, else as much as fits and "…"
   if (ctx.measureText(text).width <= max) return text;
   let n = text.length;
@@ -182,7 +188,7 @@ const fitText = (text, max) => {  // the whole text if it fits, else as much as 
 function labelsLayer() {
   ctx.textBaseline = "middle";
   const small = S < 1.8, LH = small ? 18 : 32;
-  const boxes = Object.values(people).map(p => {
+  const boxes = S < 1 ? [] : Object.values(people).map(p => {
     const t = p.task, cx = (p.x + 8) * S, row = Math.floor((p.y - 1) / RH), rx = Math.floor(p.x / RW) * RW * S;
     const line2 = [t.stage, t.model, t.text !== t.stage && t.text].filter(Boolean).join(" · ");  // not "병합 대기 · 병합 대기"
     // Seats k and k+2 share a row. The wall pushes the first seat's label (32 px from it) toward seat k+2, so with
@@ -198,7 +204,7 @@ function labelsLayer() {
   for (const b of boxes) {  // lines first, so a label in the second row covers a first-row line that passes behind it
     ctx.beginPath(); ctx.moveTo(Math.round(b.cx) + .5, b.y + LH); ctx.lineTo(Math.round(b.cx) + .5, head(b.p) * S); ctx.stroke();
   }
-  for (const { p, t, x, y, w, name, sub } of boxes) {
+  for (const { t, x, y, w, name, sub } of boxes) {
     ctx.fillStyle = "rgba(20, 21, 31, .9)"; ctx.beginPath(); ctx.roundRect(x, y, w, LH, 5); ctx.fill();
     ctx.fillStyle = COLOR[t.key]; ctx.fillRect(x, y, 3, LH);
     ctx.fillStyle = "#eef0f7"; ctx.font = `600 12px ${FONT}`; ctx.fillText(name, x + 9, y + 9);
@@ -206,11 +212,16 @@ function labelsLayer() {
       ctx.fillStyle = COLOR[t.key]; ctx.beginPath(); ctx.arc(x + 13, y + 23, 3.5, 0, 7); ctx.fill();
       ctx.fillStyle = "#c9cde0"; ctx.font = `11px ${FONT}`; ctx.fillText(sub, x + 21, y + 23);
     }
+  }
+  for (const p of Object.values(people)) {
+    const t = p.task;
     if (MARK[t.key]) {  // a mark beside the head for every state a person should notice
       const bx = (p.x + 17) * S, by = (head(p) + 4) * S;
-      ctx.fillStyle = COLOR[t.key]; ctx.beginPath(); ctx.arc(bx, by, 8, 0, 7); ctx.fill();
-      ctx.fillStyle = "#15161f"; ctx.font = `700 11px ${FONT}`; ctx.textAlign = "center";
-      ctx.fillText(MARK[t.key], bx, by + 1); ctx.textAlign = "left";
+      ctx.fillStyle = COLOR[t.key]; ctx.beginPath(); ctx.arc(bx, by, 8 * Math.min(1, S), 0, 7); ctx.fill();  // shrinks with the office
+      if (S >= 1) {  // under scale 1 the colour alone tells the state
+        ctx.fillStyle = "#15161f"; ctx.font = `700 11px ${FONT}`; ctx.textAlign = "center";
+        ctx.fillText(MARK[t.key], bx, by + 1); ctx.textAlign = "left";
+      }
     }
   }
   ROOMS.forEach(([id, title], i) => {  // room names on the wall, with how many tasks are there
@@ -219,7 +230,7 @@ function labelsLayer() {
     ctx.fillText(`${"①②③④⑤⑥"[i]} ${title}`, r.x * S + 8, (r.y + T / 2) * S);
     if (n) {
       ctx.fillStyle = "#9aa0b8"; ctx.textAlign = "right";
-      ctx.fillText(n > SLOTS ? `${n}개 (${n - SLOTS}개 안 보임)` : `${n}개`, (r.x + RW) * S - 8, (r.y + T / 2) * S);
+      ctx.fillText(`${n}개`, (r.x + RW) * S - 8, (r.y + T / 2) * S);
       ctx.textAlign = "left";
     }
   });
