@@ -22,6 +22,7 @@ Exit codes for run: 0 done, 2 no such task or another run of it is going, 3 wait
 
 import argparse
 import base64
+import errno
 import fcntl
 import hashlib
 import json
@@ -1002,8 +1003,8 @@ def set_aside(blocked):
     """Move an answered BLOCKED.md to BLOCKED.<mtime>.md, or BLOCKED.<mtime>.<n>.md when a note from the same second is kept.
     The note leaves the name BLOCKED.md first, in one rename to a name only this thread uses: a block() written after
     that makes a new BLOCKED.md and never shares the kept note's file. os.link then fails on a name that exists, so a
-    note another process sets aside at the same moment is never overwritten. A BLOCKED.md already gone was set aside
-    by another mover."""
+    note another process sets aside at the same moment is never overwritten (without hard links, see rename_aside).
+    A BLOCKED.md already gone was set aside by another mover."""
     held = blocked.with_name(f".BLOCKED.{os.getpid()}.{threading.get_ident()}.md")  # dot: workers and the board skip it
     try:
         os.rename(blocked, held)
@@ -1016,14 +1017,48 @@ def set_aside(blocked):
             break
         except FileExistsError:
             n += 1
-        except OSError:  # no archive (disk full, no hard links): the note goes back to BLOCKED.md unless a new block took it
+        except OSError as e:
             try:
-                os.link(held, blocked)
-                held.unlink()
-            except OSError:
-                pass
-            raise
+                if e.errno not in NO_LINKS:
+                    raise
+                rename_aside(held, stamp)
+                return
+            except OSError:  # no archive (disk full): the note goes back to BLOCKED.md unless a new block took it
+                put_back(held, blocked, stamp)
+                raise
     held.unlink()
+
+
+NO_LINKS = {errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EXDEV}  # os.link on a file system without hard links
+
+
+def rename_aside(held, stamp):
+    """Without hard links (exFAT, some network mounts): rename the held note onto the first free BLOCKED.<stamp>[.<n>].md.
+    shortcut: a note another process keeps between the check and the rename is overwritten (the gap before os.link);
+    only file systems without hard links take this path."""
+    n = 0
+    while (kept := held.with_name(f"BLOCKED.{stamp}{f'.{n}' if n else ''}.md")).exists():
+        n += 1
+    os.rename(held, kept)
+
+
+def put_back(held, blocked, stamp):
+    """Return a held note that could not be archived to BLOCKED.md. os.link never overwrites a new BLOCKED.md. Without
+    hard links the note is kept beside a new BLOCKED.md, or renamed back after a check (see the shortcut below).
+    If nothing works, the note stays held."""
+    try:
+        try:
+            os.link(held, blocked)
+            held.unlink()
+        except OSError as e:
+            if e.errno not in NO_LINKS:
+                raise
+            if blocked.exists():
+                rename_aside(held, stamp)
+            else:
+                os.rename(held, blocked)  # shortcut: a block() written between the check and the rename is overwritten
+    except OSError:
+        pass
 
 
 def clear_queue_block(job):
