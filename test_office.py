@@ -1359,7 +1359,10 @@ class PipelineTests(unittest.TestCase):
         old = note(); fail = self.state()["failures"][0]; del fail["at"]
         self.engine.save(self.job / "state.json", {**self.state(), "failures": [fail]})
         self.assertEqual((old, self.engine.job_status(self.job, ask=False)["note"]), ("직전 실패: why", ""))  # no at: hidden
-        self.assertEqual(note(stage="check"), "")  # since < at, but another stage gave up
+        # Another stage gave up: record() runs before move(), so only a sonnet pass in the give-up's second gets here.
+        self.engine.save(self.job / "state.json", {"stage": "check", "since": since, "fails": {}, "failures": [
+            {"stage": "implement", "reason": "why", "model": "haiku", "at": 1000}]})
+        self.assertEqual(self.engine.job_status(self.job, ask=False)["note"], "")
         self.assertEqual(note(fails={"implement": 1}, model="sonnet"), "직전 실패: why")  # fails shows any failure
 
     def test_a_transient_error_is_retried_once_then_blocks(self):
