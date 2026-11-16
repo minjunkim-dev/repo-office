@@ -885,28 +885,14 @@ def doctor(repo):
             rules.returncode == 0 and rules.stdout.strip() not in ("", "0"))
     report(protected, "main is protected (branch protection or a ruleset)",
            "turn it on (repo-baseline tools/apply_github_settings.py)" if repo_slug else "origin is not a GitHub repository")
-    # The contract is repo-baseline's: its tool plans (never --apply) and says what differs. Exit 1 is a difference,
-    # anything else is a plan that could not read the settings (no access, no network, no settings file): never a pass.
-    contract = "GitHub settings match the repo-baseline contract (apply_github_settings.py plan)"
-    try:
-        planned = subprocess.run([sys.executable, str(BASELINE / "tools/apply_github_settings.py"), str(repo)],
-                                 cwd=repo, capture_output=True, text=True, timeout=300)
-        code, out, err = planned.returncode, planned.stdout, planned.stderr
-    except (OSError, subprocess.TimeoutExpired) as error:
-        code, out, err = None, "", f"{type(error).__name__}: {error}"
-    if code == 1:
-        report(False, contract, "the owner applies it as repo-baseline README says\n"
-               + "\n".join(l for l in out.splitlines() if l.startswith(("DIFF:", "MANUAL:"))))
-    else:
-        report(code == 0, contract, "확인 못 함 (unverified): " + ((err or out).strip().splitlines() or [f"exit {code}"])[-1])
-    if isinstance(cells, str):
-        return 1
     root = Path(tempfile.mkdtemp(prefix="office-doctor-"))
     checkout = root / "main"
     try:
         added = git("worktree", "add", "-q", "--detach", str(checkout), "origin/main")
         report(added.returncode == 0, "a fresh checkout of origin/main", added.stderr.strip())
-        for name in () if added.returncode else ("setup", "check", "test"):  # setup first: check and test may need what it installs
+        contract(checkout, repo_slug, report)
+        # setup first: check and test may need what it installs
+        for name in () if added.returncode or isinstance(cells, str) else ("setup", "check", "test"):
             if cells[name] is None:
                 print(f"ok   {name}: N/A")
                 continue
@@ -917,6 +903,31 @@ def doctor(repo):
         git("worktree", "remove", "--force", str(checkout))
         shutil.rmtree(root, ignore_errors=True)
     return 1 if missing_ else 0
+
+
+def contract(checkout, repo_slug, report):
+    """repo-baseline's GitHub contract for origin/main (checkout): its tool plans (never --apply) and says what differs.
+    Exit 1 is a difference; anything else is a plan that could not read the settings (no access, no network, no
+    settings file, no checkout): never a pass. The tool checks the repository the settings file names, so a file
+    copied from another repository must not pass for this one."""
+    what = "GitHub settings match the repo-baseline contract (apply_github_settings.py plan)"
+    settings = checkout / ".github/repository-settings.json"
+    try:
+        named = str(json.loads(settings.read_text(encoding="utf-8")).get("repository") or "")
+    except (OSError, ValueError, AttributeError):  # no file or not an object: the tool says why
+        named = None
+    if named is not None and repo_slug and named.lower() != repo_slug:
+        return report(False, what, f".github/repository-settings.json on main names {named!r}, but origin is {repo_slug}")
+    try:
+        planned = subprocess.run([sys.executable, str(BASELINE / "tools/apply_github_settings.py"), str(checkout)],
+                                 cwd=checkout if checkout.is_dir() else None, capture_output=True, text=True, timeout=300)
+        code, out, err = planned.returncode, planned.stdout, planned.stderr
+    except (OSError, subprocess.TimeoutExpired) as error:
+        code, out, err = None, "", f"{type(error).__name__}: {error}"
+    if code == 1:
+        return report(False, what, "the owner applies it as repo-baseline README says\n"
+                      + "\n".join(l for l in out.splitlines() if l.startswith(("DIFF:", "MANUAL:"))))
+    report(code == 0, what, "확인 못 함 (unverified): " + ((err or out).strip().splitlines() or [f"exit {code}"])[-1])
 
 
 CI_FAILED = {"FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"}

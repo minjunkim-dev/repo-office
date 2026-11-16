@@ -1238,7 +1238,33 @@ class PipelineTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(self.engine.doctor(str(repo)), 1)
         self.assertIn("확인 못 함", out.getvalue())
-        self.assertEqual(ran(), [[str(repo.resolve())]] * 3)  # the product path and no --apply, every time
+        # The tool read a fresh checkout of origin/main, one argument and no --apply, every time; the checkout is gone.
+        self.assertEqual([len(a) for a in ran()], [1, 1, 1])
+        self.assertTrue(all(a[0].endswith("/main") and not Path(a[0]).exists() for a in ran()), ran())
+
+    def test_doctor_contract_reads_main_and_refuses_another_repositorys_settings(self):
+        self.fake_gh()
+        repo = self.product()
+        ran = self.contract_tool(0, "No writes needed")
+        git = lambda *a: subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com", *a], check=True)  # noqa: E731
+        settings = repo / ".github/repository-settings.json"
+        settings.write_text('{"repository": "o/other"}\n', encoding="utf-8")
+        git("add", "."), git("commit", "-qm", "copied settings"), git("push", "-q", "origin", "main")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(self.engine.doctor(str(repo)), 1)
+        failed = [l for l in out.getvalue().splitlines() if l.startswith("FAIL")]
+        self.assertEqual(len(failed), 1, out.getvalue())
+        self.assertIn("names 'o/other', but origin is o/p", failed[0])
+        self.assertEqual(ran(), [])  # a pass of the tool would be for o/other: it is not asked
+        settings.write_text('{"repository": "o/p"}\n', encoding="utf-8")  # fixed only in the working tree: main still names o/other
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(self.engine.doctor(str(repo)), 1)
+        self.assertIn("names 'o/other'", out.getvalue())
+        settings.write_text('{"repository": "O/P"}\n', encoding="utf-8")  # owner and name are case-insensitive
+        git("commit", "-qam", "own settings"), git("push", "-q", "origin", "main")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(self.engine.doctor(str(repo)), 0, out.getvalue())
+        self.assertEqual(len(ran()), 1)
 
     def test_doctor_says_what_the_product_lacks(self):
         _, calls = self.fake_gh()  # gh answers 0: logged in, main protected

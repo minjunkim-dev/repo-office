@@ -47,13 +47,13 @@ python3 pipeline/engine.py doctor <제품 저장소 경로>
 | PR template on main | `.github/pull_request_template.md`를 둔다(repo-baseline `templates/core/`) |
 | gh is logged in | `gh auth login` |
 | main is protected | 브랜치 보호나 ruleset을 켠다(repo-baseline `tools/apply_github_settings.py`) |
-| GitHub settings match the repo-baseline contract | 출력된 `DIFF:`·`MANUAL:` 줄을 1단계의 github 프로필 절차대로 소유자가 적용한다. `확인 못 함`은 설정을 읽지 못한 것이다(권한, 네트워크, `.github/repository-settings.json` 없음). 통과가 아니다 |
+| GitHub settings match the repo-baseline contract | 출력된 `DIFF:`·`MANUAL:` 줄을 1단계의 github 프로필 절차대로 소유자가 적용한다. `확인 못 함`은 설정을 읽지 못한 것이다(권한, 네트워크, main에 `.github/repository-settings.json` 없음). 통과가 아니다. `names …, but origin is …`면 그 파일의 `repository`를 이 저장소로 고쳐 main에 올린다 |
 | a fresh checkout of origin/main | 출력된 git 오류를 고친다(예: 남은 worktree는 `git worktree prune`) |
 | setup·check·test passes on main | origin/main을 새로 받은 체크아웃에서 그 명령이 통과하도록 제품을 고친다 |
 
 doctor는 origin/main을 임시 worktree로 받아 setup → check → test 순서로 돌린다. 끝나면 그 worktree를 지운다.
 
-계약 줄은 `baseline.path`의 repo-baseline 클론에서 `tools/apply_github_settings.py <제품 저장소 경로>`를 plan으로만 돌린다(`--apply` 없이). 그래서 doctor는 GitHub 설정을 바꾸지 않는다. 이 도구는 제품 저장소 작업 트리의 `.github/repository-settings.json`을 읽는다.
+계약 줄은 `baseline.path`의 repo-baseline 클론에서 `tools/apply_github_settings.py <제품 저장소 경로>`를 plan으로만 돌린다(`--apply` 없이). 그래서 doctor는 GitHub 설정을 바꾸지 않는다. 다른 줄처럼 origin/main을 받은 임시 worktree의 `.github/repository-settings.json`을 읽는다. 커밋하지 않은 설정은 보지 않는다. 그 파일의 `repository`가 origin과 다르면(다른 저장소에서 복사한 파일) 도구를 돌리지 않고 실패로 보고한다.
 
 ## 4. 과제를 등록한다
 
