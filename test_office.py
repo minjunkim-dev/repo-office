@@ -1,6 +1,7 @@
 """The office pipeline: stage order, sessions, permissions, approvals and stops, with a fake worker."""
 
 import contextlib
+import errno
 import fcntl
 import importlib.util
 import io
@@ -1865,6 +1866,55 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
             self.assertFalse(self.engine.clear_queue_block(self.job))  # not cleared: the next check tries again
         self.assertEqual(blocked.read_text(encoding="utf-8"), note)
         self.assertEqual([p.name for p in [*self.job.glob(".BLOCKED.*"), *self.job.glob("BLOCKED.*.md")]], [])
+
+    def test_without_hard_links_a_note_is_still_set_aside(self):
+        blocked = self.job / "BLOCKED.md"
+        for code in (errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EXDEV):  # exFAT, some network mounts
+            with self.subTest(errno=code):
+                for p in self.job.glob("BLOCKED*.md"):
+                    p.unlink()
+                (self.job / "BLOCKED.200.md").write_text("theirs\n", encoding="utf-8")
+                note = f"# 막힘\n\n{self.engine.QUEUE_BLOCK}x https://github.com/o/r/pull/7\n"
+                blocked.write_text(note, encoding="utf-8")
+                os.utime(blocked, (200, 200))
+
+                def no_links(src, dst):  # a new block() lands while the note is held; then the link fails
+                    blocked.write_text("# 막힘\n\nnew block\n", encoding="utf-8")
+                    raise OSError(code, os.strerror(code))
+                with unittest.mock.patch.object(self.engine.os, "link", no_links):
+                    self.assertTrue(self.engine.clear_queue_block(self.job))
+                self.assertEqual({p.name: p.read_text(encoding="utf-8") for p in self.job.glob("BLOCKED.*.md")},
+                                 {"BLOCKED.200.md": "theirs\n", "BLOCKED.200.1.md": note})
+                self.assertEqual(blocked.read_text(encoding="utf-8"), "# 막힘\n\nnew block\n")
+                self.assertEqual([p.name for p in self.job.glob(".BLOCKED.*")], [])
+
+    def test_without_hard_links_a_note_that_cannot_be_archived_goes_back_without_overwriting(self):
+        blocked, rename = self.job / "BLOCKED.md", os.rename
+        for new_block in (False, True):
+            with self.subTest(new_block=new_block):
+                for p in self.job.glob("BLOCKED*.md"):
+                    p.unlink()
+                blocked.write_text("# 막힘\n\nmine\n", encoding="utf-8")
+                os.utime(blocked, (200, 200))
+                failed = []
+
+                def no_links(src, dst):
+                    if new_block:
+                        blocked.write_text("# 막힘\n\nnew block\n", encoding="utf-8")
+                    raise OSError(1, "Operation not permitted")
+
+                def once(src, dst):  # the first archive rename fails; the rest work
+                    if Path(dst).name.startswith("BLOCKED.2") and not failed:
+                        failed.append(dst)
+                        raise OSError(5, "Input/output error")
+                    rename(src, dst)
+                with unittest.mock.patch.object(self.engine.os, "link", no_links), \
+                        unittest.mock.patch.object(self.engine.os, "rename", once), self.assertRaises(OSError):
+                    self.engine.set_aside(blocked)
+                kept = {p.name: p.read_text(encoding="utf-8") for p in self.job.glob("BLOCKED*.md")}
+                self.assertEqual(kept, {"BLOCKED.md": "# 막힘\n\nnew block\n", "BLOCKED.200.md": "# 막힘\n\nmine\n"}
+                                 if new_block else {"BLOCKED.md": "# 막힘\n\nmine\n"})
+                self.assertEqual([p.name for p in self.job.glob(".BLOCKED.*")], [])
 
     def test_a_queue_block_clears_once_the_pr_is_back_in_the_queue_or_merged(self):
         bin_dir = Path(self.tmp.name) / "unblockgh"
