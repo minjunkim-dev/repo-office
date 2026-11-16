@@ -69,9 +69,9 @@ const D = JSON.parse(document.getElementById("data").textContent);
 const LANES = [["design", "설계", "opus 작업자"], ["approve", "설계 승인", "사람"], ["implement", "구현", "haiku·sonnet 작업자"],
                ["check", "검사", "엔진(테스트)"], ["pr", "PR·리뷰", "엔진·리뷰 작업자"], ["done", "병합 대기", "사람"]];
 const LANE_OF = { design: "design", approve: "approve", implement: "implement", check: "check",
-                  draft: "pr", ready: "pr", review: "pr", post: "pr", done: "done" };
+                  draft: "pr", ready: "pr", review: "pr", post: "pr", ci: "pr", done: "done" };
 const STAGE_NAME = { design: "설계", approve: "설계 승인", implement: "구현", check: "검사", draft: "PR 열기",
-                     ready: "Ready·봇 요청", review: "리뷰", post: "PR 본문 올리기", done: "병합 대기" };
+                     ready: "Ready·봇 요청", review: "리뷰", post: "PR 본문 올리기", ci: "CI 대기", done: "병합 대기" };
 const BY = Object.fromEntries(D.flow.map(s => [s.id, s.by]));
 const COLOR = { work: "#5ad1a0", wait: "#ffc857", bad: "#ff6b6b", done: "#7aa7ff", idle: "#8a90a8" };
 const name = id => STAGE_NAME[id] || id;

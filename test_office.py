@@ -25,6 +25,7 @@ OFFICE = Path(__file__).resolve().parent
 def load_engine(jobs):
     os.environ["OFFICE_JOBS"] = str(jobs)
     os.environ["OFFICE_RETRY_WAIT"] = "0"  # the engine's one retry of a transient error, without the wait
+    os.environ["OFFICE_CI_EVERY"], os.environ["OFFICE_CI_TIMEOUT"] = "0.01", "5"  # the ci stage asks the fake gh at once
     spec = importlib.util.spec_from_file_location("engine", OFFICE / "pipeline/engine.py")
     engine = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(engine)
@@ -103,6 +104,9 @@ class PipelineTests(unittest.TestCase):
         bin_dir.mkdir()
         log, draft = Path(self.tmp.name) / "gh.log", Path(self.tmp.name) / "draft"
         draft.write_text("true\n", encoding="utf-8")
+        # The ci stage's question: the PR head is the task's HEAD, and its checks are self.checks (green by default).
+        self.checks = Path(self.tmp.name) / "checks.json"
+        self.checks.write_text('[{"name": "CI", "status": "COMPLETED", "conclusion": "SUCCESS"}]', encoding="utf-8")
         (bin_dir / "gh").write_text(
             "#!/usr/bin/env python3\nimport json, sys\n"
             "stdin = [sys.stdin.read()] if sys.argv[1:3] == ['pr', 'edit'] else []\n"
@@ -110,7 +114,11 @@ class PipelineTests(unittest.TestCase):
             "if sys.argv[1:3] == ['pr', 'create']:\n"
             f"    open({str(draft)!r}, 'w').write(str('--draft' in sys.argv).lower())\n"
             "    print('https://github.com/O/R/pull/7')\n"
-            f"if sys.argv[1:3] == ['pr', 'view']: print(open({str(draft)!r}).read().strip())\n"
+            "if sys.argv[1:3] == ['pr', 'view'] and 'headRefOid,statusCheckRollup' in sys.argv:\n"
+            "    import subprocess\n"
+            f"    head = subprocess.run(['git', '-C', {str(self.job / 'repo')!r}, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()\n"
+            f"    print(json.dumps({{'headRefOid': head, 'statusCheckRollup': json.load(open({str(self.checks)!r}))}}))\n"
+            f"elif sys.argv[1:3] == ['pr', 'view']: print(open({str(draft)!r}).read().strip())\n"
             f"if sys.argv[1:3] == ['pr', 'ready']: open({str(draft)!r}, 'w').write('false')\n", encoding="utf-8")
         (bin_dir / "gh").chmod(0o755)
         patcher = unittest.mock.patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"})
@@ -144,7 +152,7 @@ class PipelineTests(unittest.TestCase):
         self.assertNotIn("branch.office/search.remote", subprocess.run(
             ["git", "-C", str(self.job / "repo"), "config", "--list"], capture_output=True, text=True).stdout)  # no -u
         writes = [c[:2] for c in gh() if not any("mergeStateStatus" in a for a in c)]  # the board's merge probe only reads
-        self.assertEqual(writes, [["pr", "create"], ["pr", "view"], ["pr", "comment"], ["pr", "edit"]])
+        self.assertEqual(writes, [["pr", "create"], ["pr", "view"], ["pr", "comment"], ["pr", "edit"], ["pr", "view"]])  # the last asks for CI
         self.assertIn("@coderabbitai review", next(c for c in gh() if c[:2] == ["pr", "comment"]))
         report = (self.job / "REPORT.md").read_text()
         head = subprocess.run(["git", "-C", str(self.job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
@@ -166,7 +174,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.engine.run("search", worker), self.engine.DONE)
         self.assertEqual([c[:2] for c in gh()].count(["pr", "comment"]), 1)  # asked once
         # The engine, not the reviewer, posts the review's body: as bytes on stdin to the pr.txt URL.
-        self.assertEqual(gh()[-1], ["pr", "edit", "https://github.com/O/R/pull/7", "--body-file", "-",
+        self.assertEqual(next(c for c in gh() if c[:2] == ["pr", "edit"]), ["pr", "edit", "https://github.com/O/R/pull/7", "--body-file", "-",
                                     "## Summary\n\n## Review\nok\n"])
 
         (design, d_argv, message), (implement, i_argv, _), (review, r_argv, _) = worker.calls[:3]
@@ -626,6 +634,67 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.post(), self.engine.DONE)
         self.assertEqual(tip(), head)
         self.assertEqual(len(edits()), 1)
+
+    def test_a_red_ci_blocks_with_the_failed_checks(self):
+        # bg-600: the check stage passed locally and CI failed; the engine said done and nobody heard of it.
+        self.at_post()
+        self.checks.write_text('[{"name": "smoke", "status": "COMPLETED", "conclusion": "FAILURE", "detailsUrl": "https://ci/1"},'
+                               ' {"name": "CI", "status": "IN_PROGRESS"}]', encoding="utf-8")  # a failure wins over a running check
+        self.assertEqual(self.post(), self.engine.BLOCKED)
+        self.assertIn("smoke https://ci/1", (self.job / "BLOCKED.md").read_text())
+        self.assertEqual(self.state()["stage"], "ci")
+        self.assertTrue((self.job / "REPORT.md").exists())  # the post stage already wrote it
+        # A person reran or fixed CI and the leader answered: the next run asks again and ends.
+        self.checks.write_text('[{"name": "smoke", "status": "COMPLETED", "conclusion": "SUCCESS"}]', encoding="utf-8")
+        time.sleep(0.01)
+        (self.job / "INTENT.md").write_text("# search\n\n- CI를 다시 돌림\n", encoding="utf-8")
+        self.assertEqual(self.post(), self.engine.DONE)
+        self.assertIn("통과", (self.job / "REPORT.md").read_text().split("## CI")[-1])
+
+    def test_a_pr_without_checks_ends_after_the_wait(self):
+        self.at_post()
+        self.checks.write_text("[]", encoding="utf-8")
+        self.engine.CI_NONE = 0
+        self.assertEqual(self.post(), self.engine.DONE)
+        self.assertIn("체크 없음", (self.job / "REPORT.md").read_text())
+
+    def test_a_pr_without_checks_yet_is_waited_on(self):
+        # GitHub starts the checks a while after the push: no checks before CI_NONE is not yet "no CI".
+        self.at_post()
+        self.checks.write_text("[]", encoding="utf-8")
+        self.engine.CI_LIMIT = 0.05
+        self.assertEqual(self.post(), self.engine.BLOCKED)
+        self.assertIn("did not finish", (self.job / "BLOCKED.md").read_text())
+        self.assertNotIn("## CI", (self.job / "REPORT.md").read_text())
+
+    def test_checks_of_an_older_head_are_not_waited_on(self):
+        self.at_post()
+        self.engine.CI_LIMIT, self.engine.CI_MOVED = 0.05, 3600  # within the grace GitHub may still show the old head
+        real = subprocess.run
+        # The old head's checks are green: only the head comparison keeps them from ending the run.
+        green = '[{"name": "CI", "status": "COMPLETED", "conclusion": "SUCCESS"}]'
+        old = lambda argv, **kw: (subprocess.CompletedProcess(argv, 0, f'{{"headRefOid": "old", "statusCheckRollup": {green}}}', "")  # noqa: E731
+                                  if "headRefOid,statusCheckRollup" in argv else real(argv, **kw))
+        with unittest.mock.patch.object(self.engine.subprocess, "run", side_effect=old):
+            self.assertEqual(self.post(), self.engine.BLOCKED)
+        self.assertIn("did not finish", (self.job / "BLOCKED.md").read_text())
+
+    def test_a_pr_head_that_moved_blocks_at_once_with_the_reason(self):
+        # PR #66 review P1: a person pushed after the engine; waiting the whole hour then saying "did not finish" was wrong.
+        self.at_post()
+        self.engine.CI_LIMIT, self.engine.CI_MOVED = 1, 0  # without the check this ends as "did not finish"
+        real = subprocess.run
+        green = '[{"name": "CI", "status": "COMPLETED", "conclusion": "SUCCESS"}]'
+        moved = lambda argv, **kw: (subprocess.CompletedProcess(argv, 0, f'{{"headRefOid": "newer", "statusCheckRollup": {green}}}', "")  # noqa: E731
+                                    if "headRefOid,statusCheckRollup" in argv else real(argv, **kw))
+        started = time.time()
+        with unittest.mock.patch.object(self.engine.subprocess, "run", side_effect=moved):
+            self.assertEqual(self.post(), self.engine.BLOCKED)
+        self.assertLess(time.time() - started, 60)
+        blocked = (self.job / "BLOCKED.md").read_text()
+        self.assertIn("PR head moved", blocked)
+        self.assertIn("newer", blocked)
+        self.assertNotIn("## CI", (self.job / "REPORT.md").read_text())  # green checks of another head are not this PR's
 
     def test_easy_reads_the_new_lines_and_the_old_ones(self):
         easy = lambda d, b: self.engine.easy(d.encode(), b.encode())  # noqa: E731

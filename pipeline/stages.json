@@ -104,6 +104,11 @@
    "id": "post",
    "by": "script",
    "edit": "review-body.md"
+  },
+  {
+   "id": "ci",
+   "by": "script",
+   "ci": "pr.txt"
   }
  ]
 }
