@@ -975,11 +975,13 @@ def job_status(job, ask=True):
     elif (job / "pr.txt").exists():
         note = (job / "pr.txt").read_text(encoding="utf-8").strip()
     else:  # fails counts tries since the last pass or answer: while it does, the last failure says why a stage runs again
-        last = (state.get("failures") or [None])[-1]
-        # A haiku give-up (BLOCKED.md) adds no fail, but sonnet reruns the same stage: show it until the stage moves on.
-        again = isinstance(last, dict) and (state.get("fails") or (
-            last.get("model") == "haiku" and not last.get("blocked") and last.get("stage") == state.get("stage")))
-        note = f"직전 실패: {last.get('reason', '')}"[:60] if again else ""
+        fail = (state.get("failures") or [None])[-1]
+        # A haiku give-up (BLOCKED.md) adds no fail, but sonnet reruns the same stage without a move: show it until the
+        # stage moves on. at is whole seconds, since is not: a give-up in the second the stage began still counts.
+        again = isinstance(fail, dict) and (state.get("fails") or (
+            fail.get("model") == "haiku" and not fail.get("blocked") and fail.get("stage") == state.get("stage")
+            and fail.get("at", -1) >= int(state["since"])))
+        note = f"직전 실패: {fail.get('reason', '')}"[:60] if again else ""
     # run() holds run.lock while it works (this process too, on another descriptor): a lock we cannot share means an engine runs.
     running = 0
     if (job / "run.lock").exists():

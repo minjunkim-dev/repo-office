@@ -1321,8 +1321,16 @@ class PipelineTests(unittest.TestCase):
         (self.job / "pr.txt").unlink(missing_ok=True)
         (self.job / "BLOCKED.md").unlink(missing_ok=True)  # a block's own reason comes first
         self.assertEqual(self.engine.job_status(self.job, ask=False)["note"], "")
-        self.engine.save(self.job / "state.json", {**self.state(), "stage": "implement", "fails": {}})
-        self.assertIn("직전 실패", self.engine.job_status(self.job, ask=False)["note"])
+        gave_up = self.state()["failures"][-1]["at"]
+        self.engine.save(self.job / "state.json", {**self.state(), "stage": "implement", "fails": {}, "since": gave_up - 1.5})
+        status = self.engine.job_status(self.job, ask=False)
+        self.assertIn("직전 실패", status["note"])
+        newest = max((f for f in self.job.iterdir() if f.is_file() and f.name != "run.lock"), key=lambda f: f.stat().st_mtime)
+        self.assertTrue(status["last"].startswith(newest.name), status["last"])  # the note keeps the newest file's name
+        # Back in implement later (a block answered, a check that sends it back): the old give-up is not why it runs.
+        self.engine.save(self.job / "state.json", {**self.state(), "since": gave_up + 1.0})
+        self.assertEqual(self.engine.job_status(self.job, ask=False)["note"], "")
+        self.engine.save(self.job / "state.json", {**self.state(), "since": gave_up - 1.5})
         # A haiku run that stopped on a block (hc error, usage limit) is not a failed try: no note for it.
         *earlier, last = self.state()["failures"]
         self.engine.save(self.job / "state.json", {**self.state(), "failures": [*earlier, {**last, "blocked": True}]})
