@@ -541,7 +541,7 @@ def advance(job, name, runner):
     # Only here, once per run: a worker that blocks and then writes INTENT.md in the same run must not unblock itself.
     if blocked.exists() and intent.exists() and intent.stat().st_mtime > blocked.stat().st_mtime:
         setup = SETUP_BLOCK in blocked.read_text(encoding="utf-8", errors="replace")
-        blocked.replace(job / f"BLOCKED.{int(blocked.stat().st_mtime)}.md")
+        set_aside(blocked)
         state["fails"].clear()
         state.pop("retried", None)  # an answered stage gets its one retry again
         save(state_path, state)
@@ -998,6 +998,20 @@ QUEUE_QUERY = ("query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r
 QUEUE_BLOCK = "removed from merge queue at "
 
 
+def set_aside(blocked):
+    """Move an answered BLOCKED.md to BLOCKED.<mtime>.md, or BLOCKED.<mtime>.<n>.md when a note from the same second is kept.
+    os.link fails on a name that exists, so a note another process sets aside at the same moment is never overwritten:
+    checking a name and then moving onto it would leave that gap."""
+    stamp, n = int(blocked.stat().st_mtime), 0
+    while True:
+        try:
+            os.link(blocked, blocked.with_name(f"BLOCKED.{stamp}{f'.{n}' if n else ''}.md"))
+            break
+        except FileExistsError:
+            n += 1
+    blocked.unlink(missing_ok=True)  # another mover set the same note aside first: one extra kept copy, nothing lost
+
+
 def clear_queue_block(job):
     """The PR merged, or a person put it back in the queue: queue_removed's BLOCKED.md no longer holds. It is moved aside
     like an answered block (BLOCKED.<mtime>.md). Any other block stays: only a person's answer clears those."""
@@ -1006,7 +1020,7 @@ def clear_queue_block(job):
         line = next((l for l in blocked.read_text(encoding="utf-8", errors="replace").splitlines()
                      if l.strip() and not l.startswith("#")), "")
         if line.startswith(QUEUE_BLOCK):
-            blocked.replace(job / f"BLOCKED.{int(blocked.stat().st_mtime)}.md")
+            set_aside(blocked)
             return True
     except OSError:  # no BLOCKED.md, or another reader moved it first
         pass

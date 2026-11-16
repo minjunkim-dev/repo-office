@@ -1468,13 +1468,17 @@ class PipelineTests(unittest.TestCase):
         intent = self.job / "INTENT.md"
         intent.write_text(intent.read_text() + "- 2026-11-14: v2 API를 쓴다\n", encoding="utf-8")
         os.utime(intent, (time.time() + 5, time.time() + 5))
+        stamp = int((self.job / "BLOCKED.md").stat().st_mtime)
+        earlier = self.job / f"BLOCKED.{stamp}.md"  # a note set aside earlier in the same second
+        earlier.write_text("earlier\n", encoding="utf-8")
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)  # design written, waits for approval
         self.assertEqual(len(worker.calls), 2)
         self.assertIn("Re-read", worker.calls[1][2])
         self.assertIn(str(intent), worker.calls[1][2])
         self.assertFalse((self.job / "BLOCKED.md").exists())
-        self.assertTrue(list(self.job.glob("BLOCKED.*.md")))  # the old block is kept
+        self.assertEqual(earlier.read_text(encoding="utf-8"), "earlier\n")  # the old block is kept beside it
+        self.assertEqual((self.job / f"BLOCKED.{stamp}.1.md").read_text(encoding="utf-8"), "which API?\n")
 
     def test_a_worker_that_blocks_and_writes_intent_does_not_unblock_itself(self):
         class Worker(FakeWorker):
@@ -1812,6 +1816,39 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         self.assertNotIn("enqueue", calls.lower())
         self.assertNotIn("mutation", calls)
         self.assertFalse([c for c in map(json.loads, calls.splitlines()) if c[:2] == ["pr", "merge"]])
+
+    def test_notes_set_aside_in_the_same_second_are_all_kept(self):
+        blocked = self.job / "BLOCKED.md"
+        notes = [f"# 막힘\n\n{self.engine.QUEUE_BLOCK}2026-11-17T0{i}:00:00Z: x https://github.com/o/r/pull/7\n" for i in range(2)]
+        for note in notes:  # clear_queue_block twice, then advance's answered block: all from second 100
+            blocked.write_text(note, encoding="utf-8")
+            os.utime(blocked, (100.5, 100.5))
+            self.assertTrue(self.engine.clear_queue_block(self.job))
+        blocked.write_text("# 막힘\n\nwhich API?\n", encoding="utf-8")
+        os.utime(blocked, (100, 100))
+        self.engine.set_aside(blocked)
+        self.assertFalse(blocked.exists())
+        kept = {p.name: p.read_text(encoding="utf-8") for p in self.job.glob("BLOCKED.*.md")}
+        self.assertEqual(kept, {"BLOCKED.100.md": notes[0], "BLOCKED.100.1.md": notes[1],
+                                "BLOCKED.100.2.md": "# 막힘\n\nwhich API?\n"})
+
+    def test_a_note_set_aside_at_the_same_moment_elsewhere_is_never_overwritten(self):
+        blocked, link = self.job / "BLOCKED.md", os.link
+        blocked.write_text("# 막힘\n\nmine\n", encoding="utf-8")
+        os.utime(blocked, (200, 200))
+        taken = []
+
+        def racing(src, dst):  # another process (the board) takes the free name just before this one moves onto it
+            if not taken:
+                taken.append(dst)
+                Path(dst).write_text("theirs\n", encoding="utf-8")
+            link(src, dst)
+            Path(src).unlink()  # and it removes this BLOCKED.md too: this mover's own unlink then finds nothing
+        with unittest.mock.patch.object(self.engine.os, "link", racing):
+            self.engine.set_aside(blocked)
+        self.assertEqual({p.name: p.read_text(encoding="utf-8") for p in self.job.glob("BLOCKED.*.md")},
+                         {"BLOCKED.200.md": "theirs\n", "BLOCKED.200.1.md": "# 막힘\n\nmine\n"})
+        self.assertFalse(blocked.exists())
 
     def test_a_queue_block_clears_once_the_pr_is_back_in_the_queue_or_merged(self):
         bin_dir = Path(self.tmp.name) / "unblockgh"
