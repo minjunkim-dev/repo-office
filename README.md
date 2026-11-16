@@ -21,7 +21,7 @@ macOS에서만 돌려 봤다.
 | git, [gh](https://cli.github.com) | worktree를 만들고, push하고, PR을 연다 | `brew install gh` 뒤 `gh auth login` |
 | [Claude Code](https://claude.com/claude-code) | leader와 작업자가 이것으로 돈다 | 설치하고 로그인한다 |
 | hc(herdr-core) | 터미널 도구다. 작업자를 대화형 Claude Code로 띄우고, 턴이 끝날 때까지 기다리고, 닫는다 | `curl -fsSL https://releases.herdr.dev/core/install.sh \| sh`(`~/.local/bin`에 `hc`가 생긴다). 판 올리기는 `hc update` |
-| [repo-baseline](https://github.com/minjunkim-dev/repo-baseline) 클론 | 리뷰 지시서, 리뷰 전에 돌리는 확인 스크립트, 정책이 있다 | `git clone` |
+| [repo-baseline](https://github.com/minjunkim-labs/repo-baseline) 클론 | 리뷰 지시서, 리뷰 전에 돌리는 확인 스크립트, 정책이 있다 | `git clone` |
 | mattpocock-skills 플러그인 | 작업자가 `tdd`·`diagnosing-bugs`·`code-review` 스킬을 부른다 | Claude Code에서 `/plugin marketplace add mattpocock/skills`, 그다음 `/plugin install mattpocock-skills@mattpocock`. 사용자 설정에서는 꺼 둬도 된다. office `.claude/settings.json`이 작업자에게만 켠다 |
 
 worktree는 한 git 저장소의 브랜치를 다른 폴더에 따로 꺼낸 작업 폴더다. 엔진은 과제마다 제품 저장소의 worktree를 만들어, 여러 과제가 서로 건드리지 않고 함께 돈다.

@@ -4,7 +4,7 @@
 
 ## 1. repo-baseline을 적용한다
 
-repo-baseline의 [`prompts/setup.md`](https://github.com/minjunkim-dev/repo-baseline/blob/main/prompts/setup.md)를 코딩 에이전트에게 주고 따르게 한다. 그러면 `AGENTS.md`와 `.github/pull_request_template.md`가 생긴다.
+repo-baseline의 [`prompts/setup.md`](https://github.com/minjunkim-labs/repo-baseline/blob/main/prompts/setup.md)를 코딩 에이전트에게 주고 따르게 한다. 그러면 `AGENTS.md`와 `.github/pull_request_template.md`가 생긴다.
 
 이 프롬프트는 GitHub 서버 설정을 바꾸지 않는다. `main` 브랜치 보호는 소유자가 자기 기기에서 repo-baseline의 `tools/apply_github_settings.py`로 켠다. 이 스크립트는 프롬프트의 2단계가 만든 `.github/repository-settings.json`을 읽는다.
 
