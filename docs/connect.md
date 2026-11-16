@@ -4,11 +4,14 @@
 
 ## 1. repo-baseline을 적용한다
 
-repo-baseline의 [`prompts/setup.md`](https://github.com/minjunkim-labs/repo-baseline/blob/main/prompts/setup.md)를 코딩 에이전트에게 주고 따르게 한다. 그러면 `AGENTS.md`와 `.github/pull_request_template.md`가 생긴다.
+repo-baseline이 계약(필수 체크, 머지 큐, 병합 설정)의 원본이다. office는 이 절차를 다시 적지 않는다. repo-baseline 문서를 그대로 따른다.
 
-이 프롬프트는 GitHub 서버 설정을 바꾸지 않는다. `main` 브랜치 보호는 소유자가 자기 기기에서 repo-baseline의 `tools/apply_github_settings.py`로 켠다. 이 스크립트는 프롬프트의 2단계가 만든 `.github/repository-settings.json`을 읽는다.
+- 코어 파일: repo-baseline [`README.md`](https://github.com/minjunkim-labs/repo-baseline/blob/main/README.md)의 「코어 적용 3단계」. 그러면 `AGENTS.md`와 `.github/pull_request_template.md`가 생긴다.
+- GitHub 설정과 CI: README의 「프로필」 표에서 github 프로필([`templates/github/README.md`](https://github.com/minjunkim-labs/repo-baseline/blob/main/templates/github/README.md))로 간다.
+  - 새 저장소면 「(a) 새 저장소 셋업」을 따른다.
+  - 이미 쓰던 저장소면 「(b) 기존 저장소 옮기기」를 따른다.
 
-이미 repo-baseline을 적용한 저장소는 이 단계를 건너뛴다.
+이미 repo-baseline을 적용한 저장소도 3단계 doctor가 계약을 다시 확인한다.
 
 ## 2. 명령 칸을 채운다
 
@@ -44,10 +47,13 @@ python3 pipeline/engine.py doctor <제품 저장소 경로>
 | PR template on main | `.github/pull_request_template.md`를 둔다(repo-baseline `templates/core/`) |
 | gh is logged in | `gh auth login` |
 | main is protected | 브랜치 보호나 ruleset을 켠다(repo-baseline `tools/apply_github_settings.py`) |
+| GitHub settings match the repo-baseline contract | 출력된 `DIFF:`·`MANUAL:` 줄을 1단계의 github 프로필 절차대로 소유자가 적용한다. `확인 못 함`은 설정을 읽지 못한 것이다(권한, 네트워크, main에 `.github/repository-settings.json` 없음). 통과가 아니다. `names …, but origin is …`면 그 파일의 `repository`를 이 저장소로 고쳐 main에 올린다 |
 | a fresh checkout of origin/main | 출력된 git 오류를 고친다(예: 남은 worktree는 `git worktree prune`) |
 | setup·check·test passes on main | origin/main을 새로 받은 체크아웃에서 그 명령이 통과하도록 제품을 고친다 |
 
 doctor는 origin/main을 임시 worktree로 받아 setup → check → test 순서로 돌린다. 끝나면 그 worktree를 지운다.
+
+계약 줄은 `baseline.path`의 repo-baseline 클론에서 `tools/apply_github_settings.py <제품 저장소 경로>`를 plan으로만 돌린다(`--apply` 없이). 그래서 doctor는 GitHub 설정을 바꾸지 않는다. 다른 줄처럼 origin/main을 받은 임시 worktree의 `.github/repository-settings.json`을 읽는다. 커밋하지 않은 설정은 보지 않는다. 그 파일의 `repository`가 origin과 다르면(다른 저장소에서 복사한 파일) 도구를 돌리지 않고 실패로 보고한다.
 
 ## 4. 과제를 등록한다
 
@@ -66,6 +72,8 @@ python3 pipeline/engine.py new <과제> --repo <제품 저장소 경로> --base 
 그다음 `jobs/<과제>/INTENT.md`를 채우고 `engine.py run <과제>`를 돌린다. 그 뒤 사람이 할 일은 설계 승인과 PR 병합 둘뿐이다.
 
 엔진은 PR을 Ready로 바꾼다. PR이 쉬움 판정을 받지 못하면 리뷰 봇에 리뷰를 한 번 요청한다. 쉬움 판정은 엔진이 내린다. 사람이 승인한 설계와 PR 본문이 둘 다 `되돌리기: 쉬움`이라고 쓰고, 본문이 `민감한 파일: 없음`이라고 써야 한다. 브랜치가 에이전트 설정 폴더나 지시 파일(`.github`, `.claude`, `AGENTS.md` 등)을 바꾸면 본문과 관계없이 쉬움이 아니다. 자세한 조건은 [AGENTS.md](../AGENTS.md)에 있다. 그다음 다른 세션이 리뷰한다. 리뷰가 끝나면 엔진이 `jobs/<과제>/REPORT.md`에 결과와 병합 명령을 남긴다.
+
+사람이 그 PR을 머지 큐에 넣은 뒤 병합되지 않고 빠지면(`merge_group` CI 실패, 충돌 등) `workers`와 `board`가 그 이유와 PR 링크를 `jobs/<과제>/BLOCKED.md`에 쓴다. 엔진은 큐에 다시 넣지 않는다.
 
 ## 5. 원하면 코드 작업을 office로 보내게 한다
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Move office tasks through stages.json. Workers run in hc terminals; this script only reads and writes files.
 
-  engine.py doctor <repo>     check that a product repository can connect (AGENTS.md cells pass on main, protection, gh)
+  engine.py doctor <repo>     check that a product repository can connect (AGENTS.md cells pass on main, protection, gh,
+                              repo-baseline's GitHub contract by its apply_github_settings.py plan)
   engine.py new <task> --repo PATH [--base origin/main]  test = the product AGENTS.md check && test cells; runs setup once
   engine.py run <task>        advance until a person is needed, the task is blocked, or it is done
   engine.py approve <task>    a person approves the current design file (bound to its sha256)
@@ -13,6 +14,7 @@
 
 After the check passes, run pushes the task branch, opens a PR from pr-body.md, marks it ready and, unless it proved easy, asks the review bot once.
 After the review, run replaces the PR body with review-body.md and writes REPORT.md. People act only to approve the design and to merge.
+Once a person has put a finished task's PR in the merge queue, workers and the board write BLOCKED.md if it leaves unmerged.
 
 Exit codes for run: 0 done, 2 no such task or another run of it is going, 3 waiting for a person, 4 blocked.
 """
@@ -883,14 +885,14 @@ def doctor(repo):
             rules.returncode == 0 and rules.stdout.strip() not in ("", "0"))
     report(protected, "main is protected (branch protection or a ruleset)",
            "turn it on (repo-baseline tools/apply_github_settings.py)" if repo_slug else "origin is not a GitHub repository")
-    if isinstance(cells, str):
-        return 1
     root = Path(tempfile.mkdtemp(prefix="office-doctor-"))
     checkout = root / "main"
     try:
         added = git("worktree", "add", "-q", "--detach", str(checkout), "origin/main")
         report(added.returncode == 0, "a fresh checkout of origin/main", added.stderr.strip())
-        for name in () if added.returncode else ("setup", "check", "test"):  # setup first: check and test may need what it installs
+        contract(checkout, repo_slug, report)
+        # setup first: check and test may need what it installs
+        for name in () if added.returncode or isinstance(cells, str) else ("setup", "check", "test"):
             if cells[name] is None:
                 print(f"ok   {name}: N/A")
                 continue
@@ -901,6 +903,32 @@ def doctor(repo):
         git("worktree", "remove", "--force", str(checkout))
         shutil.rmtree(root, ignore_errors=True)
     return 1 if missing_ else 0
+
+
+def contract(checkout, repo_slug, report):
+    """repo-baseline's GitHub contract for origin/main (checkout): its tool plans (never --apply) and says what differs.
+    Exit 1 is a difference; anything else is a plan that could not read the settings (no access, no network, no
+    settings file, no checkout): never a pass. The tool checks the repository the settings file names, so a file
+    copied from another repository must not pass for this one."""
+    what = "GitHub settings match the repo-baseline contract (apply_github_settings.py plan)"
+    settings = checkout / ".github/repository-settings.json"
+    try:
+        named = str(json.loads(settings.read_text(encoding="utf-8")).get("repository") or "")
+    except (OSError, ValueError, AttributeError):  # no file or not an object: the tool says why
+        named = None
+    if named is not None and repo_slug and named.lower() != repo_slug:
+        return report(False, what, f".github/repository-settings.json on main names {named!r}, but origin is {repo_slug}")
+    try:
+        planned = subprocess.run([sys.executable, str(BASELINE / "tools/apply_github_settings.py"), str(checkout)],
+                                 cwd=checkout if checkout.is_dir() else None, capture_output=True, text=True, timeout=300)
+        code, out, err = planned.returncode, planned.stdout, planned.stderr
+    except (OSError, subprocess.TimeoutExpired) as error:
+        code, out, err = None, "", f"{type(error).__name__}: {error}"
+    # A crash (an import error) also exits 1: a difference is only one the plan printed.
+    if code == 1 and any(l.startswith(("DIFF:", "MANUAL:", "PLAN:")) for l in out.splitlines()):
+        return report(False, what, "the owner applies it as repo-baseline README says\n"
+                      + "\n".join(l for l in out.splitlines() if l.startswith(("DIFF:", "MANUAL:"))))
+    report(code == 0, what, "확인 못 함 (unverified): " + ((err or out).strip().splitlines() or [f"exit {code}"])[-1])
 
 
 CI_FAILED = {"FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"}
@@ -954,12 +982,51 @@ def pr_state(job, state, ask=True):
     merge = str(answer.get("mergeStateStatus") or "") if answer.get("state") == "OPEN" else str(answer.get("state") or "")
     ci = ci_state(answer.get("statusCheckRollup")) if answer.get("state") == "OPEN" else ""
     save(asked, {"merge": merge, "ci": ci})
+    if done and answer.get("state") == "OPEN":
+        queue_removed(job, pr.read_text(encoding="utf-8").strip())
     return False, merge, ci
+
+
+QUEUE_QUERY = ("query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){state isInMergeQueue "
+               "timelineItems(last:1,itemTypes:[ADDED_TO_MERGE_QUEUE_EVENT,REMOVED_FROM_MERGE_QUEUE_EVENT]){nodes{__typename "
+               "... on RemovedFromMergeQueueEvent{id createdAt reason}}}}}}")
+
+
+def queue_removed(job, url):
+    """A person put the finished task's PR in the merge queue and it left unmerged (merge_group CI failed, a conflict, a
+    person dequeued it): write why into BLOCKED.md so workers and the board show it. Each removal event once (.queue-removed).
+    It only reads: the engine never enqueues, re-enqueues or merges. No answer from gh is no alert."""
+    found = re.search(r"/pull/(\d+)", url)
+    repo_slug = slug(url)
+    if not found or not repo_slug:
+        return
+    owner, name = repo_slug.split("/")
+    try:
+        # -f keeps owner and name strings (-F would turn a repo named 2048 or true into a number or a bool); n is an Int.
+        view = subprocess.run(["gh", "api", "graphql", "-f", f"query={QUEUE_QUERY}", "-f", f"o={owner}", "-f", f"r={name}",
+                               "-F", f"n={found[1]}"], cwd=job, capture_output=True, text=True, timeout=20)
+        pull = json.loads(view.stdout)["data"]["repository"]["pullRequest"] if view.returncode == 0 else None
+        last = pull["timelineItems"]["nodes"][-1]
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, IndexError, TypeError):
+        return
+    # GitHub logs a merge as a removal too (reason "merged"), sometimes before the PR reads MERGED.
+    if (not isinstance(last, dict) or last.get("__typename") != "RemovedFromMergeQueueEvent" or pull.get("state") != "OPEN"
+            or pull.get("isInMergeQueue") is not False or str(last.get("reason") or "").lower() == "merged"):
+        return
+    seen = job / ".queue-removed"
+    if seen.exists() and seen.read_text(encoding="utf-8").strip() == str(last.get("id")):
+        return
+    (job / "BLOCKED.md").write_text(
+        f"# 막힘\n\nremoved from merge queue at {last.get('createdAt')}: {last.get('reason') or 'no reason given'} {url}\n\n"
+        "The engine does not enqueue it again. A person fixes the cause; a new push needs a new review (POLICY §5).\n",
+        encoding="utf-8")
+    seen.write_text(f"{last.get('id')}\n", encoding="utf-8")
 
 
 def job_status(job, ask=True):
     """What workers and the board show for one task, from its files, and for a finished one whether its PR is merged."""
     state = load(job / "state.json", {"stage": "-", "since": time.time()})
+    done, merge, ci = pr_state(job, state, ask)  # first: it may write BLOCKED.md (queue_removed), shown in this same row
     blocked = job / "BLOCKED.md"
     files = []
     for p in job.iterdir():
@@ -992,7 +1059,6 @@ def job_status(job, ask=True):
             except BlockingIOError:
                 running = 1
     models = state.get("models") or [{"model": "-"}]
-    done, merge, ci = pr_state(job, state, ask)
     return {"name": job.name, "stage": "blocked" if blocked.exists() else "merged" if done else state["stage"], "at": state["stage"],
             "merged": int(done), "merge": merge, "ci": ci,
             "minutes": int((time.time() - state["since"]) // 60),

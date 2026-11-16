@@ -1204,8 +1204,76 @@ class PipelineTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(self.engine.run("connect", FakeWorker(self.engine.JOBS / "connect")), self.engine.BLOCKED)
 
+    def contract_tool(self, code, out="", err=""):
+        """repo-baseline's apply_github_settings.py in the fake clone: prints out and err, exits code, records its argv."""
+        argv = Path(self.tmp.name) / "contract-argv"
+        (self.baseline / "tools/apply_github_settings.py").write_text(
+            f"import json, sys\nopen({str(argv)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
+            f"print({out!r})\nprint({err!r}, file=sys.stderr)\nsys.exit({code})\n", encoding="utf-8")
+        return lambda: [json.loads(l) for l in argv.read_text().splitlines()] if argv.exists() else []  # noqa: E731
+
+    def test_doctor_checks_the_baseline_contract_by_its_plan_only(self):
+        self.fake_gh()
+        repo = self.product()
+        ran = self.contract_tool(0, "BASELINE: x\nNo writes needed")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(self.engine.doctor(str(repo)), 0, out.getvalue())
+        self.assertIn("ok   GitHub settings match the repo-baseline contract", out.getvalue())
+        self.contract_tool(1, 'BASELINE: x\nDIFF: rulesets.main.strict: true -> false\nPLAN: PUT repos/o/p/rulesets/1 {"long": 1}\n'
+                              "MANUAL: protection carries signed commits\nPlan only; nothing written.")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(self.engine.doctor(str(repo)), 1)
+        failed = [l for l in out.getvalue().splitlines() if l.startswith("FAIL")]
+        self.assertEqual(len(failed), 1, out.getvalue())
+        self.assertIn("GitHub settings match the repo-baseline contract", failed[0])
+        self.assertIn("DIFF: rulesets.main.strict: true -> false", out.getvalue())
+        self.assertIn("MANUAL: protection carries signed commits", out.getvalue())
+        self.assertNotIn("PLAN: PUT", out.getvalue())  # the fix shows what differs, not the long write bodies
+        # A plan that could not read the server is unverified, never a pass.
+        self.contract_tool(2, err="FAILED: HTTP 403: Resource not accessible")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(self.engine.doctor(str(repo)), 1)
+        self.assertIn("확인 못 함 (unverified): FAILED: HTTP 403", out.getvalue())
+        self.contract_tool(1, err="ModuleNotFoundError: No module named 'check_github_settings'")  # a crash exits 1 too
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(self.engine.doctor(str(repo)), 1)
+        self.assertIn("확인 못 함 (unverified): ModuleNotFoundError", out.getvalue())
+        self.assertNotIn("the owner applies it", out.getvalue())
+        (self.baseline / "tools/apply_github_settings.py").unlink()  # a clone without the tool: also unverified
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(self.engine.doctor(str(repo)), 1)
+        self.assertIn("확인 못 함", out.getvalue())
+        # The tool read a fresh checkout of origin/main, one argument and no --apply, every time; the checkout is gone.
+        self.assertEqual([len(a) for a in ran()], [1, 1, 1, 1])
+        self.assertTrue(all(a[0].endswith("/main") and not Path(a[0]).exists() for a in ran()), ran())
+
+    def test_doctor_contract_reads_main_and_refuses_another_repositorys_settings(self):
+        self.fake_gh()
+        repo = self.product()
+        ran = self.contract_tool(0, "No writes needed")
+        git = lambda *a: subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com", *a], check=True)  # noqa: E731
+        settings = repo / ".github/repository-settings.json"
+        settings.write_text('{"repository": "o/other"}\n', encoding="utf-8")
+        git("add", "."), git("commit", "-qm", "copied settings"), git("push", "-q", "origin", "main")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(self.engine.doctor(str(repo)), 1)
+        failed = [l for l in out.getvalue().splitlines() if l.startswith("FAIL")]
+        self.assertEqual(len(failed), 1, out.getvalue())
+        self.assertIn("names 'o/other', but origin is o/p", failed[0])
+        self.assertEqual(ran(), [])  # a pass of the tool would be for o/other: it is not asked
+        settings.write_text('{"repository": "o/p"}\n', encoding="utf-8")  # fixed only in the working tree: main still names o/other
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(self.engine.doctor(str(repo)), 1)
+        self.assertIn("names 'o/other'", out.getvalue())
+        settings.write_text('{"repository": "O/P"}\n', encoding="utf-8")  # owner and name are case-insensitive
+        git("commit", "-qam", "own settings"), git("push", "-q", "origin", "main")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(self.engine.doctor(str(repo)), 0, out.getvalue())
+        self.assertEqual(len(ran()), 1)
+
     def test_doctor_says_what_the_product_lacks(self):
         _, calls = self.fake_gh()  # gh answers 0: logged in, main protected
+        self.contract_tool(0)  # the product follows the baseline contract
         repo = self.product(setup="echo s >> setup-ran", test="test -f setup-ran")
         with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(self.engine.doctor(str(repo)), 0, out.getvalue())
@@ -1669,7 +1737,9 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         asked = lambda: len(log.read_text().splitlines()) if log.exists() else 0  # noqa: E731
         self.assertEqual(self.engine.tasks()[0]["stage"], "done")  # open: still waiting for a person to merge
         self.assertEqual((self.engine.tasks()[0]["stage"], self.engine.tasks()[0]["merge"]), ("done", "BEHIND"))
-        self.assertEqual(asked(), 1)  # the board rewrites every 5 seconds: gh is not asked each time
+        # The board rewrites every 5 seconds: gh is not asked each time. An open finished PR is asked twice a minute:
+        # pr view, and one graphql read of the merge queue (queue_removed), which pr view cannot give.
+        self.assertEqual(asked(), 2)
         texts = [e["text"] for e in self.run_page()]
         self.assertIn("병합 대기", texts)  # the merge queue merges a PR whose base moved on (POLICY §5)
         self.assertNotIn("브랜치 갱신 필요", texts)
@@ -1683,12 +1753,65 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         self.assertEqual((row["stage"], row["merged"]), ("merged", 1))
         self.assertEqual(row["last"].split()[0], "pr.txt")  # the engine's own marks are not the task's last file
         self.engine.tasks()
-        self.assertEqual(asked(), 3)  # a yes is kept
+        self.assertEqual(asked(), 5)  # a yes is kept; a merged PR is not asked about the queue
         made = self.run_page()
         texts = [e["text"] for e in made]
         self.assertNotIn("search", texts)
         self.assertTrue(any("병합 끝나 숨김 1" in t for t in texts), texts)
         self.assertEqual([json.loads(e["text"]) for e in made if e["tag"] == "posted"], [{"office": []}])
+
+    def test_a_pr_that_leaves_the_merge_queue_unmerged_blocks_the_task_once(self):
+        bin_dir, log = Path(self.tmp.name) / "queuegh", Path(self.tmp.name) / "queue.log"
+        bin_dir.mkdir()
+        queue = Path(self.tmp.name) / "queue.json"
+        (bin_dir / "gh").write_text(
+            "#!/usr/bin/env python3\nimport json, sys\n"
+            f"open({str(log)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
+            "if sys.argv[1:3] == ['api', 'graphql']:\n"
+            f"    text = open({str(queue)!r}).read()\n"
+            "    sys.exit(3) if text == 'fail' else print(text)\n"
+            "else: print(json.dumps({'state': 'OPEN', 'mergeStateStatus': 'CLEAN'}))\n", encoding="utf-8")
+        (bin_dir / "gh").chmod(0o755)
+        patcher = unittest.mock.patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.engine.save(self.job / "state.json", {"stage": "done", "since": 0})
+        (self.job / "pr.txt").write_text("https://github.com/O/R/pull/7\n", encoding="utf-8")
+
+        def ask(typename, reason="CI failed", in_queue=False, state="OPEN", id_="E1"):
+            node = {"__typename": typename, **({"id": id_, "createdAt": "2026-11-16T10:00:00Z", "reason": reason}
+                                               if typename.startswith("Removed") else {})}
+            queue.write_text(json.dumps({"data": {"repository": {"pullRequest": {
+                "state": state, "isInMergeQueue": in_queue, "timelineItems": {"nodes": [node]}}}}}), encoding="utf-8")
+            (self.job / ".merge-asked").unlink(missing_ok=True)
+            return self.engine.tasks()[0]
+
+        blocked = self.job / "BLOCKED.md"
+        for quiet in (lambda: ask("AddedToMergeQueueEvent", in_queue=True),  # waiting in the queue
+                      lambda: ask("RemovedFromMergeQueueEvent", reason="merged"),  # GitHub logs a merge as a removal
+                      lambda: ask("RemovedFromMergeQueueEvent", in_queue=True),  # removed, then put back
+                      lambda: (queue.write_text("fail"), (self.job / ".merge-asked").unlink(missing_ok=True),
+                               self.engine.tasks())):  # gh cannot answer: no alert
+            quiet()
+            self.assertFalse(blocked.exists())
+        row = ask("RemovedFromMergeQueueEvent", reason="The merge queue CI failed")
+        self.assertEqual(row["stage"], "blocked")
+        text = blocked.read_text()
+        self.assertIn("removed from merge queue at 2026-11-16T10:00:00Z: The merge queue CI failed https://github.com/O/R/pull/7", text)
+        self.assertIn("removed from merge queue", row["note"])
+        graphql = [c for c in map(json.loads, log.read_text().splitlines()) if c[:2] == ["api", "graphql"]][-1]
+        self.assertEqual(list(zip(graphql[4::2], graphql[5::2])), [("-f", "o=o"), ("-f", "r=r"), ("-F", "n=7")])
+        # The leader answers (the engine moves BLOCKED.md aside): the same removal does not block again, a new one does.
+        blocked.rename(self.job / "BLOCKED.1.md")
+        ask("RemovedFromMergeQueueEvent", reason="The merge queue CI failed")
+        self.assertFalse(blocked.exists())
+        ask("RemovedFromMergeQueueEvent", reason="conflict", id_="E2")
+        self.assertIn(": conflict ", blocked.read_text())
+        self.engine.tasks(ask=False)  # the stage loop's board rewrite never asks gh
+        calls = log.read_text()
+        self.assertNotIn("enqueue", calls.lower())
+        self.assertNotIn("mutation", calls)
+        self.assertFalse([c for c in map(json.loads, calls.splitlines()) if c[:2] == ["pr", "merge"]])
 
     def test_ci_state_puts_a_failure_before_a_running_check(self):
         run = lambda **c: {"__typename": "CheckRun", **c}  # noqa: E731
