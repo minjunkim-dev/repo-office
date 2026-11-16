@@ -621,7 +621,8 @@ def advance(job, name, runner):
             if (job / "BLOCKED.md").exists():
                 reason = next((l.strip() for l in (job / "BLOCKED.md").read_text(encoding="utf-8", errors="replace").splitlines()
                                if l.strip() and not l.startswith("#")), "BLOCKED.md")
-                record(reason, {"model": model, "effort": effort}, blocked=True)
+                # A haiku worker that gives up is a failed try (sonnet reruns it), not a block.
+                record(reason, {"model": model, "effort": effort}, **({} if model == "haiku" else {"blocked": True}))
                 save(state_path, state)
                 if model == "haiku":  # a haiku worker that gave up: sonnet tries once in a new session
                     (job / "BLOCKED.md").replace(job / "BLOCKED.haiku.md")
@@ -930,9 +931,10 @@ def job_status(job, ask=True):
                      if l.strip() and not l.startswith("#")), "")[:60]  # block() writes a 「# 막힘」 heading first
     elif (job / "pr.txt").exists():
         note = (job / "pr.txt").read_text(encoding="utf-8").strip()
-    else:  # before a PR, the last failure says why a stage is running again
+    else:  # fails counts tries since the last pass or answer: while it does, the last failure says why a stage runs again
         failures = state.get("failures") or []
-        note = f"직전 실패: {failures[-1].get('reason', '')}"[:60] if failures and isinstance(failures[-1], dict) else ""
+        note = (f"직전 실패: {failures[-1].get('reason', '')}"[:60]
+                if state.get("fails") and failures and isinstance(failures[-1], dict) else "")
     # run() holds run.lock while it works (this process too, on another descriptor): a lock we cannot share means an engine runs.
     running = 0
     if (job / "run.lock").exists():

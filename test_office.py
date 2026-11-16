@@ -268,7 +268,9 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(self.engine.run("search", worker), self.engine.BLOCKED)
         self.assertEqual(len(self.state()["failures"]), 4)
         self.assertTrue((self.job / "test.fail-4.log").exists())
-        (self.job / "BLOCKED.md").unlink()  # a block's own reason comes first; without one, workers shows the last failure
+        (self.job / "BLOCKED.md").unlink()  # a block's own reason comes first
+        self.assertEqual(self.engine.job_status(self.job, ask=False)["note"], "")  # the answer cleared fails: nothing runs again
+        self.engine.save(self.job / "state.json", {**self.state(), "fails": {"check": 1}})
         self.assertIn("직전 실패", self.engine.job_status(self.job, ask=False)["note"])
 
     def test_a_block_from_hc_is_kept_apart_from_failed_tries(self):
@@ -1243,6 +1245,8 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual(self.runs()[-1], {"stage": "implement", "model": "sonnet", "effort": "medium", "rerun": True})
                 self.assertIn("exit 0", (self.job / "check.md").read_text())  # the sonnet run passed the check
                 self.assertNotIn("gave up", (self.job / "BLOCKED.md").read_text() if (self.job / "BLOCKED.md").exists() else "")
+                # The haiku try that failed is kept as a failure, never as a block.
+                self.assertEqual([(f["model"], f.get("blocked")) for f in self.state()["failures"]][:1], [("haiku", None)])
         self.assertTrue((self.job / "BLOCKED.haiku.md").exists())
 
     def test_a_transient_error_is_retried_once_then_blocks(self):
