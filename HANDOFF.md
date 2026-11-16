@@ -21,12 +21,12 @@
 
 | 구성 요소 | 어디 | 맡는 층 | 지금 상태 |
 | --- | --- | --- | --- |
-| repo-baseline(원본) | `minjunkim-dev/repo-baseline`, 로컬 클론 경로는 `baseline.path` | PR이 `main`에 들어가는 조건: 완료 증거, 다른 컨텍스트 리뷰, 되돌리기 판정, 사람 병합, GitHub 설정, 회고 | 코어 4파일 + 선택 프로필. 2026-11-12 `main` = `f6566c4` |
-| repo-office(이 저장소) | `minjunkim-dev/repo-office`(공개). 2026-11-11에 repo-baseline-office의 `claude-office/`에서 git 기록째 옮겼다 | PR 전 작업을 단계로 돌리고, PR을 Ready로 열고, 리뷰를 한 번 돌린다 | 엔진·스킬 연결·PR 열기까지 실측함 |
+| repo-baseline(원본) | `minjunkim-labs/repo-baseline`, 로컬 클론 경로는 `baseline.path` | PR이 `main`에 들어가는 조건: 완료 증거, 다른 컨텍스트 리뷰, 되돌리기 판정, 사람 병합, GitHub 설정, 회고 | 코어 4파일 + 선택 프로필. 2026-11-12 `main` = `f6566c4` |
+| repo-office(이 저장소) | `minjunkim-labs/repo-office`(공개). 2026-11-11에 repo-baseline-office의 `claude-office/`에서 git 기록째 옮겼다 | PR 전 작업을 단계로 돌리고, PR을 Ready로 열고, 리뷰를 한 번 돌린다 | 엔진·스킬 연결·PR 열기까지 실측함 |
 | Matt Pocock 스킬 | 플러그인 `mattpocock-skills@mattpocock`(캐시 1.3.2). 사용자 설정에서는 꺼져 있고, office `.claude/settings.json`의 `enabledPlugins`가 작업자에게만 켠다 | 리뷰 두 축, TDD, 버그 진단, 설계([matt-skills 프로필](https://github.com/minjunkim-dev/repo-baseline/blob/main/profiles/matt-skills/README.md)) | 작업자에 실린다(§6) |
 | pstack | 플러그인 `pstack@cursor-plugins` 0.15.36. 사용자 설정에서 켜져 있고 office 설정에는 없다 | 설계 질문(`interrogate`), 영향 범위(`blast-radius`) | 사람이 부를 때만([pstack 프로필](https://github.com/minjunkim-dev/repo-baseline/blob/main/profiles/pstack/README.md)). leader가 권한다 |
 | 개인 도구 | `hc`(herdr-core), ai-memory, trail 등 | 작업자 띄우기, 세션 간 기억 | 엔진이 `hc`를 쓴다 |
-| 장난감 저장소 | `minjunkim-dev/office-toy`(공개) | 실측용 제품 저장소 | 시험이 끝나면 지운다 |
+| 장난감 저장소 | `minjunkim-labs/office-toy`(공개) | 실측용 제품 저장소 | 실측을 다시 할 때 쓴다. 2026-11-16에 개인 계정에서 조직으로 옮겼다 |
 | 소비 레포 | BGLike(Godot), smallnext 등 | 실제 과제 | office로 돌린 기록이 있다(§6의 BGLike·smallnext 항목) |
 
 ## 3. 스킬 호출의 사실과 단계 배치
@@ -171,7 +171,7 @@ python3 pipeline/engine.py workers
 
 ## 8. 이어받을 때 주의
 
-- 정본은 원본 `minjunkim-dev/repo-baseline`이다. 리뷰 프롬프트·preflight·프로필(matt-skills, pstack) 규칙을 바꿔야 하면 원본에서 바꾼다. 이 저장소에는 원본 파일의 사본을 두지 않는다.
+- 정본은 원본 `minjunkim-labs/repo-baseline`이다. 리뷰 프롬프트·preflight·프로필(matt-skills, pstack) 규칙을 바꿔야 하면 원본에서 바꾼다. 이 저장소에는 원본 파일의 사본을 두지 않는다.
 - 리뷰 지시서(`pipeline/prompts/review.md`)는 원본의 두 곳에 기대어 있다. matt-skills README 「리뷰」 절의 1·3·4번 번호와 `review_preflight.py --json`의 키 이름이다. 원본에서 둘 중 하나가 바뀌면 이 지시서도 맞춘다. 2026-11-12(`f6566c4`)에 둘 다 맞는 것을 확인했다.
 - 원본 `tools/review_preflight.py`에 자동 보안 리뷰가 지적한 셸 인용 문제가 있었다. 엔진은 #128에서 생긴 `--json`의 리스트(`diff_argv`)를 쓰지 않고 `base`·`head`로 diff를 직접 만든다. 텍스트 출력에 그 문제가 남았는지는 확인하지 않았다. 보안 지적이므로 공개 이슈가 아니라 비공개 경로로 알린다(POLICY §7).
 
