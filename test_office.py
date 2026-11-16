@@ -1468,13 +1468,17 @@ class PipelineTests(unittest.TestCase):
         intent = self.job / "INTENT.md"
         intent.write_text(intent.read_text() + "- 2026-11-14: v2 API를 쓴다\n", encoding="utf-8")
         os.utime(intent, (time.time() + 5, time.time() + 5))
+        stamp = int((self.job / "BLOCKED.md").stat().st_mtime)
+        earlier = self.job / f"BLOCKED.{stamp}.md"  # a note set aside earlier in the same second
+        earlier.write_text("earlier\n", encoding="utf-8")
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)  # design written, waits for approval
         self.assertEqual(len(worker.calls), 2)
         self.assertIn("Re-read", worker.calls[1][2])
         self.assertIn(str(intent), worker.calls[1][2])
         self.assertFalse((self.job / "BLOCKED.md").exists())
-        self.assertTrue(list(self.job.glob("BLOCKED.*.md")))  # the old block is kept
+        self.assertEqual(earlier.read_text(encoding="utf-8"), "earlier\n")  # the old block is kept beside it
+        self.assertEqual((self.job / f"BLOCKED.{stamp}.1.md").read_text(encoding="utf-8"), "which API?\n")
 
     def test_a_worker_that_blocks_and_writes_intent_does_not_unblock_itself(self):
         class Worker(FakeWorker):
