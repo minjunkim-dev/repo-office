@@ -56,6 +56,10 @@ RETRY_WAIT = float(os.environ.get("OFFICE_RETRY_WAIT", "10"))
 # A worker turn longer than this is taken as hung: the engine closes it and blocks the task.
 WORKER_LIMIT = float(os.environ.get("OFFICE_WORKER_TIMEOUT", str(4 * 3600)))
 BOARD_EVERY = float(os.environ.get("OFFICE_BOARD_EVERY", "5"))  # seconds between board rewrites while a run goes
+# The ci stage waits this long at most for the PR's checks, asking gh every CI_EVERY seconds; none after CI_NONE seconds is no CI.
+CI_LIMIT = float(os.environ.get("OFFICE_CI_TIMEOUT", str(3600)))
+CI_EVERY = float(os.environ.get("OFFICE_CI_EVERY", "30"))
+CI_NONE = 300
 MERGE_EVERY = 60  # seconds between asking gh how an open PR stands (merged, behind, in conflict, its CI)
 # hc terminal names are global to the hc core; this tag keeps another checkout's jobs folder from sharing them.
 TAG = hashlib.sha256(str(JOBS.resolve()).encode()).hexdigest()[:4]
@@ -417,6 +421,36 @@ def write_report(job, task, state, flow):
     (job / "REPORT.md").write_text(report, encoding="utf-8")
 
 
+def wait_ci(job):
+    """Wait for the PR's checks on the head the engine pushed, then note them in REPORT.md; else why not.
+    The engine ends when CI ends, so the leader hears of a red PR from this run instead of finding it on the board."""
+    url = (job / "pr.txt").read_text(encoding="utf-8").split()[0]
+    head = subprocess.run(["git", "-C", str(job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    start = time.time()
+    while True:
+        try:
+            view = subprocess.run(["gh", "pr", "view", url, "--json", "headRefOid,statusCheckRollup"],
+                                  cwd=job, capture_output=True, text=True, timeout=20)
+            answer = json.loads(view.stdout) if view.returncode == 0 else {}
+        except (OSError, subprocess.TimeoutExpired, ValueError):  # gh or the network is down for a moment: ask again
+            answer = {}
+        waited = time.time() - start
+        if isinstance(answer, dict) and answer.get("headRefOid") == head:  # checks of an older head say nothing
+            checks = answer.get("statusCheckRollup") if isinstance(answer.get("statusCheckRollup"), list) else []
+            ci = ci_state(checks)
+            if ci == "fail":
+                failed = [f"{c.get('name') or c.get('context')} {c.get('detailsUrl') or c.get('targetUrl') or ''}".strip()
+                          for c in checks if ci_state([c]) == "fail"]
+                return f"CI failed on {head}: " + "; ".join(failed)
+            if ci == "pass" or not ci and waited >= CI_NONE:
+                with open(job / "REPORT.md", "a", encoding="utf-8") as report:
+                    report.write(f"\n## CI\n\n- `{head}`: " + ("통과\n" if ci else f"체크 없음({CI_NONE:g}초 기다림)\n"))
+                return None
+        if waited >= CI_LIMIT:
+            return f"CI did not finish on {head} within {CI_LIMIT:g}s (OFFICE_CI_TIMEOUT): a person looks at {url}"
+        time.sleep(CI_EVERY)
+
+
 def missing(job, name, *files):
     """One-line error for the first absent task folder or file, else None."""
     if not job.is_dir():
@@ -561,6 +595,9 @@ def advance(job, name, runner):
                     return block(job, error)
                 save(state_path, state)
             write_report(job, task, state, flow)
+        elif stage["by"] == "script" and stage.get("ci"):
+            if error := wait_ci(job):  # a red CI needs a person: no retry, the leader passes it on
+                return block(job, error)
         elif stage["by"] == "script":
             git = lambda *a: subprocess.run(["git", *a], cwd=job / "repo", capture_output=True, text=True).stdout.strip()  # noqa: E731
             # Read what the worker handed over before the test writes its own files (caches, reports).
@@ -862,7 +899,7 @@ def pr_state(job, state, ask=True):
     if (job / ".merged").exists():
         return True, "", ""
     pr, asked, done = job / "pr.txt", job / ".merge-asked", state.get("stage") == "done"
-    if state.get("stage") not in ("ready", "review", "post", "done") or not pr.exists():
+    if state.get("stage") not in ("ready", "review", "post", "ci", "done") or not pr.exists():
         return False, "", ""
     try:
         last = load(asked, {})
