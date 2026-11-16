@@ -38,11 +38,12 @@ const ART = /*ART*/;  // engine.py board inlines pipeline/office/*.png as data U
 const img = {};
 for (const [k, src] of Object.entries(ART)) { img[k] = new Image(); img[k].src = src; }
 
-// The office in sprite pixels: six rooms in pipeline order, two across. A room is as wide as its desks: every room
-// has as many seats as the fullest room needs (2 to MAX_SLOTS), so parallel tasks in one stage all show.
-const T = 16, RH = 8 * T, COLS = 2, MAX_SLOTS = 4, GAP = 56;  // GAP: one seat to the next, a 48-pixel desk and a gap
-let SLOTS = 2, RW = 0, W = 0, H = 3 * RH;
-function size(n) { SLOTS = Math.max(2, Math.min(MAX_SLOTS, n)); RW = Math.ceil((24 + (SLOTS - 1) * GAP + 56) / T) * T; W = COLS * RW; }
+// The office in sprite pixels: six rooms in pipeline order. A room is as wide as its desks: every room has as many
+// seats as the fullest room needs (at least 2), so every task in a stage shows. fit() lays the rooms 1, 2 or 3 across,
+// whichever draws them biggest in the panel, so wide rooms stack down a tall panel.
+const T = 16, RH = 8 * T, GAP = 56;  // GAP: one seat to the next, a 48-pixel desk and a gap
+let SLOTS = 2, RW = 0, COLS = 2, W = 0, H = 0;
+function size(n) { SLOTS = Math.max(2, n); RW = Math.ceil((24 + (SLOTS - 1) * GAP + 56) / T) * T; }
 size(2);
 const ROOMS = [["design", "설계", false], ["approve", "설계 승인", true], ["implement", "구현", false],
                ["check", "검사", false], ["pr", "PR·리뷰", false], ["done", "병합 대기", true]];  // true: people act here
@@ -66,7 +67,7 @@ window.addEventListener("message", e => {
                        .map(t => ({ name: t.name, lane: t.lane, stage: String(t.stage), key: COLOR[t.key] ? t.key : "idle",
                                     text: String(t.text), model: String(t.model || ""), by: String(t.by || "") }));
   const most = Math.max(0, ...ROOMS.map(([id]) => tasks.filter(t => t.lane === id).length));
-  if (Math.max(2, Math.min(MAX_SLOTS, most)) !== SLOTS) {  // rooms change size: everyone takes a seat afresh
+  if (Math.max(2, most) !== SLOTS) {  // rooms change size: everyone takes a seat afresh
     size(most);
     for (const n of Object.keys(people)) delete people[n];
     fit();
@@ -109,7 +110,11 @@ function fit() {
   const box = document.getElementById("room").getBoundingClientRect();
   DPR = window.devicePixelRatio || 1;
   canvas.width = Math.round(box.width * DPR); canvas.height = Math.round(box.height * DPR);
-  S = Math.max(1, Math.min(box.width / W, box.height / H));
+  const scale = c => Math.min(box.width / (c * RW), box.height / (Math.ceil(ROOMS.length / c) * RH));
+  const cols = [2, 1, 3].reduce((a, c) => scale(c) > scale(a) ? c : a);  // ties keep two across
+  if (cols !== COLS) { COLS = cols; for (const n of Object.keys(people)) delete people[n]; place(); }  // rooms moved: seat afresh
+  W = COLS * RW; H = Math.ceil(ROOMS.length / COLS) * RH;
+  S = scale(COLS) || 1;  // may go under 1 when even the best layout is too small: everyone still shows, only smaller
   OX = Math.round((box.width - W * S) / 2); OY = Math.round((box.height - H * S) / 2);
 }
 new ResizeObserver(fit).observe(document.getElementById("room"));
@@ -219,7 +224,7 @@ function labelsLayer() {
     ctx.fillText(`${"①②③④⑤⑥"[i]} ${title}`, r.x * S + 8, (r.y + T / 2) * S);
     if (n) {
       ctx.fillStyle = "#9aa0b8"; ctx.textAlign = "right";
-      ctx.fillText(n > SLOTS ? `${n}개 (${n - SLOTS}개 안 보임)` : `${n}개`, (r.x + RW) * S - 8, (r.y + T / 2) * S);
+      ctx.fillText(`${n}개`, (r.x + RW) * S - 8, (r.y + T / 2) * S);
       ctx.textAlign = "left";
     }
   });
