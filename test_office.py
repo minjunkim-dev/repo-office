@@ -1813,6 +1813,21 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         self.assertNotIn("mutation", calls)
         self.assertFalse([c for c in map(json.loads, calls.splitlines()) if c[:2] == ["pr", "merge"]])
 
+    def test_notes_set_aside_in_the_same_second_are_all_kept(self):
+        blocked = self.job / "BLOCKED.md"
+        notes = [f"# 막힘\n\n{self.engine.QUEUE_BLOCK}2026-11-17T0{i}:00:00Z: x https://github.com/o/r/pull/7\n" for i in range(2)]
+        for note in notes:  # clear_queue_block twice, then advance's answered block: all from second 100
+            blocked.write_text(note, encoding="utf-8")
+            os.utime(blocked, (100.5, 100.5))
+            self.assertTrue(self.engine.clear_queue_block(self.job))
+        blocked.write_text("# 막힘\n\nwhich API?\n", encoding="utf-8")
+        os.utime(blocked, (100, 100))
+        self.engine.set_aside(blocked)
+        self.assertFalse(blocked.exists())
+        kept = {p.name: p.read_text(encoding="utf-8") for p in self.job.glob("BLOCKED.*.md")}
+        self.assertEqual(kept, {"BLOCKED.100.md": notes[0], "BLOCKED.100.1.md": notes[1],
+                                "BLOCKED.100.2.md": "# 막힘\n\nwhich API?\n"})
+
     def test_a_queue_block_clears_once_the_pr_is_back_in_the_queue_or_merged(self):
         bin_dir = Path(self.tmp.name) / "unblockgh"
         bin_dir.mkdir()
