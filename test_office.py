@@ -148,21 +148,17 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("@coderabbitai review", next(c for c in gh() if c[:2] == ["pr", "comment"]))
         report = (self.job / "REPORT.md").read_text()
         head = subprocess.run(["git", "-C", str(self.job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-        for part in ("https://github.com/O/R/pull/7", f"gh pr merge https://github.com/O/R/pull/7 --squash --match-head-commit {head}", "- design: opus",
+        for part in ("https://github.com/O/R/pull/7", f"gh pr view https://github.com/O/R/pull/7 --json id --jq .id)\" -f sha={head}`", "enqueuePullRequest", "- design: opus",
                      "- implement: sonnet", "- review: opus", "사람이 diff를 읽고 병합한다", "exit 0",
                      "리뷰가 고친 지적: P0 0, P1 1, P2 0", "남은 지적: [Spec] P1 y, a.py:3",
-                     f"--full-index $(git merge-base origin/main {head}) {head}`", "<새 head>) <새 head>`",
-                     "새 base에서도 되돌리기·민감한 파일 판정이 그대로", "새 head SHA로 병합"):
+                     "PR 브랜치에 base를 합치지 않는다"):
             self.assertIn(part, report)
-        # The comparison names the task's own base, not main.
-        task = {**json.loads((self.job / "task.json").read_text()), "base": "origin/dev"}
-        self.engine.write_report(self.job, task, self.state(), [])
-        self.assertIn(f"$(git merge-base origin/dev {head}) {head}", (self.job / "REPORT.md").read_text())
+        self.assertNotIn("gh pr merge", report)  # it arms auto-merge on a merge queue branch
         # Without the reviewed head in review.md there is no merge command: never a SHA read from repo/.
         (self.job / "review.md").write_text("리뷰한 head와 Door: abc1234, 되돌리기 어려움\n- 확인하지 않은 범위: z\n", encoding="utf-8")
         self.engine.write_report(self.job, json.loads((self.job / "task.json").read_text()), self.state(), [])
         report = (self.job / "REPORT.md").read_text()
-        self.assertNotIn("gh pr merge", report)
+        self.assertNotIn("enqueuePullRequest", report)
         self.assertIn("\n- 확인하지 않은 범위: z\n", report)  # a bullet line keeps one bullet
         self.engine.save(self.job / "state.json", {**self.state(), "stage": "ready"})  # the ready stage runs again
         self.assertEqual(self.engine.run("search", worker), self.engine.DONE)

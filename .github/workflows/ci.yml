@@ -3,6 +3,8 @@ name: ci
 
 on:
   pull_request:
+  # The merge queue tests the queued result here; without it a queued PR never merges.
+  merge_group:
   push:
     branches: [main]
 
