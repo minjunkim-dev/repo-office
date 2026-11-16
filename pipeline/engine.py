@@ -14,7 +14,8 @@
 
 After the check passes, run pushes the task branch, opens a PR from pr-body.md, marks it ready and, unless it proved easy, asks the review bot once.
 After the review, run replaces the PR body with review-body.md and writes REPORT.md. People act only to approve the design and to merge.
-Once a person has put a finished task's PR in the merge queue, workers and the board write BLOCKED.md if it leaves unmerged.
+Once a person has put a finished task's PR in the merge queue, workers and the board write BLOCKED.md if it leaves unmerged,
+and move that note aside once the PR merges or a person puts it back in the queue.
 
 Exit codes for run: 0 done, 2 no such task or another run of it is going, 3 waiting for a person, 4 blocked.
 """
@@ -954,6 +955,7 @@ def pr_state(job, state, ask=True):
     it: gh is asked at most every MERGE_EVERY seconds a task, the last answer is kept in .merge-asked, and a merged PR
     is kept in .merged and never asked again. ask=False only reads the last answer: a caller that must not wait on gh."""
     if (job / ".merged").exists():
+        clear_queue_block(job)  # also a task merged before the engine cleared the note itself
         return True, "", ""
     pr, asked, done = job / "pr.txt", job / ".merge-asked", state.get("stage") == "done"
     if state.get("stage") not in ("ready", "review", "post", "ci", "done") or not pr.exists():
@@ -978,6 +980,7 @@ def pr_state(job, state, ask=True):
         return kept
     if done and answer.get("state") == "MERGED":  # a PR merged mid-review stays on the board until the engine finishes
         (job / ".merged").touch()
+        clear_queue_block(job)
         return True, "", ""
     merge = str(answer.get("mergeStateStatus") or "") if answer.get("state") == "OPEN" else str(answer.get("state") or "")
     ci = ci_state(answer.get("statusCheckRollup")) if answer.get("state") == "OPEN" else ""
@@ -990,6 +993,24 @@ def pr_state(job, state, ask=True):
 QUEUE_QUERY = ("query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){state isInMergeQueue "
                "timelineItems(last:1,itemTypes:[ADDED_TO_MERGE_QUEUE_EVENT,REMOVED_FROM_MERGE_QUEUE_EVENT]){nodes{__typename "
                "... on RemovedFromMergeQueueEvent{id createdAt reason}}}}}}")
+
+
+QUEUE_BLOCK = "removed from merge queue at "
+
+
+def clear_queue_block(job):
+    """The PR merged, or a person put it back in the queue: queue_removed's BLOCKED.md no longer holds. It is moved aside
+    like an answered block (BLOCKED.<mtime>.md). Any other block stays: only a person's answer clears those."""
+    blocked = job / "BLOCKED.md"
+    try:
+        line = next((l for l in blocked.read_text(encoding="utf-8", errors="replace").splitlines()
+                     if l.strip() and not l.startswith("#")), "")
+        if line.startswith(QUEUE_BLOCK):
+            blocked.replace(job / f"BLOCKED.{int(blocked.stat().st_mtime)}.md")
+            return True
+    except OSError:  # no BLOCKED.md, or another reader moved it first
+        pass
+    return False
 
 
 def queue_removed(job, url):
@@ -1009,6 +1030,12 @@ def queue_removed(job, url):
         last = pull["timelineItems"]["nodes"][-1]
     except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, IndexError, TypeError):
         return
+    if pull.get("state") == "OPEN" and pull.get("isInMergeQueue") is True:  # a person fixed it and put it back
+        # After the move: a stale in-queue answer that moved a newer note aside lets the next look write it again.
+        # No move, no reset: the same event must not overwrite another block.
+        if clear_queue_block(job):
+            (job / ".queue-removed").unlink(missing_ok=True)
+        return
     # GitHub logs a merge as a removal too (reason "merged"), sometimes before the PR reads MERGED.
     if (not isinstance(last, dict) or last.get("__typename") != "RemovedFromMergeQueueEvent" or pull.get("state") != "OPEN"
             or pull.get("isInMergeQueue") is not False or str(last.get("reason") or "").lower() == "merged"):
@@ -1017,7 +1044,7 @@ def queue_removed(job, url):
     if seen.exists() and seen.read_text(encoding="utf-8").strip() == str(last.get("id")):
         return
     (job / "BLOCKED.md").write_text(
-        f"# 막힘\n\nremoved from merge queue at {last.get('createdAt')}: {last.get('reason') or 'no reason given'} {url}\n\n"
+        f"# 막힘\n\n{QUEUE_BLOCK}{last.get('createdAt')}: {last.get('reason') or 'no reason given'} {url}\n\n"
         "The engine does not enqueue it again. A person fixes the cause; a new push needs a new review (POLICY §5).\n",
         encoding="utf-8")
     seen.write_text(f"{last.get('id')}\n", encoding="utf-8")

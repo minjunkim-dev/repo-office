@@ -73,7 +73,7 @@ python3 pipeline/engine.py new <과제> --repo <제품 저장소 경로> --base 
 
 엔진은 PR을 Ready로 바꾼다. PR이 쉬움 판정을 받지 못하면 리뷰 봇에 리뷰를 한 번 요청한다. 쉬움 판정은 엔진이 내린다. 사람이 승인한 설계와 PR 본문이 둘 다 `되돌리기: 쉬움`이라고 쓰고, 본문이 `민감한 파일: 없음`이라고 써야 한다. 브랜치가 에이전트 설정 폴더나 지시 파일(`.github`, `.claude`, `AGENTS.md` 등)을 바꾸면 본문과 관계없이 쉬움이 아니다. 자세한 조건은 [AGENTS.md](../AGENTS.md)에 있다. 그다음 다른 세션이 리뷰한다. 리뷰가 끝나면 엔진이 `jobs/<과제>/REPORT.md`에 결과와 병합 명령을 남긴다.
 
-사람이 그 PR을 머지 큐에 넣은 뒤 병합되지 않고 빠지면(`merge_group` CI 실패, 충돌 등) `workers`와 `board`가 그 이유와 PR 링크를 `jobs/<과제>/BLOCKED.md`에 쓴다. 엔진은 큐에 다시 넣지 않는다.
+사람이 그 PR을 머지 큐에 넣은 뒤 병합되지 않고 빠지면(`merge_group` CI 실패, 충돌 등) `workers`와 `board`가 그 이유와 PR 링크를 `jobs/<과제>/BLOCKED.md`에 쓴다. 엔진은 큐에 다시 넣지 않는다. 사람이 고쳐 다시 큐에 넣거나 PR이 병합되면 `workers`와 `board`가 그 `BLOCKED.md`를 `BLOCKED.<시각>.md`로 옮긴다. 다른 막힘은 옮기지 않는다.
 
 ## 5. 원하면 코드 작업을 office로 보내게 한다
 
