@@ -669,7 +669,7 @@ class PipelineTests(unittest.TestCase):
 
     def test_checks_of_an_older_head_are_not_waited_on(self):
         self.at_post()
-        self.engine.CI_LIMIT = 0.05
+        self.engine.CI_LIMIT, self.engine.CI_MOVED = 0.05, 3600  # within the grace GitHub may still show the old head
         real = subprocess.run
         # The old head's checks are green: only the head comparison keeps them from ending the run.
         green = '[{"name": "CI", "status": "COMPLETED", "conclusion": "SUCCESS"}]'
@@ -678,6 +678,23 @@ class PipelineTests(unittest.TestCase):
         with unittest.mock.patch.object(self.engine.subprocess, "run", side_effect=old):
             self.assertEqual(self.post(), self.engine.BLOCKED)
         self.assertIn("did not finish", (self.job / "BLOCKED.md").read_text())
+
+    def test_a_pr_head_that_moved_blocks_at_once_with_the_reason(self):
+        # PR #66 review P1: a person pushed after the engine; waiting the whole hour then saying "did not finish" was wrong.
+        self.at_post()
+        self.engine.CI_LIMIT, self.engine.CI_MOVED = 1, 0  # without the check this ends as "did not finish"
+        real = subprocess.run
+        green = '[{"name": "CI", "status": "COMPLETED", "conclusion": "SUCCESS"}]'
+        moved = lambda argv, **kw: (subprocess.CompletedProcess(argv, 0, f'{{"headRefOid": "newer", "statusCheckRollup": {green}}}', "")  # noqa: E731
+                                    if "headRefOid,statusCheckRollup" in argv else real(argv, **kw))
+        started = time.time()
+        with unittest.mock.patch.object(self.engine.subprocess, "run", side_effect=moved):
+            self.assertEqual(self.post(), self.engine.BLOCKED)
+        self.assertLess(time.time() - started, 60)
+        blocked = (self.job / "BLOCKED.md").read_text()
+        self.assertIn("PR head moved", blocked)
+        self.assertIn("newer", blocked)
+        self.assertNotIn("## CI", (self.job / "REPORT.md").read_text())  # green checks of another head are not this PR's
 
     def test_easy_reads_the_new_lines_and_the_old_ones(self):
         easy = lambda d, b: self.engine.easy(d.encode(), b.encode())  # noqa: E731

@@ -60,6 +60,8 @@ BOARD_EVERY = float(os.environ.get("OFFICE_BOARD_EVERY", "5"))  # seconds betwee
 CI_LIMIT = float(os.environ.get("OFFICE_CI_TIMEOUT", str(3600)))
 CI_EVERY = float(os.environ.get("OFFICE_CI_EVERY", "30"))
 CI_NONE = 300
+# GitHub may still report the head before the engine's push for a moment; a different head after this is a real one.
+CI_MOVED = 60
 MERGE_EVERY = 60  # seconds between asking gh how an open PR stands (merged, behind, in conflict, its CI)
 # hc terminal names are global to the hc core; this tag keeps another checkout's jobs folder from sharing them.
 TAG = hashlib.sha256(str(JOBS.resolve()).encode()).hexdigest()[:4]
@@ -446,6 +448,10 @@ def wait_ci(job):
                 with open(job / "REPORT.md", "a", encoding="utf-8") as report:
                     report.write(f"\n## CI\n\n- `{head}`: " + ("통과\n" if ci else f"체크 없음({CI_NONE:g}초 기다림)\n"))
                 return None
+        elif isinstance(answer, dict) and answer.get("headRefOid") and waited >= CI_MOVED:
+            # A push after the engine's, or a local commit never pushed: the reviewed head is stale (POLICY §5).
+            return (f"PR head moved: the PR is at {answer['headRefOid']}, not {head} the engine pushed and the review saw. "
+                    f"Waiting cannot fix it: a person reviews the new head again")
         if waited >= CI_LIMIT:
             return f"CI did not finish on {head} within {CI_LIMIT:g}s (OFFICE_CI_TIMEOUT): a person looks at {url}"
         time.sleep(CI_EVERY)
