@@ -26,7 +26,7 @@
 | Matt Pocock 스킬 | 플러그인 `mattpocock-skills@mattpocock`(캐시 1.3.2). 사용자 설정에서는 꺼져 있고, office `.claude/settings.json`의 `enabledPlugins`가 작업자에게만 켠다 | 리뷰 두 축, TDD, 버그 진단, 설계([matt-skills 프로필](https://github.com/minjunkim-labs/repo-baseline/blob/main/profiles/matt-skills/README.md)) | 작업자에 실린다(§6) |
 | pstack | 플러그인 `pstack@cursor-plugins` 0.15.36. 사용자 설정에서 켜져 있고 office 설정에는 없다 | 설계 질문(`interrogate`), 영향 범위(`blast-radius`) | 사람이 부를 때만([pstack 프로필](https://github.com/minjunkim-labs/repo-baseline/blob/main/profiles/pstack/README.md)). leader가 권한다 |
 | 개인 도구 | `hc`(herdr-core), ai-memory, trail 등 | 작업자 띄우기, 세션 간 기억 | 엔진이 `hc`를 쓴다 |
-| 장난감 저장소 | `minjunkim-labs/office-toy`(공개) | 실측용 제품 저장소 | 실측을 다시 할 때 쓴다. 2026-11-16에 개인 계정에서 조직으로 옮겼다 |
+| 장난감 저장소 | `minjunkim-labs/office-toy`(공개) | 실측용 제품 저장소 | 2026-11-17에 보관(archive)했다. 실측은 소비 레포로 한다. 다시 쓰려면 보관을 푼다 |
 | 소비 레포 | BGLike(Godot), smallnext 등 | 실제 과제 | office로 돌린 기록이 있다(§6의 BGLike·smallnext 항목) |
 
 ## 3. 스킬 호출의 사실과 단계 배치
