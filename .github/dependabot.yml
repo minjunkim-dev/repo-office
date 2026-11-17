@@ -6,6 +6,9 @@ updates:
     schedule:
       interval: weekly
     labels: [dependencies]
+    # Wait a week before proposing a newly published version: fresh releases are where hijacked packages show up.
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: chore
       include: scope
