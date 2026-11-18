@@ -535,7 +535,7 @@ def wait_ci(job, seen=None):
                           for c in checks if ci_state([c]) == "fail"]
                 return f"CI failed on {head}: " + "; ".join(failed)
             if ci == "pass" or not ci and waited >= CI_NONE:
-                if ci and seen is not None:
+                if ci and seen is not None and ci_clean(checks):
                     seen["passed"] = head
                 with open(job / "REPORT.md", "a", encoding="utf-8") as report:
                     report.write(f"\n## CI\n\n- `{head}`: " + ("통과\n" if ci else f"체크 없음({CI_NONE:g}초 기다림)\n"))
@@ -713,8 +713,11 @@ def advance(job, name, runner):
             if error := wait_ci(job, seen):  # a red CI needs a person: no retry, the leader passes it on
                 return block(job, error)
             if stage.get("enqueue") == "easy":
+                # The design may have changed while CI ran: the approval checked above is minutes old
+                moved = [s["approve"] for s in flow if s.get("approve") and sha(job / s["approve"]) != state.get("approved", {}).get(s["id"])]
+                note = f"사람이 병합한다: 승인 뒤 {moved[0]}이 바뀌었다" if moved else enqueue(job, task, state, seen.get("passed"))
                 with open(job / "REPORT.md", "a", encoding="utf-8") as report:
-                    report.write(f"\n## 병합\n\n- {enqueue(job, task, state, seen.get('passed'))}\n")
+                    report.write(f"\n## 병합\n\n- {note}\n")
         elif stage["by"] == "script":
             git = lambda *a: subprocess.run(["git", *a], cwd=job / "repo", capture_output=True, text=True).stdout.strip()  # noqa: E731
             # Read what the worker handed over before the test writes its own files (caches, reports).
@@ -1050,6 +1053,13 @@ def ci_state(checks):
     if any(w in ("PENDING", "EXPECTED") for w in words):
         return "pending"
     return "pass" if words else ""
+
+
+def ci_clean(checks):
+    """Every check finished with a conclusion that is a pass (SUCCESS, SKIPPED, NEUTRAL): STALE or anything new is not."""
+    words = [str(c.get("state") or "") if c.get("__typename") == "StatusContext" else str(c.get("conclusion") or "")
+             for c in (checks if isinstance(checks, list) else []) if isinstance(c, dict)]
+    return bool(words) and all(w in ("SUCCESS", "SKIPPED", "NEUTRAL") for w in words)
 
 
 def pr_state(job, state, ask=True):

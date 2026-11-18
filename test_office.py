@@ -297,6 +297,7 @@ class PipelineTests(unittest.TestCase):
                  ("리뷰한 head와 되돌리기: {head}, 쉬움이 아님\n남은 지적: 없음\n", {}, "리뷰가 쉬움으로"),
                  (easy + "리뷰한 head와 되돌리기: {head}, 어려움\n", {}, "리뷰가 쉬움으로"),  # a second verdict
                  (easy, {"checks": "[]"}, "체크 없음"),
+                 (easy, {"checks": '[{"name": "CI", "status": "COMPLETED", "conclusion": "STALE"}]'}, "체크 없음"),  # not a pass
                  (easy, {"base": "release"}, "base가"),
                  (easy, {"office": "https://github.com/O/R.git"}, "repo-office 자신의 PR"),  # the PR is in the office repository
                  (easy, {"office": ""}, "repo-office 자신의 PR"),  # no office origin: it cannot tell, so a person merges  # a person moved the PR: the trust check would see the wrong base  # no CI is not a green CI
