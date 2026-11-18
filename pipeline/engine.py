@@ -466,9 +466,11 @@ def enqueue(job, task, state, passed):
     if why:
         return f"사람이 병합한다: {why}"
     # POLICY §5: the standing instruction never covers the pipeline repository's own PRs (engine.py new --repo <this checkout>)
-    own = subprocess.run(["git", "-C", str(OFFICE), "config", "--get", "remote.origin.url"], capture_output=True, text=True).stdout
-    if not slug(url) or slug(url) == slug(own):
-        return "사람이 병합한다: repo-office 자신의 PR이다(상시 지시는 파이프라인 저장소의 PR에 쓰지 않는다)"
+    # As written and after url.*.insteadOf; neither known is no proof that the PR is elsewhere (fails closed)
+    own = {slug(subprocess.run(["git", "-C", str(OFFICE), *a], capture_output=True, text=True).stdout)
+           for a in (["config", "--get", "remote.origin.url"], ["remote", "get-url", "origin"])} - {None}
+    if not slug(url) or not own or slug(url) in own:
+        return "사람이 병합한다: repo-office 자신의 PR이거나 office 체크아웃의 origin을 알 수 없다(상시 지시는 파이프라인 저장소의 PR에 쓰지 않는다)"
     # surrogateescape: a path that is not UTF-8 still reaches the trust check instead of raising
     git = lambda *a: subprocess.run(["git", "-C", str(job / "repo"), *a], capture_output=True, text=True,  # noqa: E731
                                     errors="surrogateescape", timeout=60)
