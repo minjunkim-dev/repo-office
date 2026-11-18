@@ -460,21 +460,25 @@ def enqueue(job, task, state, passed):
     lines = [l.strip() for l in review.splitlines() if re.search(r"리뷰한\W*head", l)]
     verdict = len(lines) == 1 and re.fullmatch(r"리뷰한 head와 (?:되돌리기|Door): ([0-9a-f]{40}), (?:되돌리기 )?쉬움", lines[0])
     head = verdict[1] if verdict else None
-    git = lambda *a: subprocess.run(["git", "-C", str(job / "repo"), *a], capture_output=True, text=True)  # noqa: E731
-    base = git("ls-remote", "origin", f"refs/heads/{task['base'].removeprefix('origin/')}").stdout.split()[:1]
-    if base:
-        git("fetch", "-q", "origin", base[0])
     why = ("엔진이 쉬움을 확인하지 못했다" if not proven_easy(state) else "리뷰가 쉬움으로 보지 않았다" if not verdict
            else "남은 지적이 없음이 아니다" if not claims(review.encode(), r"남은\W*지적[^:]*:", {"남은 지적: 없음"})
-           else "리뷰한 head가 CI가 통과한 head와 다르다(체크 없음 포함)" if head != passed
-           # proven_easy saw the checked commit only: the review's commits may touch a trust path too
-           else "리뷰한 head가 민감한 파일을 바꾼다(TRUST_NAMES)" if not base or touches_trust(git, base[0], head) else None)
+           else "리뷰한 head가 CI가 통과한 head와 다르다(체크 없음 포함)" if head != passed else None)
     if why:
         return f"사람이 병합한다: {why}"
+    # surrogateescape: a path that is not UTF-8 still reaches the trust check instead of raising
+    git = lambda *a: subprocess.run(["git", "-C", str(job / "repo"), *a], capture_output=True, text=True,  # noqa: E731
+                                    errors="surrogateescape", timeout=60)
     ended = max((m["end"] for m in state.get("models", []) if m["stage"] == "review" and m.get("end")), default=None)
     try:
-        view = subprocess.run(["gh", "pr", "view", url, "--json", "id,comments,reviews"], cwd=job, capture_output=True, text=True, timeout=20)
+        view = subprocess.run(["gh", "pr", "view", url, "--json", "id,baseRefName,comments,reviews"], cwd=job,
+                              capture_output=True, text=True, timeout=20)
         answer = json.loads(view.stdout) if view.returncode == 0 else None
+        if answer["baseRefName"] != task["base"].removeprefix("origin/"):
+            return f"사람이 병합한다: PR의 base가 {answer['baseRefName']}로 바뀌었다"
+        # proven_easy saw the checked commit only: the review's commits may touch a trust path too
+        base = git("ls-remote", "origin", f"refs/heads/{answer['baseRefName']}").stdout.split()[:1]
+        if not base or git("fetch", "-q", "origin", base[0]).returncode or touches_trust(git, base[0], head):
+            return "사람이 병합한다: 리뷰한 head가 민감한 파일을 바꾸거나(TRUST_NAMES) git이 그 경로를 보여 주지 못했다"
         stamps = [str(c.get("createdAt") or c.get("submittedAt") or "") for c in answer["comments"] + answer["reviews"]]
         pr_id = answer["id"]
         # Line comments and replies in old threads, and edits (a bot may post its findings by editing its summary comment)
