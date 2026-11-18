@@ -250,7 +250,7 @@ class PipelineTests(unittest.TestCase):
         self.assertNotIn("approve", self.state()["auto_approved"])
 
     def queued(self, review, notes='[1, "LGTM"]\n', late="", review_files=(), checks=None, base="main", branch="office/search",
-               office=None, judged=True, **state):
+               office=None, judged=True, redesign=False, **state):
         """At the post stage with review.md, the PR's comments and state set, run to the end; the enqueue calls and REPORT.md 「병합」.
         notes: the comment lists when the review worker recorded seen.json (judged=False: it never did); late: added afterwards.
         review_files: the review worker commits these after the checked commit the draft stage proved easy."""
@@ -260,6 +260,15 @@ class PipelineTests(unittest.TestCase):
         if judged:
             self.assertEqual(self.engine.record_seen("search"), 0)
         self.api_notes.write_text(notes + late, encoding="utf-8")
+        if redesign:  # the design changes while the engine reads the PR, after every earlier approval check
+            real = self.engine.pr_notes
+            def notes_then_edit(*a):
+                with open(self.job / "design.md", "a", encoding="utf-8") as design:
+                    design.write("\n한 줄 더\n")
+                return real(*a)
+            patched = unittest.mock.patch.object(self.engine, "pr_notes", notes_then_edit)
+            patched.start()
+            self.addCleanup(patched.stop)
         own = "https://github.com/office/office.git" if office is None else office  # the office checkout's origin; "" for none
         patch = unittest.mock.patch.object(self.engine.subprocess, "run", side_effect=lambda argv, *a, _run=subprocess.run, **k: (
             subprocess.CompletedProcess(argv, 0, own + "\n", "") if argv[:2] == ["git", "-C"] and argv[2] == str(self.engine.OFFICE)
@@ -310,7 +319,8 @@ class PipelineTests(unittest.TestCase):
                  (easy, {"late": '[2, "P1: wrong"]\n'}, "판정하지 않은"),  # a comment or review after the worker's record
                  (easy, {"notes": '[1, "LGTM"]\n', "late": '[1, "LGTM. P1: on second look"]\n'}, "판정하지 않은"),  # an edit
                  (easy, {"notes": '[1, "LGTM"]\n', "late": ""}, None),  # control: the same notes are judged
-                 (easy, {"judged": False}, "seen.json")]
+                 (easy, {"judged": False}, "seen.json"),
+                 (easy, {"redesign": True}, "승인 뒤 design.md")]  # the last check, right before the request
         for review, state, why in cases:
             with self.subTest(review=review, state=state):
                 self.setUp()
