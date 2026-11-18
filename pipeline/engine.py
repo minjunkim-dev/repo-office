@@ -448,12 +448,50 @@ def reviewed_head(review):
     return head[1] if head else None
 
 
-def enqueue(job, task, state, passed):
+NOTE_LISTS = ("issues/{n}/comments", "pulls/{n}/comments", "pulls/{n}/reviews")
+
+
+def pr_notes(job, url):
+    """Every comment, line comment and review on the PR as `kind:id:sha256(body)`: a new one or an edit (a bot may post its
+    findings by editing its summary) is a new entry. Raises on any gh failure."""
+    number = re.search(r"/pull/(\d+)", url)[1]
+    notes = []
+    for path in NOTE_LISTS:
+        got = subprocess.run(["gh", "api", "--paginate", f"repos/{slug(url)}/{path.format(n=number)}", "--jq",
+                              '.[] | [.id, (.body // "")] | @json'], cwd=job, capture_output=True, text=True, timeout=60)
+        if got.returncode:
+            raise ValueError(f"gh api {path}: {got.stderr.strip()}")
+        for line in got.stdout.splitlines():
+            ident, body = json.loads(line)
+            notes.append(f"{path.split('/')[0]}/{path.split('/')[-1]}:{ident}:{hashlib.sha256(body.encode()).hexdigest()}")
+    return sorted(notes)
+
+
+def record_seen(name):
+    """The review worker runs this after judging every review and comment: seen.json is what it judged. enqueue compares
+    the PR's notes with it, so anything new or edited afterwards is an unjudged external review."""
+    job = JOBS / name
+    error = missing(job, name, "pr.txt")
+    if error:
+        print(error, file=sys.stderr)
+        return 2
+    try:
+        notes = pr_notes(job, (job / "pr.txt").read_text(encoding="utf-8").split()[0])
+    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError) as failed:
+        print(f"could not read the PR's reviews and comments: {failed}", file=sys.stderr)
+        return 2
+    (job / "seen.json").write_text(json.dumps(notes, indent=1) + "\n", encoding="utf-8")
+    print(f"{len(notes)} reviews and comments recorded in {job / 'seen.json'}")
+    return 0
+
+
+def enqueue(job, task, state, passed, flow=()):
     """Put the PR in the merge queue on the reviewed head when nothing needs a person, and say what was done (REPORT.md).
     The owner's standing instruction for the PRs the engine opens (AGENTS.md 「push와 PR」, POLICY §5): the engine proved the
     PR easy, the review says easy with nothing left, CI passed (passed: the head wait_ci saw green, None for no checks) on the
-    reviewed head, and no review, comment or edit came after the review ended (unjudged). Anything else, or any doubt,
-    leaves the merge to a person. The look at the PR is not atomic with the enqueue: a comment in between is not seen."""
+    reviewed head, every review and comment on the PR is one the review worker recorded as judged (seen.json), and the
+    approved design is unchanged. Anything else, or any doubt, leaves the merge to a person. The last look at the PR is not
+    atomic with the enqueue (GitHub has no conditional enqueue): a comment in that gap is not seen."""
     review = (job / "review.md").read_text(encoding="utf-8", errors="replace") if (job / "review.md").exists() else ""
     url = (job / "pr.txt").read_text(encoding="utf-8").split()[0]
     # Exactly one 「리뷰한 head와 되돌리기」 line, saying <sha>, 쉬움 and nothing else: 쉬움이 아님 or a second line is not easy.
@@ -467,39 +505,41 @@ def enqueue(job, task, state, passed):
         return f"사람이 병합한다: {why}"
     # POLICY §5: the standing instruction never covers the pipeline repository's own PRs (engine.py new --repo <this checkout>)
     # As written and after url.*.insteadOf; neither known is no proof that the PR is elsewhere (fails closed)
-    own = {slug(subprocess.run(["git", "-C", str(OFFICE), *a], capture_output=True, text=True).stdout)
-           for a in (["config", "--get", "remote.origin.url"], ["remote", "get-url", "origin"])} - {None}
-    if not slug(url) or not own or slug(url) in own:
+    try:
+        own = [slug(subprocess.run(["git", "-C", str(OFFICE), *a], capture_output=True, text=True, timeout=10).stdout)
+               for a in (["config", "--get", "remote.origin.url"], ["remote", "get-url", "origin"])]
+    except (OSError, subprocess.TimeoutExpired):
+        own = [None]
+    if not slug(url) or None in own or slug(url) in own:
         return "사람이 병합한다: repo-office 자신의 PR이거나 office 체크아웃의 origin을 알 수 없다(상시 지시는 파이프라인 저장소의 PR에 쓰지 않는다)"
     # surrogateescape: a path that is not UTF-8 still reaches the trust check instead of raising
     git = lambda *a: subprocess.run(["git", "-C", str(job / "repo"), *a], capture_output=True, text=True,  # noqa: E731
                                     errors="surrogateescape", timeout=60)
-    ended = max((m["end"] for m in state.get("models", []) if m["stage"] == "review" and m.get("end")), default=None)
     try:
-        view = subprocess.run(["gh", "pr", "view", url, "--json", "id,baseRefName,comments,reviews"], cwd=job,
+        judged = json.loads((job / "seen.json").read_text(encoding="utf-8")) if (job / "seen.json").exists() else None
+        view = subprocess.run(["gh", "pr", "view", url, "--json", "id,baseRefName,headRefName"], cwd=job,
                               capture_output=True, text=True, timeout=20)
         answer = json.loads(view.stdout) if view.returncode == 0 else None
         if answer["baseRefName"] != task["base"].removeprefix("origin/"):
             return f"사람이 병합한다: PR의 base가 {answer['baseRefName']}로 바뀌었다"
+        # pr.txt is a file the workers can write: queue only the branch the engine pushed
+        if answer["headRefName"] != f"office/{task['name']}":
+            return f"사람이 병합한다: PR 브랜치가 office/{task['name']}가 아니다({answer['headRefName']})"
         # proven_easy saw the checked commit only: the review's commits may touch a trust path too
         base = git("ls-remote", "origin", f"refs/heads/{answer['baseRefName']}").stdout.split()[:1]
         if not base or git("fetch", "-q", "origin", base[0]).returncode or touches_trust(git, base[0], head):
             return "사람이 병합한다: 리뷰한 head가 민감한 파일을 바꾸거나(TRUST_NAMES) git이 그 경로를 보여 주지 못했다"
-        stamps = [str(c.get("createdAt") or c.get("submittedAt") or "") for c in answer["comments"] + answer["reviews"]]
         pr_id = answer["id"]
-        # Line comments and replies in old threads, and edits (a bot may post its findings by editing its summary comment)
-        number = re.search(r"/pull/(\d+)", url)[1]
-        for kind in ("pulls", "issues"):
-            rest = subprocess.run(["gh", "api", "--paginate", f"repos/{slug(url)}/{kind}/{number}/comments", "--jq",
-                                   ".[] | .updated_at // .created_at // \"\""], cwd=job, capture_output=True, text=True, timeout=60)
-            if rest.returncode:
-                raise ValueError(f"gh api {kind} comments: {rest.stderr.strip()}")
-            stamps += rest.stdout.splitlines()
+        unjudged = None if judged is None else set(pr_notes(job, url)) - set(judged)
     except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError) as error:
         return f"사람이 병합한다: PR을 읽지 못했다({error})"
-    since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ended)) if ended else ""
-    if not since or any(not s or s >= since for s in stamps):  # GitHub's ISO times compare as strings; the same second counts
-        return "사람이 병합한다: 리뷰가 끝난 뒤 달린 리뷰나 댓글이 있다(판정하지 않은 외부 리뷰)"
+    if judged is None:
+        return "사람이 병합한다: 리뷰 작업자가 판정한 리뷰·댓글 목록(seen.json)이 없다"
+    if unjudged:
+        return f"사람이 병합한다: 리뷰 작업자가 판정하지 않은 리뷰·댓글이 {len(unjudged)}개 있다(새로 달렸거나 고쳐졌다)"
+    # The design may have changed while CI ran and the PR was read: check the approval last, right before the request
+    if moved := [s["approve"] for s in flow if s.get("approve") and sha(job / s["approve"]) != state.get("approved", {}).get(s["id"])]:
+        return f"사람이 병합한다: 승인 뒤 {moved[0]}이 바뀌었다"
     query = ("mutation($id:ID!,$sha:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$sha})"
              "{mergeQueueEntry{position}}}")
     try:
@@ -535,10 +575,12 @@ def wait_ci(job, seen=None):
                           for c in checks if ci_state([c]) == "fail"]
                 return f"CI failed on {head}: " + "; ".join(failed)
             if ci == "pass" or not ci and waited >= CI_NONE:
-                if ci and seen is not None and ci_clean(checks):
+                clean = ci and ci_clean(checks)
+                if clean and seen is not None:
                     seen["passed"] = head
                 with open(job / "REPORT.md", "a", encoding="utf-8") as report:
-                    report.write(f"\n## CI\n\n- `{head}`: " + ("통과\n" if ci else f"체크 없음({CI_NONE:g}초 기다림)\n"))
+                    report.write(f"\n## CI\n\n- `{head}`: " + ("통과\n" if clean else "끝남, 통과가 아닌 결론이 있다(예: STALE)\n" if ci
+                                                               else f"체크 없음({CI_NONE:g}초 기다림)\n"))
                 return None
         elif isinstance(answer, dict) and answer.get("headRefOid") and waited >= CI_MOVED:
             # A push after the engine's, or a local commit never pushed: the reviewed head is stale (POLICY §5).
@@ -713,9 +755,7 @@ def advance(job, name, runner):
             if error := wait_ci(job, seen):  # a red CI needs a person: no retry, the leader passes it on
                 return block(job, error)
             if stage.get("enqueue") == "easy":
-                # The design may have changed while CI ran: the approval checked above is minutes old
-                moved = [s["approve"] for s in flow if s.get("approve") and sha(job / s["approve"]) != state.get("approved", {}).get(s["id"])]
-                note = f"사람이 병합한다: 승인 뒤 {moved[0]}이 바뀌었다" if moved else enqueue(job, task, state, seen.get("passed"))
+                note = enqueue(job, task, state, seen.get("passed"), flow)
                 with open(job / "REPORT.md", "a", encoding="utf-8") as report:
                     report.write(f"\n## 병합\n\n- {note}\n")
         elif stage["by"] == "script":
@@ -1354,7 +1394,7 @@ def main(argv=None):
     created.add_argument("--repo", required=True)
     created.add_argument("--base", default="origin/main")
     sub.add_parser("doctor").add_argument("repo")
-    for command in ("run", "approve", "test", "preflight"):
+    for command in ("run", "approve", "test", "preflight", "seen"):
         sub.add_parser(command).add_argument("task")
     checked = sub.add_parser("skills")
     checked.add_argument("task")
@@ -1378,7 +1418,7 @@ def main(argv=None):
         return 0
     if args.command == "skills":
         return skills(args.task, args.base)
-    return {"run": run, "approve": approve, "test": test, "preflight": preflight}[args.command](args.task)
+    return {"run": run, "approve": approve, "test": test, "preflight": preflight, "seen": record_seen}[args.command](args.task)
 
 
 if __name__ == "__main__":

@@ -112,11 +112,11 @@ class PipelineTests(unittest.TestCase):
         # The ci stage's question: the PR head is the task's HEAD, and its checks are self.checks (green by default).
         self.checks = Path(self.tmp.name) / "checks.json"
         self.checks.write_text('[{"name": "CI", "status": "COMPLETED", "conclusion": "SUCCESS"}]', encoding="utf-8")
-        # The ci stage's look before it queues an easy PR: the PR's node id and its reviews and comments.
+        # The ci stage's look before it queues an easy PR: the PR's node id, base and branch.
         self.pr_json = Path(self.tmp.name) / "pr.json"
-        self.pr_json.write_text('{"id": "PR_7", "baseRefName": "main", "comments": [], "reviews": []}', encoding="utf-8")
-        self.api_stamps = Path(self.tmp.name) / "stamps"  # what the REST comment lists print: one updated_at per line
-        self.api_stamps.write_text("", encoding="utf-8")
+        self.pr_json.write_text('{"id": "PR_7", "baseRefName": "main", "headRefName": "office/search"}', encoding="utf-8")
+        self.api_notes = Path(self.tmp.name) / "notes"  # what each REST list of reviews and comments prints: [id, body] per line
+        self.api_notes.write_text("", encoding="utf-8")
         (bin_dir / "gh").write_text(
             "#!/usr/bin/env python3\nimport json, sys\n"
             "stdin = [sys.stdin.read()] if sys.argv[1:3] == ['pr', 'edit'] else []\n"
@@ -128,10 +128,10 @@ class PipelineTests(unittest.TestCase):
             "    import subprocess\n"
             f"    head = subprocess.run(['git', '-C', {str(self.job / 'repo')!r}, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()\n"
             f"    print(json.dumps({{'headRefOid': head, 'statusCheckRollup': json.load(open({str(self.checks)!r}))}}))\n"
-            f"elif sys.argv[1:3] == ['pr', 'view'] and 'id,baseRefName,comments,reviews' in sys.argv: print(open({str(self.pr_json)!r}).read())\n"
+            f"elif sys.argv[1:3] == ['pr', 'view'] and 'id,baseRefName,headRefName' in sys.argv: print(open({str(self.pr_json)!r}).read())\n"
             f"elif sys.argv[1:3] == ['pr', 'view']: print(open({str(draft)!r}).read().strip())\n"
             f"if sys.argv[1:3] == ['pr', 'ready']: open({str(draft)!r}, 'w').write('false')\n"
-            f"if sys.argv[1:2] == ['api'] and any(a.endswith('/comments') for a in sys.argv): print(open({str(self.api_stamps)!r}).read(), end='')\n",
+            f"if sys.argv[1:2] == ['api'] and any(a.endswith('/comments') for a in sys.argv): print(open({str(self.api_notes)!r}).read(), end='')\n",
             encoding="utf-8")
         (bin_dir / "gh").chmod(0o755)
         patcher = unittest.mock.patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"})
@@ -249,12 +249,17 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(self.engine.approve("search"), 0)
         self.assertNotIn("approve", self.state()["auto_approved"])
 
-    def queued(self, review, comments="[]", review_files=(), stamps="", checks=None, base="main", office=None, **state):
+    def queued(self, review, notes='[1, "LGTM"]\n', late="", review_files=(), checks=None, base="main", branch="office/search",
+               office=None, judged=True, **state):
         """At the post stage with review.md, the PR's comments and state set, run to the end; the enqueue calls and REPORT.md 「병합」.
+        notes: the comment lists when the review worker recorded seen.json (judged=False: it never did); late: added afterwards.
         review_files: the review worker commits these after the checked commit the draft stage proved easy."""
         self.at_post()
-        self.pr_json.write_text(f'{{"id": "PR_7", "baseRefName": "{base}", "comments": {comments}, "reviews": []}}', encoding="utf-8")
-        self.api_stamps.write_text(stamps, encoding="utf-8")
+        self.pr_json.write_text(f'{{"id": "PR_7", "baseRefName": "{base}", "headRefName": "{branch}"}}', encoding="utf-8")
+        self.api_notes.write_text(notes, encoding="utf-8")
+        if judged:
+            self.assertEqual(self.engine.record_seen("search"), 0)
+        self.api_notes.write_text(notes + late, encoding="utf-8")
         own = "https://github.com/office/office.git" if office is None else office  # the office checkout's origin; "" for none
         patch = unittest.mock.patch.object(self.engine.subprocess, "run", side_effect=lambda argv, *a, _run=subprocess.run, **k: (
             subprocess.CompletedProcess(argv, 0, own + "\n", "") if argv[:2] == ["git", "-C"] and argv[2] == str(self.engine.OFFICE)
@@ -301,13 +306,18 @@ class PipelineTests(unittest.TestCase):
                  (easy, {"base": "release"}, "base가"),
                  (easy, {"office": "https://github.com/O/R.git"}, "repo-office 자신의 PR"),  # the PR is in the office repository
                  (easy, {"office": ""}, "repo-office 자신의 PR"),  # no office origin: it cannot tell, so a person merges  # a person moved the PR: the trust check would see the wrong base  # no CI is not a green CI
-                 (easy, {"stamps": "2999-01-01T00:00:00Z\n"}, "리뷰가 끝난 뒤"),  # a reply in an old thread, or an edit
-                 (easy, {"models": []}, "리뷰가 끝난 뒤"),
-                 (easy, {"comments": '[{"createdAt": "2999-01-01T00:00:00Z"}]'}, "리뷰가 끝난 뒤")]  # nobody judged it
+                 (easy, {"branch": "feature/x"}, "PR 브랜치가"),  # pr.txt names a PR the engine did not push
+                 (easy, {"late": '[2, "P1: wrong"]\n'}, "판정하지 않은"),  # a comment or review after the worker's record
+                 (easy, {"notes": '[1, "LGTM"]\n', "late": '[1, "LGTM. P1: on second look"]\n'}, "판정하지 않은"),  # an edit
+                 (easy, {"notes": '[1, "LGTM"]\n', "late": ""}, None),  # control: the same notes are judged
+                 (easy, {"judged": False}, "seen.json")]
         for review, state, why in cases:
             with self.subTest(review=review, state=state):
                 self.setUp()
                 head, calls, note = self.queued(review, **state)
+                if why is None:
+                    self.assertEqual(len(calls), 1)
+                    continue
                 self.assertEqual(calls, [])
                 self.assertIn("사람이 병합한다", note)
                 self.assertIn(why, note)
