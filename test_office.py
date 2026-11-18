@@ -115,6 +115,8 @@ class PipelineTests(unittest.TestCase):
         # The ci stage's look before it queues an easy PR: the PR's node id and its reviews and comments.
         self.pr_json = Path(self.tmp.name) / "pr.json"
         self.pr_json.write_text('{"id": "PR_7", "comments": [], "reviews": []}', encoding="utf-8")
+        self.api_stamps = Path(self.tmp.name) / "stamps"  # what the REST comment lists print: one updated_at per line
+        self.api_stamps.write_text("", encoding="utf-8")
         (bin_dir / "gh").write_text(
             "#!/usr/bin/env python3\nimport json, sys\n"
             "stdin = [sys.stdin.read()] if sys.argv[1:3] == ['pr', 'edit'] else []\n"
@@ -128,7 +130,9 @@ class PipelineTests(unittest.TestCase):
             f"    print(json.dumps({{'headRefOid': head, 'statusCheckRollup': json.load(open({str(self.checks)!r}))}}))\n"
             f"elif sys.argv[1:3] == ['pr', 'view'] and 'id,comments,reviews' in sys.argv: print(open({str(self.pr_json)!r}).read())\n"
             f"elif sys.argv[1:3] == ['pr', 'view']: print(open({str(draft)!r}).read().strip())\n"
-            f"if sys.argv[1:3] == ['pr', 'ready']: open({str(draft)!r}, 'w').write('false')\n", encoding="utf-8")
+            f"if sys.argv[1:3] == ['pr', 'ready']: open({str(draft)!r}, 'w').write('false')\n"
+            f"if sys.argv[1:2] == ['api'] and any(a.endswith('/comments') for a in sys.argv): print(open({str(self.api_stamps)!r}).read(), end='')\n",
+            encoding="utf-8")
         (bin_dir / "gh").chmod(0o755)
         patcher = unittest.mock.patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"})
         patcher.start()
@@ -233,7 +237,8 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(state["approved"]["approve"], self.engine.sha(self.job / "design.md"))
         self.assertEqual(state["auto_approved"], state["approved"])  # the board and the report can tell it from a person's
         # A design rewritten as hard goes back to the approval and waits for a person, who then owns the approval.
-        for line in ("되돌리기: 어려움\n", "되돌리기: 쉬움\n되돌리기: 어려움\n", "되돌리기 쉬움\n", "난이도: 쉬움\n"):
+        for line in ("되돌리기: 어려움\n", "되돌리기: 쉬움\n되돌리기: 어려움\n", "되돌리기 쉬움\n", "난이도: 쉬움\n",
+                     "Door: 되돌리기 쉬움\n"):  # the old wording reads as easy for a PR, but a person approves the design
             with self.subTest(line=line):
                 (self.job / "BLOCKED.md").unlink(missing_ok=True)
                 (self.job / "design.md").write_text(line, encoding="utf-8")
@@ -244,11 +249,16 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(self.engine.approve("search"), 0)
         self.assertNotIn("approve", self.state()["auto_approved"])
 
-    def queued(self, review, comments="[]", review_files=(), **state):
+    def queued(self, review, comments="[]", review_files=(), stamps="", checks=None, **state):
         """At the post stage with review.md, the PR's comments and state set, run to the end; the enqueue calls and REPORT.md 「병합」.
         review_files: the review worker commits these after the checked commit the draft stage proved easy."""
         self.at_post()
         self.pr_json.write_text(f'{{"id": "PR_7", "comments": {comments}, "reviews": []}}', encoding="utf-8")
+        self.api_stamps.write_text(stamps, encoding="utf-8")
+        if checks is not None:
+            self.checks.write_text(checks, encoding="utf-8")
+            self.engine.CI_NONE = 0
+            self.addCleanup(setattr, self.engine, "CI_NONE", 300)
         checked = subprocess.run(["git", "-C", str(self.job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
         head = self.review_commit(*review_files) if review_files else checked
         state = {"easy_pr": checked, "checked": checked, **state}
@@ -278,6 +288,10 @@ class PipelineTests(unittest.TestCase):
                  (easy + "남은 지적: [Spec] P1 x, a.py:1\n", {}, "남은 지적이"),  # every line, not the first
                  (easy, {"review_files": ("docs/AGENTS.md",)}, "민감한 파일"),  # a review commit after the proof
                  (easy, {"review_files": (".claude/settings.json",)}, "민감한 파일"),
+                 ("리뷰한 head와 되돌리기: {head}, 쉬움이 아님\n남은 지적: 없음\n", {}, "리뷰가 쉬움으로"),
+                 (easy + "리뷰한 head와 되돌리기: {head}, 어려움\n", {}, "리뷰가 쉬움으로"),  # a second verdict
+                 (easy, {"checks": "[]"}, "체크 없음"),  # no CI is not a green CI
+                 (easy, {"stamps": "2999-01-01T00:00:00Z\n"}, "리뷰가 끝난 뒤"),  # a reply in an old thread, or an edit
                  (easy, {"models": []}, "리뷰가 끝난 뒤"),
                  (easy, {"comments": '[{"createdAt": "2999-01-01T00:00:00Z"}]'}, "리뷰가 끝난 뒤")]  # nobody judged it
         for review, state, why in cases:
@@ -444,7 +458,8 @@ class PipelineTests(unittest.TestCase):
 
                 worker = Worker(self.job)
                 if self.engine.run("search", worker) == self.engine.WAIT:
-                    self.assertFalse(self.engine.door_easy(design.encode()))
+                    # only the current wording approves a design: the old Door: wording waits for a person
+                    self.assertFalse(self.engine.claims(design.encode(), self.engine.DOOR_CLAIM, {"되돌리기: 쉬움"}))
                     self.assertEqual(self.engine.approve("search"), 0)
                     self.engine.run("search", worker)
                 else:  # an easy design needs no person: the approve stage recorded its bytes itself

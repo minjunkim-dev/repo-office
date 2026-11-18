@@ -448,21 +448,25 @@ def reviewed_head(review):
     return head[1] if head else None
 
 
-def enqueue(job, task, state):
+def enqueue(job, task, state, passed):
     """Put the PR in the merge queue on the reviewed head when nothing needs a person, and say what was done (REPORT.md).
     The owner's standing instruction for the PRs the engine opens (AGENTS.md 「push와 PR」, POLICY §5): the engine proved the
-    PR easy, the review says easy with nothing left, CI passed on the reviewed head, and no review or comment came after
-    the review ended (unjudged). Anything else, or any doubt, leaves the merge to a person."""
+    PR easy, the review says easy with nothing left, CI passed (passed: the head wait_ci saw green, None for no checks) on the
+    reviewed head, and no review, comment or edit came after the review ended (unjudged). Anything else, or any doubt,
+    leaves the merge to a person. The look at the PR is not atomic with the enqueue: a comment in between is not seen."""
     review = (job / "review.md").read_text(encoding="utf-8", errors="replace") if (job / "review.md").exists() else ""
-    head, url = reviewed_head(review), (job / "pr.txt").read_text(encoding="utf-8").split()[0]
-    pushed = subprocess.run(["git", "-C", str(job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    url = (job / "pr.txt").read_text(encoding="utf-8").split()[0]
+    # Exactly one 「리뷰한 head와 되돌리기」 line, saying <sha>, 쉬움 and nothing else: 쉬움이 아님 or a second line is not easy.
+    lines = [l.strip() for l in review.splitlines() if re.search(r"리뷰한\W*head", l)]
+    verdict = len(lines) == 1 and re.fullmatch(r"리뷰한 head와 (?:되돌리기|Door): ([0-9a-f]{40}), (?:되돌리기 )?쉬움", lines[0])
+    head = verdict[1] if verdict else None
     git = lambda *a: subprocess.run(["git", "-C", str(job / "repo"), *a], capture_output=True, text=True)  # noqa: E731
     base = git("ls-remote", "origin", f"refs/heads/{task['base'].removeprefix('origin/')}").stdout.split()[:1]
     if base:
         git("fetch", "-q", "origin", base[0])
-    why = ("엔진이 쉬움을 확인하지 못했다" if not proven_easy(state) else "리뷰가 쉬움으로 보지 않았다" if not review_says_easy(job)
+    why = ("엔진이 쉬움을 확인하지 못했다" if not proven_easy(state) else "리뷰가 쉬움으로 보지 않았다" if not verdict
            else "남은 지적이 없음이 아니다" if not claims(review.encode(), r"남은\W*지적[^:]*:", {"남은 지적: 없음"})
-           else "리뷰한 head가 CI가 통과한 head와 다르다" if not head or head != pushed
+           else "리뷰한 head가 CI가 통과한 head와 다르다(체크 없음 포함)" if head != passed
            # proven_easy saw the checked commit only: the review's commits may touch a trust path too
            else "리뷰한 head가 민감한 파일을 바꾼다(TRUST_NAMES)" if not base or touches_trust(git, base[0], head) else None)
     if why:
@@ -473,22 +477,34 @@ def enqueue(job, task, state):
         answer = json.loads(view.stdout) if view.returncode == 0 else None
         stamps = [str(c.get("createdAt") or c.get("submittedAt") or "") for c in answer["comments"] + answer["reviews"]]
         pr_id = answer["id"]
+        # Line comments and replies in old threads, and edits (a bot may post its findings by editing its summary comment)
+        number = re.search(r"/pull/(\d+)", url)[1]
+        for kind in ("pulls", "issues"):
+            rest = subprocess.run(["gh", "api", "--paginate", f"repos/{slug(url)}/{kind}/{number}/comments", "--jq",
+                                   ".[] | .updated_at // .created_at // \"\""], cwd=job, capture_output=True, text=True, timeout=60)
+            if rest.returncode:
+                raise ValueError(f"gh api {kind} comments: {rest.stderr.strip()}")
+            stamps += rest.stdout.splitlines()
     except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError) as error:
         return f"사람이 병합한다: PR을 읽지 못했다({error})"
     since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ended)) if ended else ""
-    if not since or any(not s or s > since for s in stamps):  # GitHub's ISO times compare as strings
+    if not since or any(not s or s >= since for s in stamps):  # GitHub's ISO times compare as strings; the same second counts
         return "사람이 병합한다: 리뷰가 끝난 뒤 달린 리뷰나 댓글이 있다(판정하지 않은 외부 리뷰)"
     query = ("mutation($id:ID!,$sha:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$sha})"
              "{mergeQueueEntry{position}}}")
-    put = subprocess.run(["gh", "api", "graphql", "-f", f"query={query}", "-f", f"id={pr_id}", "-f", f"sha={head}"],
-                         cwd=job, capture_output=True, text=True)
+    try:
+        put = subprocess.run(["gh", "api", "graphql", "-f", f"query={query}", "-f", f"id={pr_id}", "-f", f"sha={head}"],
+                             cwd=job, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return f"사람이 병합한다: 머지 큐 요청에 답이 없었다({error}). 큐에 들어갔는지 PR에서 확인한다"
     if put.returncode:
         return f"사람이 병합한다: 머지 큐에 넣지 못했다({(put.stderr or put.stdout).strip()})"
     return f"엔진이 `{head}`를 머지 큐에 넣었다(쉬움, 남은 지적 없음, CI 통과). 큐가 최신 main에서 CI를 다시 돌리고 병합한다"
 
 
-def wait_ci(job):
+def wait_ci(job, seen=None):
     """Wait for the PR's checks on the head the engine pushed, then note them in REPORT.md; else why not.
+    seen["passed"] is that head when its checks passed (not when there were none).
     The engine ends when CI ends, so the leader hears of a red PR from this run instead of finding it on the board."""
     url = (job / "pr.txt").read_text(encoding="utf-8").split()[0]
     head = subprocess.run(["git", "-C", str(job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
@@ -509,6 +525,8 @@ def wait_ci(job):
                           for c in checks if ci_state([c]) == "fail"]
                 return f"CI failed on {head}: " + "; ".join(failed)
             if ci == "pass" or not ci and waited >= CI_NONE:
+                if ci and seen is not None:
+                    seen["passed"] = head
                 with open(job / "REPORT.md", "a", encoding="utf-8") as report:
                     report.write(f"\n## CI\n\n- `{head}`: " + ("통과\n" if ci else f"체크 없음({CI_NONE:g}초 기다림)\n"))
                 return None
@@ -630,7 +648,8 @@ def advance(job, name, runner):
                 file = job / stage["approve"]
                 # The owner's standing approval (AGENTS.md 「설계 승인」): an easy design goes on; a hard one waits for a person.
                 raw = file.read_bytes() if file.exists() else b""
-                if stage.get("auto") != "easy" or not door_easy(raw):
+                # Only the current wording: the old Door: 되돌리기 쉬움 still reads as easy for a PR, but never approves a design.
+                if stage.get("auto") != "easy" or not claims(raw, DOOR_CLAIM, {"되돌리기: 쉬움"}):
                     print(f"waiting: a person reads {file} and runs engine.py approve {name}")
                     return WAIT
                 # The sha256 of the bytes just judged easy: a file swapped since fails the binding check and comes back here.
@@ -680,11 +699,12 @@ def advance(job, name, runner):
                 save(state_path, state)
             write_report(job, task, state, flow)
         elif stage["by"] == "script" and stage.get("ci"):
-            if error := wait_ci(job):  # a red CI needs a person: no retry, the leader passes it on
+            seen = {}
+            if error := wait_ci(job, seen):  # a red CI needs a person: no retry, the leader passes it on
                 return block(job, error)
             if stage.get("enqueue") == "easy":
                 with open(job / "REPORT.md", "a", encoding="utf-8") as report:
-                    report.write(f"\n## 병합\n\n- {enqueue(job, task, state)}\n")
+                    report.write(f"\n## 병합\n\n- {enqueue(job, task, state, seen.get('passed'))}\n")
         elif stage["by"] == "script":
             git = lambda *a: subprocess.run(["git", *a], cwd=job / "repo", capture_output=True, text=True).stdout.strip()  # noqa: E731
             # Read what the worker handed over before the test writes its own files (caches, reports).
