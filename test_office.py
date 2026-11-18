@@ -249,12 +249,18 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(self.engine.approve("search"), 0)
         self.assertNotIn("approve", self.state()["auto_approved"])
 
-    def queued(self, review, comments="[]", review_files=(), stamps="", checks=None, base="main", **state):
+    def queued(self, review, comments="[]", review_files=(), stamps="", checks=None, base="main", office=None, **state):
         """At the post stage with review.md, the PR's comments and state set, run to the end; the enqueue calls and REPORT.md 「병합」.
         review_files: the review worker commits these after the checked commit the draft stage proved easy."""
         self.at_post()
         self.pr_json.write_text(f'{{"id": "PR_7", "baseRefName": "{base}", "comments": {comments}, "reviews": []}}', encoding="utf-8")
         self.api_stamps.write_text(stamps, encoding="utf-8")
+        own = office or "https://github.com/office/office.git"  # the office checkout's origin, never the product's
+        patch = unittest.mock.patch.object(self.engine.subprocess, "run", side_effect=lambda argv, *a, _run=subprocess.run, **k: (
+            subprocess.CompletedProcess(argv, 0, own + "\n", "") if argv[:2] == ["git", "-C"] and argv[2] == str(self.engine.OFFICE)
+            and argv[3:] == ["config", "--get", "remote.origin.url"] else _run(argv, *a, **k)))
+        patch.start()
+        self.addCleanup(patch.stop)
         if checks is not None:
             self.checks.write_text(checks, encoding="utf-8")
             self.engine.CI_NONE = 0
@@ -291,7 +297,8 @@ class PipelineTests(unittest.TestCase):
                  ("리뷰한 head와 되돌리기: {head}, 쉬움이 아님\n남은 지적: 없음\n", {}, "리뷰가 쉬움으로"),
                  (easy + "리뷰한 head와 되돌리기: {head}, 어려움\n", {}, "리뷰가 쉬움으로"),  # a second verdict
                  (easy, {"checks": "[]"}, "체크 없음"),
-                 (easy, {"base": "release"}, "base가"),  # a person moved the PR: the trust check would see the wrong base  # no CI is not a green CI
+                 (easy, {"base": "release"}, "base가"),
+                 (easy, {"office": "https://github.com/O/R.git"}, "repo-office 자신의 PR"),  # the PR is in the office repository  # a person moved the PR: the trust check would see the wrong base  # no CI is not a green CI
                  (easy, {"stamps": "2999-01-01T00:00:00Z\n"}, "리뷰가 끝난 뒤"),  # a reply in an old thread, or an edit
                  (easy, {"models": []}, "리뷰가 끝난 뒤"),
                  (easy, {"comments": '[{"createdAt": "2999-01-01T00:00:00Z"}]'}, "리뷰가 끝난 뒤")]  # nobody judged it
