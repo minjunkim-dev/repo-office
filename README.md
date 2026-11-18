@@ -1,14 +1,14 @@
 # repo-office
 
-repo-office는 이슈나 개발 요청 하나를 PR까지 만드는 실험 파이프라인이다. PR은 리뷰까지 마친 상태로 나온다. 사람은 설계를 승인하고 PR을 병합하기만 한다.
+repo-office는 이슈나 개발 요청 하나를 PR까지 만드는 실험 파이프라인이다. PR은 리뷰까지 마친 상태로 나온다. 사람은 되돌리기 어려움인 설계를 승인하고 그 PR을 병합하기만 한다. 쉬움 설계와 쉬움 PR은 엔진이 승인하고 머지 큐에 넣는다.
 
 나머지는 두 가지가 돌린다. leader는 사람과 말하고 과제를 등록하는 Claude Code 세션이다(`leader/`). 늘 떠 있는 세션은 leader 하나뿐이다. 엔진(`pipeline/engine.py`)은 설계·구현·리뷰 같은 단계마다 Claude Code를 띄우고, 단계가 끝나면 닫는다. 이렇게 단계마다 띄우는 Claude Code를 작업자라고 부른다. 구현 작업자는 설계 작업자의 세션을 이어받아 설계 맥락을 잇는다. 리뷰 작업자는 다른 세션이다.
 
 규칙은 [AGENTS.md](AGENTS.md)에 있다. 이어받는 사람이 읽을 기록은 [HANDOFF.md](HANDOFF.md)에 있다. 제품 저장소를 연결하는 법은 [docs/connect.md](docs/connect.md)에 있다.
 
 ```text
-사람 ─ leader ─ engine.py run ─┬─ 설계(opus) ─ 사람 승인 ─ 구현(haiku 또는 sonnet) ─ 검사
-                               └─ push·PR·Ready ─ 리뷰(다른 세션) ─ 본문·REPORT.md ─ 사람 병합
+사람 ─ leader ─ engine.py run ─┬─ 설계(opus) ─ 승인(쉬움은 엔진) ─ 구현(haiku 또는 sonnet) ─ 검사
+                               └─ push·PR·Ready ─ 리뷰(다른 세션) ─ 본문·REPORT.md ─ CI ─ 병합(쉬움은 엔진이 큐에)
 ```
 
 ## 필요한 것

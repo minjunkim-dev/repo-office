@@ -112,6 +112,9 @@ class PipelineTests(unittest.TestCase):
         # The ci stage's question: the PR head is the task's HEAD, and its checks are self.checks (green by default).
         self.checks = Path(self.tmp.name) / "checks.json"
         self.checks.write_text('[{"name": "CI", "status": "COMPLETED", "conclusion": "SUCCESS"}]', encoding="utf-8")
+        # The ci stage's look before it queues an easy PR: the PR's node id and its reviews and comments.
+        self.pr_json = Path(self.tmp.name) / "pr.json"
+        self.pr_json.write_text('{"id": "PR_7", "comments": [], "reviews": []}', encoding="utf-8")
         (bin_dir / "gh").write_text(
             "#!/usr/bin/env python3\nimport json, sys\n"
             "stdin = [sys.stdin.read()] if sys.argv[1:3] == ['pr', 'edit'] else []\n"
@@ -123,6 +126,7 @@ class PipelineTests(unittest.TestCase):
             "    import subprocess\n"
             f"    head = subprocess.run(['git', '-C', {str(self.job / 'repo')!r}, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()\n"
             f"    print(json.dumps({{'headRefOid': head, 'statusCheckRollup': json.load(open({str(self.checks)!r}))}}))\n"
+            f"elif sys.argv[1:3] == ['pr', 'view'] and 'id,comments,reviews' in sys.argv: print(open({str(self.pr_json)!r}).read())\n"
             f"elif sys.argv[1:3] == ['pr', 'view']: print(open({str(draft)!r}).read().strip())\n"
             f"if sys.argv[1:3] == ['pr', 'ready']: open({str(draft)!r}, 'w').write('false')\n", encoding="utf-8")
         (bin_dir / "gh").chmod(0o755)
@@ -212,6 +216,68 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
         self.assertEqual(self.state()["stage"], "approve")
         self.assertEqual([c[0] for c in worker.calls], ["design"])
+
+    def test_an_easy_design_is_approved_by_the_engine_and_a_hard_one_waits(self):
+        design = ["되돌리기: 쉬움\n"]
+
+        class Worker(FakeWorker):
+            def __call__(w, name, cwd, argv, message):
+                super().__call__(name, cwd, argv, message)
+                if name.endswith("-design"):
+                    (self.job / "design.md").write_text(design[0], encoding="utf-8")
+
+        worker = Worker(self.job, skip=["implement", "implement"])  # stop after the approval: two tries, then a block
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.engine.run("search", worker)
+        state = self.state()
+        self.assertEqual(state["approved"]["approve"], self.engine.sha(self.job / "design.md"))
+        self.assertEqual(state["auto_approved"], state["approved"])  # the board and the report can tell it from a person's
+        # A design rewritten as hard goes back to the approval and waits for a person, who then owns the approval.
+        for line in ("되돌리기: 어려움\n", "되돌리기: 쉬움\n되돌리기: 어려움\n", "되돌리기 쉬움\n", "난이도: 쉬움\n"):
+            with self.subTest(line=line):
+                (self.job / "BLOCKED.md").unlink(missing_ok=True)
+                (self.job / "design.md").write_text(line, encoding="utf-8")
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
+                self.assertEqual(self.state()["stage"], "approve")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.engine.approve("search"), 0)
+        self.assertNotIn("approve", self.state()["auto_approved"])
+
+    def queued(self, review, comments="[]", **state):
+        """At the post stage with review.md, the PR's comments and state set, run to the end; the enqueue calls and REPORT.md 「병합」."""
+        self.at_post()
+        self.pr_json.write_text(f'{{"id": "PR_7", "comments": {comments}, "reviews": []}}', encoding="utf-8")
+        head = subprocess.run(["git", "-C", str(self.job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        (self.job / "review.md").write_text(review.format(head=head), encoding="utf-8")
+        self.engine.save(self.job / "state.json", {**self.state(), "easy_pr": head, "checked": head, "models": [
+            {"stage": "review", "model": "sonnet", "effort": "medium", "rerun": False, "start": 0, "end": int(time.time()) - 60}], **state})
+        self.assertEqual(self.post(), self.engine.DONE)
+        calls = [c for c in self.gh_calls() if c[:2] == ["api", "graphql"] and any("enqueuePullRequest" in a for a in c)]
+        return head, calls, (self.job / "REPORT.md").read_text().split("## 병합")[-1]
+
+    def test_an_easy_pr_with_nothing_left_goes_in_the_merge_queue_on_the_reviewed_head(self):
+        head, calls, note = self.queued("리뷰한 head와 되돌리기: {head}, 되돌리기 쉬움\n고친 것: P0 0, P1 0, P2 0\n남은 지적: 없음\n")
+        self.assertEqual(calls, [["api", "graphql", "-f", calls[0][3], "-f", "id=PR_7", "-f", f"sha={head}"]])
+        self.assertIn("expectedHeadOid:$sha", calls[0][3])  # the queue refuses any other head
+        self.assertIn(f"`{head}`를 머지 큐에 넣었다", note)
+
+    def test_a_pr_that_needs_a_person_is_not_queued(self):
+        easy = "리뷰한 head와 되돌리기: {head}, 되돌리기 쉬움\n남은 지적: 없음\n"
+        cases = [("리뷰한 head와 되돌리기: {head}, 되돌리기 어려움\n남은 지적: 없음\n", {}, "리뷰가 쉬움으로"),
+                 ("리뷰한 head와 되돌리기: {head}, 되돌리기 쉬움\n남은 지적: [Spec] P2 y, a.py:3\n", {}, "남은 지적이"),
+                 ("리뷰한 head와 되돌리기: {head}, 되돌리기 쉬움\n", {}, "남은 지적이"),
+                 ("리뷰한 head와 되돌리기: " + "a" * 40 + ", 되돌리기 쉬움\n남은 지적: 없음\n", {}, "CI가 통과한 head와"),
+                 (easy, {"easy_pr": None}, "쉬움을 확인하지"),
+                 (easy, {"models": []}, "리뷰가 끝난 뒤"),
+                 (easy, {"comments": '[{"createdAt": "2999-01-01T00:00:00Z"}]'}, "리뷰가 끝난 뒤")]  # nobody judged it
+        for review, state, why in cases:
+            with self.subTest(review=review, state=state):
+                self.setUp()
+                head, calls, note = self.queued(review, **state)
+                self.assertEqual(calls, [])
+                self.assertIn("사람이 병합한다", note)
+                self.assertIn(why, note)
 
     def test_approve_refuses_outside_an_approval_stage(self):
         self.engine.run("search", FakeWorker(self.job))
@@ -368,9 +434,12 @@ class PipelineTests(unittest.TestCase):
                                 subprocess.run([*git, "commit", "-q", "-m", "g"], check=True)
 
                 worker = Worker(self.job)
-                self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
-                self.assertEqual(self.engine.approve("search"), 0)
-                self.engine.run("search", worker)
+                if self.engine.run("search", worker) == self.engine.WAIT:
+                    self.assertFalse(self.engine.door_easy(design.encode()))
+                    self.assertEqual(self.engine.approve("search"), 0)
+                    self.engine.run("search", worker)
+                else:  # an easy design needs no person: the approve stage recorded its bytes itself
+                    self.assertEqual(self.state()["auto_approved"]["approve"], self.engine.sha(self.job / "design.md"))
                 # Every PR is opened ready, so no draft-to-ready event runs the PR workflows twice;
                 # the proof of easy picks the review's model (and the report's note) only.
                 self.assertEqual(draft.read_text(), "false")
