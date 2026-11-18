@@ -119,7 +119,8 @@ def difficulty(job, state, flow):
 
 
 def proven_easy(state):
-    """The draft stage proved the PR easy for the commit that was checked and pushed: a later commit or a rerun of the check drops it."""
+    """The draft stage proved the PR easy for the commit that was checked and pushed: a rerun of the check drops it.
+    The review's commits come after and do not drop it: enqueue checks their paths again."""
     return bool(state.get("easy_pr")) and state.get("easy_pr") == state.get("checked")
 
 
@@ -283,13 +284,18 @@ def open_draft(job, task, stage, raw, head, approved=None, seen=None):
     # a hard or trust-boundary PR needs a person to read its diff before the merge.
     if stage.get("easy"):
         design = read_body(job / stage["easy"])  # only the approved bytes (a person's, or the approve stage's for an easy design)
-        # -z: raw names, not C-quoted ones; --no-renames: a rename out of a trust path shows its old name too
-        names = git("diff", "--name-only", "-z", "--no-renames", f"{remote[0]}...{head}")
-        guarded = names.returncode or any(part.casefold() in TRUST_NAMES for n in names.stdout.split("\0") for part in n.split("/"))
+        guarded = touches_trust(git, remote[0], head)
         if approved and hashlib.sha256(design).hexdigest() == approved and easy(design, raw) and not guarded:
             if seen is not None:
                 seen["easy"] = True
     return None
+
+
+def touches_trust(git, base, head):
+    """The branch base...head changes or moves a TRUST_NAMES path, or git could not tell (fails closed)."""
+    # -z: raw names, not C-quoted ones; --no-renames: a rename out of a trust path shows its old name too
+    names = git("diff", "--name-only", "-z", "--no-renames", f"{base}...{head}")
+    return bool(names.returncode) or any(part.casefold() in TRUST_NAMES for n in names.stdout.split("\0") for part in n.split("/"))
 
 
 # Paths a worker could use to steer later sessions or tools, whatever the body claims: those PRs wait for a person.
@@ -442,7 +448,7 @@ def reviewed_head(review):
     return head[1] if head else None
 
 
-def enqueue(job, state):
+def enqueue(job, task, state):
     """Put the PR in the merge queue on the reviewed head when nothing needs a person, and say what was done (REPORT.md).
     The owner's standing instruction for the PRs the engine opens (AGENTS.md 「push와 PR」, POLICY §5): the engine proved the
     PR easy, the review says easy with nothing left, CI passed on the reviewed head, and no review or comment came after
@@ -450,10 +456,15 @@ def enqueue(job, state):
     review = (job / "review.md").read_text(encoding="utf-8", errors="replace") if (job / "review.md").exists() else ""
     head, url = reviewed_head(review), (job / "pr.txt").read_text(encoding="utf-8").split()[0]
     pushed = subprocess.run(["git", "-C", str(job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-    left = re.search(r"^\s*남은 지적:(.*)$", review, re.M)
+    git = lambda *a: subprocess.run(["git", "-C", str(job / "repo"), *a], capture_output=True, text=True)  # noqa: E731
+    base = git("ls-remote", "origin", f"refs/heads/{task['base'].removeprefix('origin/')}").stdout.split()[:1]
+    if base:
+        git("fetch", "-q", "origin", base[0])
     why = ("엔진이 쉬움을 확인하지 못했다" if not proven_easy(state) else "리뷰가 쉬움으로 보지 않았다" if not review_says_easy(job)
-           else "남은 지적이 없음이 아니다" if not left or left[1].strip() != "없음"
-           else "리뷰한 head가 CI가 통과한 head와 다르다" if not head or head != pushed else None)
+           else "남은 지적이 없음이 아니다" if not claims(review.encode(), r"남은\W*지적[^:]*:", {"남은 지적: 없음"})
+           else "리뷰한 head가 CI가 통과한 head와 다르다" if not head or head != pushed
+           # proven_easy saw the checked commit only: the review's commits may touch a trust path too
+           else "리뷰한 head가 민감한 파일을 바꾼다(TRUST_NAMES)" if not base or touches_trust(git, base[0], head) else None)
     if why:
         return f"사람이 병합한다: {why}"
     ended = max((m["end"] for m in state.get("models", []) if m["stage"] == "review" and m.get("end")), default=None)
@@ -618,10 +629,12 @@ def advance(job, name, runner):
             if stage.get("approve") and sha(job / stage["approve"]) != state.get("approved", {}).get(stage["id"]):
                 file = job / stage["approve"]
                 # The owner's standing approval (AGENTS.md 「설계 승인」): an easy design goes on; a hard one waits for a person.
-                if stage.get("auto") != "easy" or not file.exists() or not door_easy(file.read_bytes()):
+                raw = file.read_bytes() if file.exists() else b""
+                if stage.get("auto") != "easy" or not door_easy(raw):
                     print(f"waiting: a person reads {file} and runs engine.py approve {name}")
                     return WAIT
-                state.setdefault("approved", {})[stage["id"]] = state.setdefault("auto_approved", {})[stage["id"]] = sha(file)
+                # The sha256 of the bytes just judged easy: a file swapped since fails the binding check and comes back here.
+                state.setdefault("approved", {})[stage["id"]] = state.setdefault("auto_approved", {})[stage["id"]] = hashlib.sha256(raw).hexdigest()
                 state.pop("easy_pr", None)  # as approve(): an open PR is never proven again
                 save(state_path, state)
                 print(f"auto-approved {stage['approve']} {state['approved'][stage['id']]}: it says 되돌리기: 쉬움")
@@ -671,7 +684,7 @@ def advance(job, name, runner):
                 return block(job, error)
             if stage.get("enqueue") == "easy":
                 with open(job / "REPORT.md", "a", encoding="utf-8") as report:
-                    report.write(f"\n## 병합\n\n- {enqueue(job, state)}\n")
+                    report.write(f"\n## 병합\n\n- {enqueue(job, task, state)}\n")
         elif stage["by"] == "script":
             git = lambda *a: subprocess.run(["git", *a], cwd=job / "repo", capture_output=True, text=True).stdout.strip()  # noqa: E731
             # Read what the worker handed over before the test writes its own files (caches, reports).

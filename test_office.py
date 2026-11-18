@@ -244,13 +244,16 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(self.engine.approve("search"), 0)
         self.assertNotIn("approve", self.state()["auto_approved"])
 
-    def queued(self, review, comments="[]", **state):
-        """At the post stage with review.md, the PR's comments and state set, run to the end; the enqueue calls and REPORT.md 「병합」."""
+    def queued(self, review, comments="[]", review_files=(), **state):
+        """At the post stage with review.md, the PR's comments and state set, run to the end; the enqueue calls and REPORT.md 「병합」.
+        review_files: the review worker commits these after the checked commit the draft stage proved easy."""
         self.at_post()
         self.pr_json.write_text(f'{{"id": "PR_7", "comments": {comments}, "reviews": []}}', encoding="utf-8")
-        head = subprocess.run(["git", "-C", str(self.job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        checked = subprocess.run(["git", "-C", str(self.job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        head = self.review_commit(*review_files) if review_files else checked
+        state = {"easy_pr": checked, "checked": checked, **state}
         (self.job / "review.md").write_text(review.format(head=head), encoding="utf-8")
-        self.engine.save(self.job / "state.json", {**self.state(), "easy_pr": head, "checked": head, "models": [
+        self.engine.save(self.job / "state.json", {**self.state(), "models": [
             {"stage": "review", "model": "sonnet", "effort": "medium", "rerun": False, "start": 0, "end": int(time.time()) - 60}], **state})
         self.assertEqual(self.post(), self.engine.DONE)
         calls = [c for c in self.gh_calls() if c[:2] == ["api", "graphql"] and any("enqueuePullRequest" in a for a in c)]
@@ -261,6 +264,9 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(calls, [["api", "graphql", "-f", calls[0][3], "-f", "id=PR_7", "-f", f"sha={head}"]])
         self.assertIn("expectedHeadOid:$sha", calls[0][3])  # the queue refuses any other head
         self.assertIn(f"`{head}`를 머지 큐에 넣었다", note)
+        self.setUp()  # a review commit outside the trust paths is queued too, on its own head
+        head, calls, note = self.queued("리뷰한 head와 되돌리기: {head}, 되돌리기 쉬움\n남은 지적: 없음\n", review_files=("fix.py",))
+        self.assertEqual(calls[0][-1], f"sha={head}")
 
     def test_a_pr_that_needs_a_person_is_not_queued(self):
         easy = "리뷰한 head와 되돌리기: {head}, 되돌리기 쉬움\n남은 지적: 없음\n"
@@ -269,6 +275,9 @@ class PipelineTests(unittest.TestCase):
                  ("리뷰한 head와 되돌리기: {head}, 되돌리기 쉬움\n", {}, "남은 지적이"),
                  ("리뷰한 head와 되돌리기: " + "a" * 40 + ", 되돌리기 쉬움\n남은 지적: 없음\n", {}, "CI가 통과한 head와"),
                  (easy, {"easy_pr": None}, "쉬움을 확인하지"),
+                 (easy + "남은 지적: [Spec] P1 x, a.py:1\n", {}, "남은 지적이"),  # every line, not the first
+                 (easy, {"review_files": ("docs/AGENTS.md",)}, "민감한 파일"),  # a review commit after the proof
+                 (easy, {"review_files": (".claude/settings.json",)}, "민감한 파일"),
                  (easy, {"models": []}, "리뷰가 끝난 뒤"),
                  (easy, {"comments": '[{"createdAt": "2999-01-01T00:00:00Z"}]'}, "리뷰가 끝난 뒤")]  # nobody judged it
         for review, state, why in cases:
