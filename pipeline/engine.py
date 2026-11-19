@@ -31,6 +31,7 @@ import os
 import re
 import shutil
 import subprocess
+import urllib.parse
 import sys
 import tempfile
 import threading
@@ -201,9 +202,23 @@ def block(job, reason):
 
 
 def slug(url):
-    """owner/repo of a GitHub URL (https, ssh or a PR link), else None."""
-    found = re.search(r"github\.com[:/]+([\w.-]+)/([\w.-]+?)(?:\.git)?(?:[/\s]|$)", url)
-    return f"{found[1]}/{found[2]}".lower() if found else None
+    """owner/repo of a github.com URL (https, ssh, scp-style git@github.com:o/r or a PR link), else None.
+    The host is parsed, not searched for: notgithub.com and github.com in another host's path are not GitHub."""
+    url = (url.split() or [""])[0]
+    scp = re.fullmatch(r"[\w.-]+@github\.com:([\w.-]+)/([\w.-]+?)(?:\.git)?/?", url)
+    if scp:
+        parts = list(scp.groups())
+    else:
+        try:
+            parsed = urllib.parse.urlsplit(url)
+            host = parsed.hostname
+        except ValueError:
+            return None
+        parts = parsed.path.strip("/").split("/")[:2]
+        if parsed.scheme not in ("https", "http", "ssh", "git") or host != "github.com" or len(parts) < 2:
+            return None
+        parts[1] = re.sub(r"\.git$", "", parts[1])
+    return "/".join(parts).lower() if all(re.fullmatch(r"[\w.-]+", part) for part in parts) else None
 
 
 def unpinned(job, task):
@@ -451,9 +466,9 @@ def reviewed_head(review):
 NOTE_LISTS = ("issues/{n}/comments", "pulls/{n}/comments", "pulls/{n}/reviews")
 
 
-def pr_notes(job, url):
+def pr_notes(job, url, bodies=None):
     """Every comment, line comment and review on the PR as `kind:id:sha256(body)`: a new one or an edit (a bot may post its
-    findings by editing its summary) is a new entry. Raises on any gh failure."""
+    findings by editing its summary) is a new entry. bodies, if given, gets {entry: body}. Raises on any gh failure."""
     number = re.search(r"/pull/(\d+)", url)[1]
     notes = []
     for path in NOTE_LISTS:
@@ -464,24 +479,29 @@ def pr_notes(job, url):
         for line in got.stdout.splitlines():
             ident, body = json.loads(line)
             notes.append(f"{path.split('/')[0]}/{path.split('/')[-1]}:{ident}:{hashlib.sha256(body.encode()).hexdigest()}")
+            if bodies is not None:
+                bodies[notes[-1]] = body
     return sorted(notes)
 
 
 def record_seen(name):
-    """The review worker runs this after judging every review and comment: seen.json is what it judged. enqueue compares
-    the PR's notes with it, so anything new or edited afterwards is an unjudged external review."""
+    """The review worker runs this before judging: seen.json is the list it judges, and seen-bodies.json the exact bodies
+    it judges, so what it read is what the hashes say. enqueue compares the PR's notes with seen.json, so anything new or
+    edited afterwards is an unjudged external review."""
     job = JOBS / name
     error = missing(job, name, "pr.txt")
     if error:
         print(error, file=sys.stderr)
         return 2
     try:
-        notes = pr_notes(job, (job / "pr.txt").read_text(encoding="utf-8").split()[0])
+        bodies = {}
+        notes = pr_notes(job, (job / "pr.txt").read_text(encoding="utf-8").split()[0], bodies)
     except (OSError, subprocess.TimeoutExpired, ValueError, TypeError) as failed:
         print(f"could not read the PR's reviews and comments: {failed}", file=sys.stderr)
         return 2
+    (job / "seen-bodies.json").write_text(json.dumps(bodies, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     (job / "seen.json").write_text(json.dumps(notes, indent=1) + "\n", encoding="utf-8")
-    print(f"{len(notes)} reviews and comments recorded in {job / 'seen.json'}")
+    print(f"{len(notes)} reviews and comments recorded in {job / 'seen.json'}; judge the bodies in {job / 'seen-bodies.json'}")
     return 0
 
 

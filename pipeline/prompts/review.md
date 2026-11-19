@@ -11,7 +11,7 @@
   - 4번에서 스킬은 `mattpocock-skills:code-review`라고 이름을 다 써서 부른다. 앞 이름 없는 `code-review`는 Claude Code 내장 스킬로 간다. 스킬에 넘길 때 diff는 `git diff`로 만들지 말고 `{job}/pr.diff`를 Read로 읽으라고 덧붙인다. 커밋 목록이 필요하면 `git -C repo log <base>..HEAD --oneline`이다. 이 단계의 작업 폴더는 git 저장소가 아니다.
 - 리뷰할 PR: `{job}/pr.txt`에 적힌 URL. 작업 트리 `{job}/repo/`는 이미 그 PR의 브랜치다. `gh pr checkout`은 하지 않는다.
 - 고친 커밋은 commit만 한다. push는 거부된다. 이 단계가 끝나면 엔진이 PR 브랜치 `office/{name}`에 push하고 나서 본문을 올린다. 커밋이 `.github`을 바꾸면 엔진은 push하지 않고 멈춘다.
-- PR의 리뷰·댓글(봇 포함)을 판정하기 전에 `python3 {office}/pipeline/engine.py seen {name}`을 돌린다. 엔진이 지금 PR의 리뷰·댓글 목록을 `{job}/seen.json`에 남긴다. 그다음 이 목록의 리뷰·댓글을 모두 판정한다. 엔진은 이 목록에 없거나 본문이 바뀐 리뷰·댓글이 생기면 그 PR을 머지 큐에 넣지 않는다. 그래서 목록을 먼저 남기면, 판정하는 동안이나 그 뒤에 달린 리뷰는 판정 없이 큐로 가지 않는다. 판정하는 동안 새 리뷰가 달렸으면 다시 돌리고, 새 `seen.json` 목록 전체를 처음부터 다시 판정한다. 다시 돌리기 전의 판정은 새 목록의 판정으로 세지 않는다. `seen.json`은 고치지 않는다.
+- PR의 리뷰·댓글(봇 포함)을 판정하기 전에 `python3 {office}/pipeline/engine.py seen {name}`을 돌린다. 엔진이 지금 PR의 리뷰·댓글 목록을 `{job}/seen.json`에, 그 본문을 `{job}/seen-bodies.json`에 남긴다. 그다음 이 목록의 리뷰·댓글을 모두 판정한다. 판정은 `seen-bodies.json`의 본문으로 한다. GitHub에서 다시 읽은 본문은 기록 뒤 바뀌었을 수 있다. 엔진은 이 목록에 없거나 본문이 바뀐 리뷰·댓글이 생기면 그 PR을 머지 큐에 넣지 않는다. 그래서 목록을 먼저 남기면, 판정하는 동안이나 그 뒤에 달린 리뷰는 판정 없이 큐로 가지 않는다. 판정하는 동안 새 리뷰가 달렸으면 다시 돌리고, 새 `seen.json` 목록 전체를 처음부터 다시 판정한다. 다시 돌리기 전의 판정은 새 목록의 판정으로 세지 않는다. `seen.json`은 고치지 않는다.
 - 보고는 그 프롬프트의 「보고」 형식으로 `{job}/review.md`에 쓴다. 「리뷰한 head와 되돌리기」 줄의 SHA는 40자 전체로 쓴다. 엔진은 그 SHA로만 `REPORT.md`의 병합 명령을 만든다. 같은 내용을 PR 본문 Review 칸에도 적는다. `gh pr view`로 받은 지금 본문을 고쳐, 그 본문 전체를 `{job}/review-body.md`에 쓴다. 제목 줄은 넣지 않는다. 그다음 끝낸다. 이 단계가 끝나면 엔진이 이 파일을 읽어 PR 본문으로 올린다. `gh pr edit`은 거부된다. 이 파일은 60000바이트를 넘지 않아야 한다.
 - 병합·`main` push·배포는 하지 않는다. 병합은 소유자가 한다(POLICY §5).
 - 막히면 지어내지 말고 `{job}/BLOCKED.md`에 이유를 적고 끝낸다.

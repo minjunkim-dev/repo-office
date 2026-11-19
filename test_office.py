@@ -305,6 +305,14 @@ class PipelineTests(unittest.TestCase):
         head, calls, note = self.queued("리뷰한 head와 되돌리기: {head}, 되돌리기 쉬움\n남은 지적: 없음\n", review_files=("fix.py",))
         self.assertEqual(calls[0][-1], f"sha={head}")
 
+    def test_seen_records_the_bodies_the_worker_judges(self):
+        self.queued("리뷰한 head와 되돌리기: {head}, 되돌리기 쉬움\n남은 지적: 없음\n")
+        judged = json.loads((self.job / "seen.json").read_text(encoding="utf-8"))
+        bodies = json.loads((self.job / "seen-bodies.json").read_text(encoding="utf-8"))
+        self.assertEqual(sorted(bodies), judged)
+        for note, body in bodies.items():  # each body hashes to its entry: what the worker reads is what was recorded
+            self.assertEqual(note.rsplit(":", 1)[1], hashlib.sha256(body.encode()).hexdigest())
+
     def test_a_pr_that_needs_a_person_is_not_queued(self):
         easy = "리뷰한 head와 되돌리기: {head}, 되돌리기 쉬움\n남은 지적: 없음\n"
         cases = [("리뷰한 head와 되돌리기: {head}, 되돌리기 어려움\n남은 지적: 없음\n", {}, "리뷰가 쉬움으로"),
@@ -1077,6 +1085,11 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(engine.slug("git@github.com:O/R.git\n"), "o/r")
         self.assertEqual(engine.slug("https://github.com/o/r/pull/1\n"), "o/r")
         self.assertIsNone(engine.slug("/tmp/r"))
+        self.assertEqual(engine.slug("ssh://git@github.com/O/R.git"), "o/r")
+        for other in ("https://notgithub.com/o/r.git", "https://evil.example/github.com/o/r", "https://github.com.evil/o/r",
+                      "git@evil.example:github.com/o/r", "file:///github.com/o/r", "https://github.com/o"):
+            with self.subTest(other=other):
+                self.assertIsNone(engine.slug(other))
 
     def test_task_names_are_safe_folder_and_terminal_names(self):
         for bad in ("../x", "검색", "A", "a" * 25):
