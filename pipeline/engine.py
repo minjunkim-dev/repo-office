@@ -775,7 +775,10 @@ def skills(name, base):
         print(error or f"base must be the preflight's base ref, got {base!r}", file=sys.stderr)
         return 2
     script = BASELINE / "profiles/matt-skills/check_skills.py"
-    return subprocess.run([sys.executable, "-I", str(script), base, "--harness", "claude"], cwd=job / "repo").returncode
+    # Workers load this checkout's project settings, which turn the plugin on even when the user's settings turn it off.
+    # A repo-baseline clone older than --settings refuses the option (exit 2): the review then goes on without delegating.
+    return subprocess.run([sys.executable, "-I", str(script), base, "--harness", "claude",
+                           "--settings", str(OFFICE / ".claude/settings.json")], cwd=job / "repo").returncode
 
 
 def approve(name):

@@ -1116,7 +1116,8 @@ class PipelineTests(unittest.TestCase):
                     self.assertEqual(self.engine.skills("search", base), 2)
         self.assertEqual(run.call_count, 1)  # a bad base never runs the script
         script = str(self.engine.BASELINE / "profiles/matt-skills/check_skills.py")
-        self.assertEqual(argv[0][1:], ["-I", script, "refs/remotes/origin/main", "--harness", "claude"])
+        self.assertEqual(argv[0][1:], ["-I", script, "refs/remotes/origin/main", "--harness", "claude",
+                                       "--settings", str(self.engine.OFFICE / ".claude/settings.json")])
         self.assertEqual(kwargs["cwd"], self.job / "repo")
 
     @unittest.skipUnless(os.environ.get("OFFICE_LIVE_CLAUDE") == "1" and shutil.which("claude"), "set OFFICE_LIVE_CLAUDE=1 to start a real worker")
