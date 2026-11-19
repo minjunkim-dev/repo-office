@@ -305,6 +305,23 @@ class PipelineTests(unittest.TestCase):
         head, calls, note = self.queued("리뷰한 head와 되돌리기: {head}, 되돌리기 쉬움\n남은 지적: 없음\n", review_files=("fix.py",))
         self.assertEqual(calls[0][-1], f"sha={head}")
 
+    def test_a_review_commit_to_a_path_the_product_review_lists_is_not_queued(self):
+        # Through run(): the ci stage reads REVIEW.md at the PR's base, which the checked commit already has.
+        easy = "리뷰한 head와 되돌리기: {head}, 되돌리기 쉬움\n남은 지적: 없음\n"
+        for files, why in ((("scripts/godot.env",), "민감한 파일"), (("src/auth/login.py",), "민감한 파일"), (("fix.py",), None)):
+            with self.subTest(files=files):
+                self.setUp()
+                repo = ["git", "-C", str(self.job / "repo")]
+                (self.job / "repo/REVIEW.md").write_text("## 민감한 파일\n\n`scripts/godot.env`, `src/auth`\n", encoding="utf-8")
+                subprocess.run([*repo, "add", "REVIEW.md"], check=True)
+                subprocess.run([*repo, "commit", "-qm", "review rules"], check=True)
+                _, calls, note = self.queued(easy, review_files=files)
+                if why:
+                    self.assertEqual(calls, [])
+                    self.assertIn(why, note)
+                else:  # control: the same REVIEW.md lets a commit outside its paths through
+                    self.assertEqual(len(calls), 1)
+
     def test_seen_records_the_bodies_the_worker_judges(self):
         self.queued("리뷰한 head와 되돌리기: {head}, 되돌리기 쉬움\n남은 지적: 없음\n")
         judged = json.loads((self.job / "seen.json").read_text(encoding="utf-8"))
@@ -2249,6 +2266,89 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         run("commit", "-qm", "pointer")
         git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True)
         self.assertTrue(self.engine.touches_trust(git, base, "HEAD"))
+
+
+    def _review_repo(self, review):
+        repo = Path(self.tmp.name) / "review"
+        run = lambda *a: subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True, check=True)
+        repo.mkdir()
+        run("init", "-q")
+        run("config", "user.email", "t@t"), run("config", "user.name", "t")
+        (repo / "a.txt").write_text("a\n")
+        if review is not None:
+            (repo / "REVIEW.md").write_text(review, encoding="utf-8")
+        run("add", "-A"), run("commit", "-qm", "base")
+        base = run("rev-parse", "HEAD").stdout.strip()
+        git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True)
+        return repo, run, base, git
+
+    def test_a_path_the_product_review_lists_as_sensitive_is_a_trust_path(self):
+        review = "# 리뷰\n\n## 민감한 파일\n\n`.github/workflows/**`, `scripts/godot.env`, 폴더 `.claude/`.\n\n## 보고\n\n`docs/x.md`\n"
+        repo, run, base, git = self._review_repo(review)
+        (repo / "scripts").mkdir()
+        (repo / "scripts/godot.env").write_text("v\n")
+        run("add", "-A"), run("commit", "-qm", "engine")
+        self.assertTrue(self.engine.touches_trust(git, base, "HEAD"))
+
+    def test_a_path_outside_the_sensitive_section_is_not_a_trust_path(self):
+        review = "## 민감한 파일\n\n`scripts/godot.env`\n\n## 보고\n\n`docs/x.md`\n"
+        repo, run, base, git = self._review_repo(review)
+        (repo / "docs").mkdir()
+        (repo / "docs/x.md").write_text("x\n")
+        run("add", "-A"), run("commit", "-qm", "docs")
+        self.assertFalse(self.engine.touches_trust(git, base, "HEAD"))
+
+    def test_the_sensitive_list_is_read_at_base_so_the_branch_cannot_shorten_it(self):
+        repo, run, base, git = self._review_repo("## 민감한 파일\n\n`scripts/godot.env`\n")
+        (repo / "REVIEW.md").write_text("## 민감한 파일\n\n없음\n", encoding="utf-8")
+        (repo / "scripts").mkdir()
+        (repo / "scripts/godot.env").write_text("v\n")
+        run("add", "-A"), run("commit", "-qm", "shorten")
+        self.assertTrue(self.engine.touches_trust(git, base, "HEAD"))  # REVIEW.md is a trust name too
+        # Without that name in the diff: main lists the path after the branch left it. Only the list at base catches it.
+        run("checkout", "-q", "-b", "branch", base)
+        (repo / "REVIEW.md").write_text("## 민감한 파일\n\n없음\n", encoding="utf-8")
+        run("commit", "-qam", "older list")
+        run("checkout", "-q", "-b", "feature")
+        (repo / "scripts").mkdir(exist_ok=True)
+        (repo / "scripts/godot.env").write_text("w\n")
+        run("add", "-A"), run("commit", "-qm", "engine")
+        run("checkout", "-q", "-b", "main2", "branch")
+        (repo / "REVIEW.md").write_text("## 민감한 파일\n\n`scripts/godot.env`\n", encoding="utf-8")
+        run("commit", "-qam", "list it")
+        self.assertEqual(git("diff", "--name-only", "main2...feature").stdout.split(), ["scripts/godot.env"])
+        self.assertTrue(self.engine.touches_trust(git, "main2", "feature"))
+        self.assertEqual(self.engine.review_paths("## 민감한 파일\n\n없음\n"), [])
+
+    def test_no_product_review_leaves_only_the_trust_names(self):
+        repo, run, base, git = self._review_repo(None)
+        (repo / "b.txt").write_text("b\n")
+        run("add", "-A"), run("commit", "-qm", "b")
+        self.assertFalse(self.engine.touches_trust(git, base, "HEAD"))
+
+    def test_a_folder_pattern_covers_nested_copies_and_a_glob_crosses_folders(self):
+        self.assertTrue(self.engine.sensitive("x/.claude/s.json", ".claude/"))
+        self.assertTrue(self.engine.sensitive(".github/workflows/a/b.yml", ".github/workflows/**"))
+        self.assertFalse(self.engine.sensitive("scripts/godot.envx", "scripts/godot.env"))
+        # A folder without its /, a root-anchored path and a bare name still count: a missed pattern would queue the PR
+        self.assertTrue(self.engine.sensitive("src/auth/login.py", "src/auth"))
+        self.assertTrue(self.engine.sensitive("scripts/godot.env", "./scripts/godot.env"))
+        self.assertTrue(self.engine.sensitive("scripts/godot.env", "/scripts/godot.env"))
+        self.assertEqual(self.engine.review_paths("### 민감한 파일\n\n`Makefile`, `src/auth`, `a key.pem`, `*`\n## 보고\n`x/y`\n"),
+                         ["Makefile", "src/auth", "a key.pem", "*"])
+        self.assertTrue(self.engine.sensitive("anything.py", "*"))
+        self.assertTrue(self.engine.sensitive("src/auth/login.py", "./src/auth/"))
+        self.assertFalse(self.engine.sensitive("vendor/src/auth/login.py", "/src/auth/"))  # rooted: not a nested copy
+        # A subheading stays in the section; a sibling heading of the same level ends it
+        self.assertEqual(self.engine.review_paths("# 민감한 파일\n## 인증\n`src/auth`\n# 보고\n`x/y`\n"), ["src/auth"])
+        self.assertEqual(self.engine.review_paths("### 민감한 파일\n`a/b`\n### 다른 절\n`x/y`\n"), ["a/b"])
+        self.assertEqual(self.engine.review_paths("## 민감한 파일 예시\n`docs/e.md`\n## 민감한 파일\n`scripts/godot.env`\n"),
+                         ["docs/e.md", "scripts/godot.env"])
+        self.assertTrue(self.engine.sensitive("godot.env", "**/godot.env"))
+        self.assertFalse(self.engine.sensitive("a/godot.env", "scripts/godot.env"))
+        self.assertTrue(self.engine.sensitive("vendor/tools", "vendor/tools/"))  # a submodule pointer at the folder itself
+        self.assertTrue(self.engine.sensitive("x/vendor/tools", "vendor/tools/"))
+        self.assertFalse(self.engine.sensitive("vendor/toolsx/a", "vendor/tools/"))
 
 
 class LayoutTests(unittest.TestCase):

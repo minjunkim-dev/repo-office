@@ -25,6 +25,7 @@ import argparse
 import base64
 import errno
 import fcntl
+import fnmatch
 import hashlib
 import json
 import os
@@ -307,10 +308,45 @@ def open_draft(job, task, stage, raw, head, approved=None, seen=None):
 
 
 def touches_trust(git, base, head):
-    """The branch base...head changes or moves a TRUST_NAMES path, or git could not tell (fails closed)."""
+    """The branch base...head changes or moves a TRUST_NAMES path or a path the product REVIEW.md lists as sensitive
+    (read at base, so the branch cannot shorten the list), or git could not tell (fails closed)."""
     # -z: raw names, not C-quoted ones; --no-renames: a rename out of a trust path shows its old name too
     names = git("diff", "--name-only", "-z", "--no-renames", "--ignore-submodules=none", f"{base}...{head}")
-    return bool(names.returncode) or any(part.casefold() in TRUST_NAMES for n in names.stdout.split("\0") for part in n.split("/"))
+    if names.returncode:
+        return True
+    changed = [n for n in names.stdout.split("\0") if n]
+    if any(part.casefold() in TRUST_NAMES for n in changed for part in n.split("/")):
+        return True
+    review = git("show", f"{base}:REVIEW.md")
+    # No REVIEW.md at base: only TRUST_NAMES apply. Any other git error fails closed.
+    if review.returncode:
+        return not re.search(r"does not exist|exists on disk, but not in", review.stderr)
+    return any(sensitive(n, pattern) for n in changed for pattern in review_paths(review.stdout))
+
+
+def review_paths(text):
+    """Backquoted paths in the 민감한 파일 section of a product REVIEW.md (repo-baseline REVIEW template)."""
+    # Any heading level; every backquoted text counts (a bare `Makefile`, a path with spaces):
+    # an extra pattern only sends more PRs to a person
+    paths = []
+    # Every such heading (a 민감한 파일 예시 before the real one must not hide it). A section ends at a heading
+    # of its own level or higher: its subheadings stay in it
+    for start in re.finditer(r"^(#+)[ \t]*민감한 파일[^\n]*\n", text, re.M):
+        end = re.search(rf"^#{{1,{len(start.group(1))}}}[ \t]", text[start.end():], re.M)
+        section = text[start.end():start.end() + end.start()] if end else text[start.end():]
+        paths += [p.strip() for p in re.findall(r"`([^`\n]+)`", section) if p.strip()]
+    return paths
+
+
+def sensitive(name, pattern):
+    """A folder pattern (ends with /) covers everything under it at any depth; otherwise a glob, where * and ** cross /,
+    or a folder written without its / (`src/auth`). A leading ./ or / means the repository root."""
+    rooted = pattern.startswith(("./", "/"))
+    pattern = pattern.removeprefix("./").lstrip("/")
+    if pattern.endswith("/"):  # the folder itself too: a submodule pointer has no / after it
+        return f"{name}/".startswith(pattern) if rooted else f"/{pattern}" in f"/{name}/"
+    # /name: **/x covers a root-level x too
+    return any(fnmatch.fnmatchcase(n, pattern) for n in (name, f"/{name}")) or name.startswith(f"{pattern}/")
 
 
 # Paths a worker could use to steer later sessions or tools, whatever the body claims: those PRs wait for a person.
@@ -553,7 +589,7 @@ def enqueue(job, task, state, passed, flow=()):
         # proven_easy saw the checked commit only: the review's commits may touch a trust path too
         base = git("ls-remote", "origin", f"refs/heads/{answer['baseRefName']}").stdout.split()[:1]
         if not base or git("fetch", "-q", "origin", base[0]).returncode or touches_trust(git, base[0], head):
-            return "사람이 병합한다: 리뷰한 head가 민감한 파일을 바꾸거나(TRUST_NAMES) git이 그 경로를 보여 주지 못했다"
+            return "사람이 병합한다: 리뷰한 head가 민감한 파일(TRUST_NAMES, 제품 REVIEW.md 「민감한 파일」)을 바꾸거나 git이 그 경로를 보여 주지 못했다"
         pr_id = answer["id"]
         unjudged = None if judged is None else set(pr_notes(job, url)) - set(judged)
     except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError) as error:
