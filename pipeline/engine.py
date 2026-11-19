@@ -262,7 +262,7 @@ def open_draft(job, task, stage, raw, head, approved=None, seen=None):
     if not remote:
         return f"origin has no branch {base} to compare the task branch with"
     git("fetch", "-q", "origin", f"refs/heads/{base}")  # others may have pushed to it since this checkout was made
-    ci = git("diff", "--name-only", f"{remote[0]}...{head}", "--", ".github")  # the commit that is pushed below
+    ci = git("diff", "--name-only", "--ignore-submodules=none", f"{remote[0]}...{head}", "--", ".github")  # the commit that is pushed below
     if ci.returncode or not head:
         return f"could not compare the task branch with origin's {base}: {ci.stderr.strip()}"
     if ci.stdout.strip():
@@ -294,7 +294,7 @@ def open_draft(job, task, stage, raw, head, approved=None, seen=None):
 def touches_trust(git, base, head):
     """The branch base...head changes or moves a TRUST_NAMES path, or git could not tell (fails closed)."""
     # -z: raw names, not C-quoted ones; --no-renames: a rename out of a trust path shows its old name too
-    names = git("diff", "--name-only", "-z", "--no-renames", f"{base}...{head}")
+    names = git("diff", "--name-only", "-z", "--no-renames", "--ignore-submodules=none", f"{base}...{head}")
     return bool(names.returncode) or any(part.casefold() in TRUST_NAMES for n in names.stdout.split("\0") for part in n.split("/"))
 
 
@@ -342,7 +342,7 @@ def push_review(job, task):
         return None
     git("fetch", "-q", "origin", branch)
     # Only what the review added: the draft stage or a person already let the rest of the branch onto GitHub.
-    ci = git("diff", "--name-only", remote[0], head, "--", ".github")
+    ci = git("diff", "--name-only", "--ignore-submodules=none", remote[0], head, "--", ".github")
     if ci.returncode or not head:
         return f"could not compare the review's commits with origin's {branch}: {ci.stderr.strip()}"
     if ci.stdout.strip():

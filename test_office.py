@@ -2212,6 +2212,22 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
             self.assertEqual(self.engine.run("search", FakeWorker(self.job)), self.engine.WAIT)  # design approval
         self.assertIn("board not written: TypeError", err.getvalue())
 
+    def test_a_submodule_pointer_under_a_trust_name_is_seen_even_when_git_hides_submodules(self):
+        repo = Path(self.tmp.name) / "sub"
+        run = lambda *a: subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True, check=True)
+        repo.mkdir()
+        run("init", "-q")
+        run("config", "user.email", "t@t"), run("config", "user.name", "t")
+        run("config", "diff.ignoreSubmodules", "all")
+        (repo / "a.txt").write_text("a\n")
+        run("add", "a.txt"), run("commit", "-qm", "base")
+        base = run("rev-parse", "HEAD").stdout.strip()
+        run("update-index", "--add", "--cacheinfo", f"160000,{base},.claude")
+        run("commit", "-qm", "pointer")
+        git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True)
+        self.assertTrue(self.engine.touches_trust(git, base, "HEAD"))
+
+
 class LayoutTests(unittest.TestCase):
     def test_rules_live_in_agents_files_with_do_and_do_not(self):
         self.assertEqual(list(OFFICE.rglob("CLAUDE.md")), [])
