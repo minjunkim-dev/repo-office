@@ -900,7 +900,7 @@ def preflight(name):
     if not ok:
         print("the preflight output is not the expected JSON", file=sys.stderr)
         return 2
-    argv = ["git", "-C", str(job / "repo"), "diff", f"{base}...{head}", "--", ".", ":!.env*", ":!**/.env*"]
+    argv = ["git", "-C", str(job / "repo"), "diff", "--ignore-submodules=none", f"{base}...{head}", "--", ".", ":!.env*", ":!**/.env*"]
     # Bytes, not text: a non-UTF-8 file in the PR would raise, and an uncaught error exits 1, the secrets-file code.
     diff = subprocess.run(argv, capture_output=True)
     if diff.returncode:

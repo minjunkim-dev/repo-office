@@ -1217,7 +1217,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(script[0][1:], [str(self.engine.BASELINE / "tools/review_preflight.py"), "https://github.com/o/r/pull/1", "--json"])
         self.assertEqual(kwargs["cwd"], self.job / "repo")
         # The worker cannot run the printed command (absolute -C path, quoted pathspecs), so the engine builds the same diff.
-        self.assertEqual(diff[0], ["git", "-C", f"{self.job}/repo", "diff", f"refs/remotes/origin/main...{head}", "--", ".", ":!.env*", ":!**/.env*"])
+        self.assertEqual(diff[0], ["git", "-C", f"{self.job}/repo", "diff", "--ignore-submodules=none", f"refs/remotes/origin/main...{head}", "--", ".", ":!.env*", ":!**/.env*"])
         # Text output, a secrets hit with exit 0, a missing diff_argv, or extra git options in head or base never reach git.
         bad = [{**fields, "head": head + " --output=/tmp/x"}, {**fields, "base": "--output=/tmp/x"},
                {**fields, "secret_hits": [".env"]}, {**fields, "diff_argv": None}, {"head": head}, [head]]
