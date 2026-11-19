@@ -338,7 +338,8 @@ def sensitive(name, pattern):
     pattern = pattern.removeprefix("./").lstrip("/")
     if pattern.endswith("/"):  # the folder itself too: a submodule pointer has no / after it
         return f"/{pattern}" in f"/{name}/"
-    return fnmatch.fnmatchcase(name, pattern) or name.startswith(f"{pattern}/")
+    # /name: **/x covers a root-level x too
+    return any(fnmatch.fnmatchcase(n, pattern) for n in (name, f"/{name}")) or name.startswith(f"{pattern}/")
 
 
 # Paths a worker could use to steer later sessions or tools, whatever the body claims: those PRs wait for a person.

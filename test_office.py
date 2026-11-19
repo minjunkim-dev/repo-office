@@ -2337,6 +2337,8 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         self.assertEqual(self.engine.review_paths("### 민감한 파일\n\n`Makefile`, `src/auth`, `a key.pem`, `*`\n## 보고\n`x/y`\n"),
                          ["Makefile", "src/auth", "a key.pem", "*"])
         self.assertTrue(self.engine.sensitive("anything.py", "*"))
+        self.assertTrue(self.engine.sensitive("godot.env", "**/godot.env"))
+        self.assertFalse(self.engine.sensitive("a/godot.env", "scripts/godot.env"))
         self.assertTrue(self.engine.sensitive("vendor/tools", "vendor/tools/"))  # a submodule pointer at the folder itself
         self.assertTrue(self.engine.sensitive("x/vendor/tools", "vendor/tools/"))
         self.assertFalse(self.engine.sensitive("vendor/toolsx/a", "vendor/tools/"))
