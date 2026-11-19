@@ -12,7 +12,7 @@ repo-baseline이 계약(필수 체크, 머지 큐, 병합 설정)의 원본이�
   - 이미 쓰던 저장소면 「(b) 기존 저장소 옮기기」를 따른다.
 - 리뷰 스킬: matt-skills 프로필([`profiles/matt-skills/README.md`](https://github.com/minjunkim-labs/repo-baseline/blob/main/profiles/matt-skills/README.md))을 켠다. 제품 저장소에서 할 일은 그 README 「켜기」 2번대로 제품 `REVIEW.md` 끝에 「스킬 위임」 절을 붙이는 것 하나다. 이 절이 곧 켜짐 표시다. 「켜기」 1번(스킬 설치)은 office [README](../README.md) 준비물 표의 플러그인 설치와 office `.claude/settings.json`이 맡고, 3번(스킬 확인)은 리뷰 단계마다 `engine.py skills`가 한다. 이때 office `.claude/settings.json`을 `--settings`로 넘겨, 사용자 설정에서 끈 플러그인도 작업자에게 켜져 있으면 찾는다(repo-baseline `check_skills.py`의 `--settings`, minjunkim-labs/repo-baseline#158). 그 옵션이 없는 옛 repo-baseline 클론이면 종료 코드 2로 위임하지 않고 직접 리뷰한다. office 리뷰 단계는 이 절이 있을 때만 두 축 리뷰를 `mattpocock-skills:code-review`에 맡긴다. 절이 없으면 리뷰 작업자가 직접 리뷰한다. office는 `REVIEW.md`를 바꾸는 브랜치를 쉬움으로 보지 않는다(`TRUST_NAMES`). 그래서 이 변경은 사람이 diff를 읽고 병합한다.
 
-- 운영 도구: 배포해서 사람이 쓰는 앱이면 ops 프로필([`profiles/ops/README.md`](https://github.com/minjunkim-labs/repo-baseline/blob/main/profiles/ops/README.md))을 켠다. 제품 `AGENTS.md` 「작업 방식」 끝에 그 「켜기」 절을 붙인다. SDK를 붙이는 PR은 사용자 데이터를 외부로 보내므로 되돌리기 어려움이고, 사람이 diff를 읽고 병합한다. office는 `AGENTS.md`를 바꾸는 브랜치를 쉬움으로 보지 않는다(`TRUST_NAMES`).
+- 운영 도구: 배포해서 사람이 쓰는 앱이면 ops 프로필([`profiles/ops/README.md`](https://github.com/minjunkim-labs/repo-baseline/blob/main/profiles/ops/README.md))을 켠다. 제품 `AGENTS.md` 「작업 방식」 끝에 그 「켜기」 절을 붙인다. 어떤 ops PR이 되돌리기 어려움인지는 그 「켜기」 절을 따른다. 어려움이면 사람이 diff를 읽고 병합한다. office는 `AGENTS.md`를 바꾸는 브랜치를 쉬움으로 보지 않는다(`TRUST_NAMES`).
 
 이미 repo-baseline을 적용한 저장소도 3단계 doctor가 계약을 다시 확인한다.
 
