@@ -2251,6 +2251,57 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         self.assertTrue(self.engine.touches_trust(git, base, "HEAD"))
 
 
+    def _review_repo(self, review):
+        repo = Path(self.tmp.name) / "review"
+        run = lambda *a: subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True, check=True)
+        repo.mkdir()
+        run("init", "-q")
+        run("config", "user.email", "t@t"), run("config", "user.name", "t")
+        (repo / "a.txt").write_text("a\n")
+        if review is not None:
+            (repo / "REVIEW.md").write_text(review, encoding="utf-8")
+        run("add", "-A"), run("commit", "-qm", "base")
+        base = run("rev-parse", "HEAD").stdout.strip()
+        git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True)
+        return repo, run, base, git
+
+    def test_a_path_the_product_review_lists_as_sensitive_is_a_trust_path(self):
+        review = "# 리뷰\n\n## 민감한 파일\n\n`.github/workflows/**`, `scripts/godot.env`, 폴더 `.claude/`.\n\n## 보고\n\n`docs/x.md`\n"
+        repo, run, base, git = self._review_repo(review)
+        (repo / "scripts").mkdir()
+        (repo / "scripts/godot.env").write_text("v\n")
+        run("add", "-A"), run("commit", "-qm", "engine")
+        self.assertTrue(self.engine.touches_trust(git, base, "HEAD"))
+
+    def test_a_path_outside_the_sensitive_section_is_not_a_trust_path(self):
+        review = "## 민감한 파일\n\n`scripts/godot.env`\n\n## 보고\n\n`docs/x.md`\n"
+        repo, run, base, git = self._review_repo(review)
+        (repo / "docs").mkdir()
+        (repo / "docs/x.md").write_text("x\n")
+        run("add", "-A"), run("commit", "-qm", "docs")
+        self.assertFalse(self.engine.touches_trust(git, base, "HEAD"))
+
+    def test_the_sensitive_list_is_read_at_base_so_the_branch_cannot_shorten_it(self):
+        repo, run, base, git = self._review_repo("## 민감한 파일\n\n`scripts/godot.env`\n")
+        (repo / "REVIEW.md").write_text("## 민감한 파일\n\n없음\n", encoding="utf-8")
+        (repo / "scripts").mkdir()
+        (repo / "scripts/godot.env").write_text("v\n")
+        run("add", "-A"), run("commit", "-qm", "shorten")
+        self.assertTrue(self.engine.touches_trust(git, base, "HEAD"))  # REVIEW.md is a trust name too
+        self.assertEqual(self.engine.review_paths("## 민감한 파일\n\n없음\n"), [])
+
+    def test_no_product_review_leaves_only_the_trust_names(self):
+        repo, run, base, git = self._review_repo(None)
+        (repo / "b.txt").write_text("b\n")
+        run("add", "-A"), run("commit", "-qm", "b")
+        self.assertFalse(self.engine.touches_trust(git, base, "HEAD"))
+
+    def test_a_folder_pattern_covers_nested_copies_and_a_glob_crosses_folders(self):
+        self.assertTrue(self.engine.sensitive("x/.claude/s.json", ".claude/"))
+        self.assertTrue(self.engine.sensitive(".github/workflows/a/b.yml", ".github/workflows/**"))
+        self.assertFalse(self.engine.sensitive("scripts/godot.envx", "scripts/godot.env"))
+
+
 class LayoutTests(unittest.TestCase):
     def test_rules_live_in_agents_files_with_do_and_do_not(self):
         self.assertEqual(list(OFFICE.rglob("CLAUDE.md")), [])

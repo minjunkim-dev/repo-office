@@ -136,6 +136,7 @@ PR을 열기 전의 작업을 단계로 나눠 돌리는 실험 파이프라인�
 - 브랜치가 다음 경로를 바꾸거나 이름을 바꿔 옮기면 본문과 관계없이 쉬움이 아니다(`TRUST_NAMES`). 이름은 경로의 어느 단계에 있어도 대소문자 없이 본다(예: `docs/AGENTS.md`).
   - 폴더: 에이전트 설정 폴더(`.claude/`·`.agents/`·`.codex/`·`.cursor/`), `.github/`.
   - 파일: `.mcp.json`, 지시 파일(`AGENTS.md`, `CLAUDE.md`, `CLAUDE.local.md`, `REVIEW.md`), `.envrc`.
+  - 제품 저장소가 정한 경로: base의 `REVIEW.md` 「민감한 파일」 절에 백틱으로 적은 경로(예: BGLike의 `scripts/godot.env`). `/`로 끝나면 그 폴더 전체, 아니면 glob이다. base에서 읽으므로 브랜치가 목록을 줄여도 소용없다. `REVIEW.md`가 없으면 위 이름만 본다. 그 밖에 git이 읽지 못하면 쉬움이 아니다.
 - 쉬움이 아니면 엔진이 `REPORT.md`에 사람이 diff를 읽고 병합한다고 적는다.
 
 ### 리뷰 뒤 push와 REPORT
