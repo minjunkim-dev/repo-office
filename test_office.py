@@ -305,6 +305,23 @@ class PipelineTests(unittest.TestCase):
         head, calls, note = self.queued("리뷰한 head와 되돌리기: {head}, 되돌리기 쉬움\n남은 지적: 없음\n", review_files=("fix.py",))
         self.assertEqual(calls[0][-1], f"sha={head}")
 
+    def test_a_review_commit_to_a_path_the_product_review_lists_is_not_queued(self):
+        # Through run(): the ci stage reads REVIEW.md at the PR's base, which the checked commit already has.
+        easy = "리뷰한 head와 되돌리기: {head}, 되돌리기 쉬움\n남은 지적: 없음\n"
+        for files, why in ((("scripts/godot.env",), "민감한 파일"), (("src/auth/login.py",), "민감한 파일"), (("fix.py",), None)):
+            with self.subTest(files=files):
+                self.setUp()
+                repo = ["git", "-C", str(self.job / "repo")]
+                (self.job / "repo/REVIEW.md").write_text("## 민감한 파일\n\n`scripts/godot.env`, `src/auth`\n", encoding="utf-8")
+                subprocess.run([*repo, "add", "REVIEW.md"], check=True)
+                subprocess.run([*repo, "commit", "-qm", "review rules"], check=True)
+                _, calls, note = self.queued(easy, review_files=files)
+                if why:
+                    self.assertEqual(calls, [])
+                    self.assertIn(why, note)
+                else:  # control: the same REVIEW.md lets a commit outside its paths through
+                    self.assertEqual(len(calls), 1)
+
     def test_seen_records_the_bodies_the_worker_judges(self):
         self.queued("리뷰한 head와 되돌리기: {head}, 되돌리기 쉬움\n남은 지적: 없음\n")
         judged = json.loads((self.job / "seen.json").read_text(encoding="utf-8"))
@@ -2300,6 +2317,12 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         self.assertTrue(self.engine.sensitive("x/.claude/s.json", ".claude/"))
         self.assertTrue(self.engine.sensitive(".github/workflows/a/b.yml", ".github/workflows/**"))
         self.assertFalse(self.engine.sensitive("scripts/godot.envx", "scripts/godot.env"))
+        # A folder without its /, a root-anchored path and a bare name still count: a missed pattern would queue the PR
+        self.assertTrue(self.engine.sensitive("src/auth/login.py", "src/auth"))
+        self.assertTrue(self.engine.sensitive("scripts/godot.env", "./scripts/godot.env"))
+        self.assertTrue(self.engine.sensitive("scripts/godot.env", "/scripts/godot.env"))
+        self.assertEqual(self.engine.review_paths("### 민감한 파일\n\n`Makefile`, `src/auth`, `<인증 경로>`\n## 보고\n`x/y`\n"),
+                         ["Makefile", "src/auth"])
 
 
 class LayoutTests(unittest.TestCase):
