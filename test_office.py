@@ -250,7 +250,7 @@ class PipelineTests(unittest.TestCase):
         self.assertNotIn("approve", self.state()["auto_approved"])
 
     def queued(self, review, notes='[1, "LGTM"]\n', late="", review_files=(), checks=None, base="main", branch="office/search",
-               office=None, judged=True, redesign=False, url=None, **state):
+               office=None, judged=True, redesign=False, url=None, push="https://github.com/o/r.git", **state):
         """At the post stage with review.md, the PR's comments and state set, run to the end; the enqueue calls and REPORT.md 「병합」.
         notes: the comment lists when the review worker recorded seen.json (judged=False: it never did); late: added afterwards.
         review_files: the review worker commits these after the checked commit the draft stage proved easy."""
@@ -272,9 +272,14 @@ class PipelineTests(unittest.TestCase):
             patched.start()
             self.addCleanup(patched.stop)
         own = "https://github.com/office/office.git" if office is None else office  # the office checkout's origin; "" for none
+        # The task repository fetches from a local bare repository (insteadOf): git reports the GitHub URL it stands for
+        fetches = {("remote", "get-url", "--all", "origin"): "https://github.com/o/r.git",
+                   ("remote", "get-url", "--push", "--all", "origin"): push}
         patch = unittest.mock.patch.object(self.engine.subprocess, "run", side_effect=lambda argv, *a, _run=subprocess.run, **k: (
             subprocess.CompletedProcess(argv, 0, own + "\n", "") if argv[:2] == ["git", "-C"] and argv[2] == str(self.engine.OFFICE)
-            and argv[3:] in (["config", "--get", "remote.origin.url"], ["remote", "get-url", "origin"]) else _run(argv, *a, **k)))
+            and argv[3:] in (["config", "--get", "remote.origin.url"], ["remote", "get-url", "origin"])
+            else subprocess.CompletedProcess(argv, 0, fetches[tuple(argv[3:])] + "\n", "")
+            if argv[:3] == ["git", "-C", str(self.job / "repo")] and tuple(argv[3:]) in fetches else _run(argv, *a, **k)))
         patch.start()
         self.addCleanup(patch.stop)
         if checks is not None:
@@ -319,6 +324,7 @@ class PipelineTests(unittest.TestCase):
                  (easy, {"office": ""}, "repo-office 자신의 PR"),  # no office origin: it cannot tell, so a person merges  # a person moved the PR: the trust check would see the wrong base  # no CI is not a green CI
                  (easy, {"branch": "feature/x"}, "PR 브랜치가"),  # pr.txt names a PR the engine did not push
                  (easy, {"url": "https://github.com/other/r/pull/7"}, "push한 저장소"),  # same branch name, another repository
+                 (easy, {"push": "https://github.com/other/r.git"}, "push한 저장소"),  # pushurl/pushInsteadOf send it elsewhere
                  (easy, {"late": '[2, "P1: wrong"]\n'}, "판정하지 않은"),  # a comment or review after the worker's record
                  (easy, {"notes": '[1, "LGTM"]\n', "late": '[1, "LGTM. P1: on second look"]\n'}, "판정하지 않은"),  # an edit
                  (easy, {"notes": '[1, "LGTM"]\n', "late": ""}, None),  # control: the same notes are judged
