@@ -522,7 +522,9 @@ def enqueue(job, task, state, passed, flow=()):
         answer = json.loads(view.stdout) if view.returncode == 0 else None
         if answer["baseRefName"] != task["base"].removeprefix("origin/"):
             return f"사람이 병합한다: PR의 base가 {answer['baseRefName']}로 바뀌었다"
-        # pr.txt is a file the workers can write: queue only the branch the engine pushed
+        # pr.txt is a file the workers can write: queue only the branch the engine pushed, in the repository it pushed to
+        if slug(url) != slug(git("config", "--get", "remote.origin.url").stdout):
+            return "사람이 병합한다: PR이 엔진이 push한 저장소(작업 트리의 origin)에 있지 않다"
         if answer["headRefName"] != f"office/{task['name']}":
             return f"사람이 병합한다: PR 브랜치가 office/{task['name']}가 아니다({answer['headRefName']})"
         # proven_easy saw the checked commit only: the review's commits may touch a trust path too

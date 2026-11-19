@@ -250,11 +250,13 @@ class PipelineTests(unittest.TestCase):
         self.assertNotIn("approve", self.state()["auto_approved"])
 
     def queued(self, review, notes='[1, "LGTM"]\n', late="", review_files=(), checks=None, base="main", branch="office/search",
-               office=None, judged=True, redesign=False, **state):
+               office=None, judged=True, redesign=False, url=None, **state):
         """At the post stage with review.md, the PR's comments and state set, run to the end; the enqueue calls and REPORT.md 「병합」.
         notes: the comment lists when the review worker recorded seen.json (judged=False: it never did); late: added afterwards.
         review_files: the review worker commits these after the checked commit the draft stage proved easy."""
         self.at_post()
+        if url:
+            (self.job / "pr.txt").write_text(url + "\n", encoding="utf-8")
         self.pr_json.write_text(f'{{"id": "PR_7", "baseRefName": "{base}", "headRefName": "{branch}"}}', encoding="utf-8")
         self.api_notes.write_text(notes, encoding="utf-8")
         if judged:
@@ -316,6 +318,7 @@ class PipelineTests(unittest.TestCase):
                  (easy, {"office": "https://github.com/O/R.git"}, "repo-office 자신의 PR"),  # the PR is in the office repository
                  (easy, {"office": ""}, "repo-office 자신의 PR"),  # no office origin: it cannot tell, so a person merges  # a person moved the PR: the trust check would see the wrong base  # no CI is not a green CI
                  (easy, {"branch": "feature/x"}, "PR 브랜치가"),  # pr.txt names a PR the engine did not push
+                 (easy, {"url": "https://github.com/other/r/pull/7"}, "push한 저장소"),  # same branch name, another repository
                  (easy, {"late": '[2, "P1: wrong"]\n'}, "판정하지 않은"),  # a comment or review after the worker's record
                  (easy, {"notes": '[1, "LGTM"]\n', "late": '[1, "LGTM. P1: on second look"]\n'}, "판정하지 않은"),  # an edit
                  (easy, {"notes": '[1, "LGTM"]\n', "late": ""}, None),  # control: the same notes are judged
