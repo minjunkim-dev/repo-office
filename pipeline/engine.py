@@ -326,17 +326,18 @@ def touches_trust(git, base, head):
 
 def review_paths(text):
     """Backquoted paths in the 민감한 파일 section of a product REVIEW.md (repo-baseline REVIEW template)."""
-    # Any heading level; every backquoted word counts (a bare `Makefile` too): an extra pattern only sends more PRs to a person
+    # Any heading level; every backquoted text counts (a bare `Makefile`, a path with spaces):
+    # an extra pattern only sends more PRs to a person
     section = re.search(r"^#+[ \t]*민감한 파일[^\n]*\n(.*?)(?=^#{1,2}[ \t]|\Z)", text, re.M | re.S)
-    return re.findall(r"`([^`\s]+)`", section.group(1)) if section else []
+    return [p.strip() for p in re.findall(r"`([^`\n]+)`", section.group(1)) if p.strip()] if section else []
 
 
 def sensitive(name, pattern):
     """A folder pattern (ends with /) covers everything under it at any depth; otherwise a glob, where * and ** cross /,
     or a folder written without its / (`src/auth`). A leading ./ or / means the repository root."""
     pattern = pattern.removeprefix("./").lstrip("/")
-    if pattern.endswith("/"):
-        return name.startswith(pattern) or f"/{pattern}" in f"/{name}"
+    if pattern.endswith("/"):  # the folder itself too: a submodule pointer has no / after it
+        return f"/{pattern}" in f"/{name}/"
     return fnmatch.fnmatchcase(name, pattern) or name.startswith(f"{pattern}/")
 
 

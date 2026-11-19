@@ -2305,6 +2305,19 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         (repo / "scripts/godot.env").write_text("v\n")
         run("add", "-A"), run("commit", "-qm", "shorten")
         self.assertTrue(self.engine.touches_trust(git, base, "HEAD"))  # REVIEW.md is a trust name too
+        # Without that name in the diff: main lists the path after the branch left it. Only the list at base catches it.
+        run("checkout", "-q", "-b", "branch", base)
+        (repo / "REVIEW.md").write_text("## 민감한 파일\n\n없음\n", encoding="utf-8")
+        run("commit", "-qam", "older list")
+        run("checkout", "-q", "-b", "feature")
+        (repo / "scripts").mkdir(exist_ok=True)
+        (repo / "scripts/godot.env").write_text("w\n")
+        run("add", "-A"), run("commit", "-qm", "engine")
+        run("checkout", "-q", "-b", "main2", "branch")
+        (repo / "REVIEW.md").write_text("## 민감한 파일\n\n`scripts/godot.env`\n", encoding="utf-8")
+        run("commit", "-qam", "list it")
+        self.assertEqual(git("diff", "--name-only", "main2...feature").stdout.split(), ["scripts/godot.env"])
+        self.assertTrue(self.engine.touches_trust(git, "main2", "feature"))
         self.assertEqual(self.engine.review_paths("## 민감한 파일\n\n없음\n"), [])
 
     def test_no_product_review_leaves_only_the_trust_names(self):
@@ -2321,8 +2334,12 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         self.assertTrue(self.engine.sensitive("src/auth/login.py", "src/auth"))
         self.assertTrue(self.engine.sensitive("scripts/godot.env", "./scripts/godot.env"))
         self.assertTrue(self.engine.sensitive("scripts/godot.env", "/scripts/godot.env"))
-        self.assertEqual(self.engine.review_paths("### 민감한 파일\n\n`Makefile`, `src/auth`, `<인증 경로>`\n## 보고\n`x/y`\n"),
-                         ["Makefile", "src/auth"])
+        self.assertEqual(self.engine.review_paths("### 민감한 파일\n\n`Makefile`, `src/auth`, `a key.pem`, `*`\n## 보고\n`x/y`\n"),
+                         ["Makefile", "src/auth", "a key.pem", "*"])
+        self.assertTrue(self.engine.sensitive("anything.py", "*"))
+        self.assertTrue(self.engine.sensitive("vendor/tools", "vendor/tools/"))  # a submodule pointer at the folder itself
+        self.assertTrue(self.engine.sensitive("x/vendor/tools", "vendor/tools/"))
+        self.assertFalse(self.engine.sensitive("vendor/toolsx/a", "vendor/tools/"))
 
 
 class LayoutTests(unittest.TestCase):
