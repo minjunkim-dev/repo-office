@@ -55,7 +55,8 @@
   {
    "id": "approve",
    "by": "human",
-   "approve": "design.md"
+   "approve": "design.md",
+   "auto": "easy"
   },
   {
    "id": "implement",
@@ -108,7 +109,8 @@
   {
    "id": "ci",
    "by": "script",
-   "ci": "pr.txt"
+   "ci": "pr.txt",
+   "enqueue": "easy"
   }
  ]
 }

@@ -5,7 +5,7 @@
                               repo-baseline's GitHub contract by its apply_github_settings.py plan)
   engine.py new <task> --repo PATH [--base origin/main]  test = the product AGENTS.md check && test cells; runs setup once
   engine.py run <task>        advance until a person is needed, the task is blocked, or it is done
-  engine.py approve <task>    a person approves the current design file (bound to its sha256)
+  engine.py approve <task>    a person approves the current design file (bound to its sha256); run approves an easy one itself
   engine.py workers           show every task's stage from files only
   engine.py board             write jobs/board.html: an office of this pipeline's tasks beside the stages and cards (run also rewrites it)
   engine.py test <task>       run the task's test command in its repo/, full output in test.log
@@ -13,7 +13,8 @@
   engine.py skills <task> <base>  run matt-skills check_skills.py in its repo/ (exit 0 delegate, 1 missing, 2 do not)
 
 After the check passes, run pushes the task branch, opens a PR from pr-body.md, marks it ready and, unless it proved easy, asks the review bot once.
-After the review, run replaces the PR body with review-body.md and writes REPORT.md. People act only to approve the design and to merge.
+After the review, run replaces the PR body with review-body.md, writes REPORT.md, waits for CI and queues a PR that needs no person.
+People act only to approve a hard design and to merge a hard PR.
 Once a person has put a finished task's PR in the merge queue, workers and the board write BLOCKED.md if it leaves unmerged,
 and move that note aside once the PR merges or a person puts it back in the queue.
 
@@ -30,6 +31,7 @@ import os
 import re
 import shutil
 import subprocess
+import urllib.parse
 import sys
 import tempfile
 import threading
@@ -118,7 +120,8 @@ def difficulty(job, state, flow):
 
 
 def proven_easy(state):
-    """The draft stage proved the PR easy for the commit that was checked and pushed: a later commit or a rerun of the check drops it."""
+    """The draft stage proved the PR easy for the commit that was checked and pushed: a rerun of the check drops it.
+    The review's commits come after and do not drop it: enqueue checks their paths again."""
     return bool(state.get("easy_pr")) and state.get("easy_pr") == state.get("checked")
 
 
@@ -199,9 +202,23 @@ def block(job, reason):
 
 
 def slug(url):
-    """owner/repo of a GitHub URL (https, ssh or a PR link), else None."""
-    found = re.search(r"github\.com[:/]+([\w.-]+)/([\w.-]+?)(?:\.git)?(?:[/\s]|$)", url)
-    return f"{found[1]}/{found[2]}".lower() if found else None
+    """owner/repo of a github.com URL (https, ssh, scp-style git@github.com:o/r or a PR link), else None.
+    The host is parsed, not searched for: notgithub.com and github.com in another host's path are not GitHub."""
+    url = (url.split() or [""])[0]
+    scp = re.fullmatch(r"[\w.-]+@github\.com:([\w.-]+)/([\w.-]+?)(?:\.git)?/?", url)
+    if scp:
+        parts = list(scp.groups())
+    else:
+        try:
+            parsed = urllib.parse.urlsplit(url)
+            host = parsed.hostname
+        except ValueError:
+            return None
+        parts = parsed.path.strip("/").split("/")[:2]
+        if parsed.scheme not in ("https", "http", "ssh", "git") or host != "github.com" or len(parts) < 2:
+            return None
+        parts[1] = re.sub(r"\.git$", "", parts[1])
+    return "/".join(parts).lower() if all(re.fullmatch(r"[\w.-]+", part) for part in parts) else None
 
 
 def unpinned(job, task):
@@ -260,7 +277,7 @@ def open_draft(job, task, stage, raw, head, approved=None, seen=None):
     if not remote:
         return f"origin has no branch {base} to compare the task branch with"
     git("fetch", "-q", "origin", f"refs/heads/{base}")  # others may have pushed to it since this checkout was made
-    ci = git("diff", "--name-only", f"{remote[0]}...{head}", "--", ".github")  # the commit that is pushed below
+    ci = git("diff", "--name-only", "--ignore-submodules=none", f"{remote[0]}...{head}", "--", ".github")  # the commit that is pushed below
     if ci.returncode or not head:
         return f"could not compare the task branch with origin's {base}: {ci.stderr.strip()}"
     if ci.stdout.strip():
@@ -281,14 +298,19 @@ def open_draft(job, task, stage, raw, head, approved=None, seen=None):
     # The PR opens ready; the ready stage marks a person's draft PR ready. Easy (proven here) only picks the review's model and the report's note:
     # a hard or trust-boundary PR needs a person to read its diff before the merge.
     if stage.get("easy"):
-        design = read_body(job / stage["easy"])  # only the bytes a person approved
-        # -z: raw names, not C-quoted ones; --no-renames: a rename out of a trust path shows its old name too
-        names = git("diff", "--name-only", "-z", "--no-renames", f"{remote[0]}...{head}")
-        guarded = names.returncode or any(part.casefold() in TRUST_NAMES for n in names.stdout.split("\0") for part in n.split("/"))
+        design = read_body(job / stage["easy"])  # only the approved bytes (a person's, or the approve stage's for an easy design)
+        guarded = touches_trust(git, remote[0], head)
         if approved and hashlib.sha256(design).hexdigest() == approved and easy(design, raw) and not guarded:
             if seen is not None:
                 seen["easy"] = True
     return None
+
+
+def touches_trust(git, base, head):
+    """The branch base...head changes or moves a TRUST_NAMES path, or git could not tell (fails closed)."""
+    # -z: raw names, not C-quoted ones; --no-renames: a rename out of a trust path shows its old name too
+    names = git("diff", "--name-only", "-z", "--no-renames", "--ignore-submodules=none", f"{base}...{head}")
+    return bool(names.returncode) or any(part.casefold() in TRUST_NAMES for n in names.stdout.split("\0") for part in n.split("/"))
 
 
 # Paths a worker could use to steer later sessions or tools, whatever the body claims: those PRs wait for a person.
@@ -302,15 +324,24 @@ def easy(design, body):
     (or the old 신뢰 경계: 없음). A claim is any line naming the old words, or a line with the new word and a colon
     after it (되돌리기 판정: 어려움 and 참고: 되돌리기: 어려움 count): the new words are ordinary Korean that prose uses too. Fails closed:
     list markers, emphasis or a second claim anywhere leave the PR not easy."""
-    def claims(raw, word, values):
-        found = [l.strip() for l in unicodedata.normalize("NFKC", raw.decode("utf-8", "replace")).splitlines()
-                 if re.search(word, l, re.I) and not re.match(r"\s*#+\s*\S+\s*$", l)]
-        return found if found and set(found) <= values else None
-    door = r"d\W*o\W*o\W*r|되\W*돌\W*리\W*기[^:]*:"
-    trust = r"신뢰\W*경계|민감한\W*파일[^:]*:"
-    easy_door = {"되돌리기: 쉬움", "Door: 되돌리기 쉬움"}
-    sensitive = claims(body, trust, {"민감한 파일: 없음", "신뢰 경계: 없음"})
-    return bool(claims(design, door, easy_door) and claims(body, door, easy_door) and sensitive and len(sensitive) == 1)
+    sensitive = claims(body, TRUST_CLAIM, {"민감한 파일: 없음", "신뢰 경계: 없음"})
+    return bool(door_easy(design) and door_easy(body) and sensitive and len(sensitive) == 1)
+
+
+DOOR_CLAIM = r"d\W*o\W*o\W*r|되\W*돌\W*리\W*기[^:]*:"
+TRUST_CLAIM = r"신뢰\W*경계|민감한\W*파일[^:]*:"
+
+
+def claims(raw, word, values):
+    """Every line of raw that makes a claim with word (headings aside), if there is one and all are in values, else None."""
+    found = [l.strip() for l in unicodedata.normalize("NFKC", raw.decode("utf-8", "replace")).splitlines()
+             if re.search(word, l, re.I) and not re.match(r"\s*#+\s*\S+\s*$", l)]
+    return found if found and set(found) <= values else None
+
+
+def door_easy(raw):
+    """Every revert claim in raw says exactly 되돌리기: 쉬움 (or the old Door: 되돌리기 쉬움), and there is one."""
+    return bool(claims(raw, DOOR_CLAIM, {"되돌리기: 쉬움", "Door: 되돌리기 쉬움"}))
 
 
 def push_review(job, task):
@@ -326,7 +357,7 @@ def push_review(job, task):
         return None
     git("fetch", "-q", "origin", branch)
     # Only what the review added: the draft stage or a person already let the rest of the branch onto GitHub.
-    ci = git("diff", "--name-only", remote[0], head, "--", ".github")
+    ci = git("diff", "--name-only", "--ignore-submodules=none", remote[0], head, "--", ".github")
     if ci.returncode or not head:
         return f"could not compare the review's commits with origin's {branch}: {ci.stderr.strip()}"
     if ci.stdout.strip():
@@ -399,8 +430,7 @@ def write_report(job, task, state, flow):
     url = (text("pr.txt").split() or ["(PR 없음)"])[0]
     review, body = text("review.md"), text("review-body.md")
     # The owner merges the SHA the review names, never one read from repo/ (POLICY §5).
-    head = re.search(r"리뷰한 head[^\n]*?\b([0-9a-f]{40})\b", review)
-    head = head[1] if head else None
+    head = reviewed_head(review)
     counts = re.search(r"고친 것:[^\n]*?P0\s*(\d+)\D+P1\s*(\d+)\D+P2\s*(\d+)", review)
     left = re.search(r"남은 지적:[^\n]*", review)
     door = [l.strip() for l in body.splitlines() if re.match(r"\s*(되돌리기|민감한 파일|Door|신뢰 경계):", l)]
@@ -427,8 +457,129 @@ def write_report(job, task, state, flow):
     (job / "REPORT.md").write_text(report, encoding="utf-8")
 
 
-def wait_ci(job):
+def reviewed_head(review):
+    """The 40-hex SHA on the review's 「리뷰한 head」 line, else None."""
+    head = re.search(r"리뷰한 head[^\n]*?\b([0-9a-f]{40})\b", review)
+    return head[1] if head else None
+
+
+NOTE_LISTS = ("issues/{n}/comments", "pulls/{n}/comments", "pulls/{n}/reviews")
+
+
+def pr_notes(job, url, bodies=None):
+    """Every comment, line comment and review on the PR as `kind:id:sha256(body)`: a new one or an edit (a bot may post its
+    findings by editing its summary) is a new entry. bodies, if given, gets {entry: body}. Raises on any gh failure."""
+    number = re.search(r"/pull/(\d+)", url)[1]
+    notes = []
+    for path in NOTE_LISTS:
+        got = subprocess.run(["gh", "api", "--paginate", f"repos/{slug(url)}/{path.format(n=number)}", "--jq",
+                              '.[] | [.id, (.body // "")] | @json'], cwd=job, capture_output=True, text=True, timeout=60)
+        if got.returncode:
+            raise ValueError(f"gh api {path}: {got.stderr.strip()}")
+        for line in got.stdout.splitlines():
+            ident, body = json.loads(line)
+            notes.append(f"{path.split('/')[0]}/{path.split('/')[-1]}:{ident}:{hashlib.sha256(body.encode()).hexdigest()}")
+            if bodies is not None:
+                bodies[notes[-1]] = body
+    return sorted(notes)
+
+
+def record_seen(name):
+    """The review worker runs this before judging: seen.json is the list it judges, and seen-bodies.json the exact bodies
+    it judges, so what it read is what the hashes say. enqueue compares the PR's notes with seen.json, so anything new or
+    edited afterwards is an unjudged external review."""
+    job = JOBS / name
+    error = missing(job, name, "pr.txt")
+    if error:
+        print(error, file=sys.stderr)
+        return 2
+    try:
+        bodies = {}
+        notes = pr_notes(job, (job / "pr.txt").read_text(encoding="utf-8").split()[0], bodies)
+    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError) as failed:
+        print(f"could not read the PR's reviews and comments: {failed}", file=sys.stderr)
+        return 2
+    (job / "seen-bodies.json").write_text(json.dumps(bodies, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    (job / "seen.json").write_text(json.dumps(notes, indent=1) + "\n", encoding="utf-8")
+    print(f"{len(notes)} reviews and comments recorded in {job / 'seen.json'}; judge the bodies in {job / 'seen-bodies.json'}")
+    return 0
+
+
+def enqueue(job, task, state, passed, flow=()):
+    """Put the PR in the merge queue on the reviewed head when nothing needs a person, and say what was done (REPORT.md).
+    The owner's standing instruction for the PRs the engine opens (AGENTS.md 「push와 PR」, POLICY §5): the engine proved the
+    PR easy, the review says easy with nothing left, CI passed (passed: the head wait_ci saw green, None for no checks) on the
+    reviewed head, every review and comment on the PR is one the review worker recorded as judged (seen.json), and the
+    approved design is unchanged. Anything else, or any doubt, leaves the merge to a person. The last look at the PR is not
+    atomic with the enqueue (GitHub has no conditional enqueue): a comment in that gap is not seen."""
+    review = (job / "review.md").read_text(encoding="utf-8", errors="replace") if (job / "review.md").exists() else ""
+    url = (job / "pr.txt").read_text(encoding="utf-8").split()[0]
+    # Exactly one 「리뷰한 head와 되돌리기」 line, saying <sha>, 쉬움 and nothing else: 쉬움이 아님 or a second line is not easy.
+    lines = [l.strip() for l in review.splitlines() if re.search(r"리뷰한\W*head", l)]
+    verdict = len(lines) == 1 and re.fullmatch(r"리뷰한 head와 (?:되돌리기|Door): ([0-9a-f]{40}), (?:되돌리기 )?쉬움", lines[0])
+    head = verdict[1] if verdict else None
+    why = ("엔진이 쉬움을 확인하지 못했다" if not proven_easy(state) else "리뷰가 쉬움으로 보지 않았다" if not verdict
+           else "남은 지적이 없음이 아니다" if not claims(review.encode(), r"남은\W*지적[^:]*:", {"남은 지적: 없음"})
+           else "리뷰한 head가 CI가 통과한 head와 다르다(체크 없음 포함)" if head != passed else None)
+    if why:
+        return f"사람이 병합한다: {why}"
+    # POLICY §5: the standing instruction never covers the pipeline repository's own PRs (engine.py new --repo <this checkout>)
+    # As written and after url.*.insteadOf; neither known is no proof that the PR is elsewhere (fails closed)
+    try:
+        own = [slug(subprocess.run(["git", "-C", str(OFFICE), *a], capture_output=True, text=True, timeout=10).stdout)
+               for a in (["config", "--get", "remote.origin.url"], ["remote", "get-url", "origin"])]
+    except (OSError, subprocess.TimeoutExpired):
+        own = [None]
+    if not slug(url) or None in own or slug(url) in own:
+        return "사람이 병합한다: repo-office 자신의 PR이거나 office 체크아웃의 origin을 알 수 없다(상시 지시는 파이프라인 저장소의 PR에 쓰지 않는다)"
+    # surrogateescape: a path that is not UTF-8 still reaches the trust check instead of raising
+    git = lambda *a: subprocess.run(["git", "-C", str(job / "repo"), *a], capture_output=True, text=True,  # noqa: E731
+                                    errors="surrogateescape", timeout=60)
+    try:
+        judged = json.loads((job / "seen.json").read_text(encoding="utf-8")) if (job / "seen.json").exists() else None
+        view = subprocess.run(["gh", "pr", "view", url, "--json", "id,baseRefName,headRefName"], cwd=job,
+                              capture_output=True, text=True, timeout=20)
+        answer = json.loads(view.stdout) if view.returncode == 0 else None
+        if answer["baseRefName"] != task["base"].removeprefix("origin/"):
+            return f"사람이 병합한다: PR의 base가 {answer['baseRefName']}로 바뀌었다"
+        # pr.txt is a file the workers can write: queue only the branch the engine pushed, in the repository it pushed to
+        # As written, and as git fetches and pushes after insteadOf/pushurl: every one must be the PR's repository
+        remotes = [git(*a) for a in (["config", "--get", "remote.origin.url"], ["remote", "get-url", "--all", "origin"],
+                                     ["remote", "get-url", "--push", "--all", "origin"])]
+        if any(r.returncode for r in remotes) or {slug(u) for r in remotes for u in r.stdout.split()} != {slug(url)}:
+            return "사람이 병합한다: PR이 엔진이 push한 저장소(작업 트리의 origin)에 있지 않거나 git이 그 저장소를 보여 주지 못했다"
+        if answer["headRefName"] != f"office/{task['name']}":
+            return f"사람이 병합한다: PR 브랜치가 office/{task['name']}가 아니다({answer['headRefName']})"
+        # proven_easy saw the checked commit only: the review's commits may touch a trust path too
+        base = git("ls-remote", "origin", f"refs/heads/{answer['baseRefName']}").stdout.split()[:1]
+        if not base or git("fetch", "-q", "origin", base[0]).returncode or touches_trust(git, base[0], head):
+            return "사람이 병합한다: 리뷰한 head가 민감한 파일을 바꾸거나(TRUST_NAMES) git이 그 경로를 보여 주지 못했다"
+        pr_id = answer["id"]
+        unjudged = None if judged is None else set(pr_notes(job, url)) - set(judged)
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError) as error:
+        return f"사람이 병합한다: PR을 읽지 못했다({error})"
+    if judged is None:
+        return "사람이 병합한다: 리뷰 작업자가 판정한 리뷰·댓글 목록(seen.json)이 없다"
+    if unjudged:
+        return f"사람이 병합한다: 리뷰 작업자가 판정하지 않은 리뷰·댓글이 {len(unjudged)}개 있다(새로 달렸거나 고쳐졌다)"
+    # The design may have changed while CI ran and the PR was read: check the approval last, right before the request
+    if moved := [s["approve"] for s in flow if s.get("approve") and sha(job / s["approve"]) != state.get("approved", {}).get(s["id"])]:
+        return f"사람이 병합한다: 승인 뒤 {moved[0]}이 바뀌었다"
+    query = ("mutation($id:ID!,$sha:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$sha})"
+             "{mergeQueueEntry{position}}}")
+    try:
+        put = subprocess.run(["gh", "api", "graphql", "-f", f"query={query}", "-f", f"id={pr_id}", "-f", f"sha={head}"],
+                             cwd=job, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return f"사람이 병합한다: 머지 큐 요청에 답이 없었다({error}). 큐에 들어갔는지 PR에서 확인한다"
+    if put.returncode:
+        return f"사람이 병합한다: 머지 큐에 넣지 못했다({(put.stderr or put.stdout).strip()})"
+    return f"엔진이 `{head}`를 머지 큐에 넣었다(쉬움, 남은 지적 없음, CI 통과). 큐가 최신 main에서 CI를 다시 돌리고 병합한다"
+
+
+def wait_ci(job, seen=None):
     """Wait for the PR's checks on the head the engine pushed, then note them in REPORT.md; else why not.
+    seen["passed"] is that head when its checks passed (not when there were none).
     The engine ends when CI ends, so the leader hears of a red PR from this run instead of finding it on the board."""
     url = (job / "pr.txt").read_text(encoding="utf-8").split()[0]
     head = subprocess.run(["git", "-C", str(job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
@@ -449,8 +600,12 @@ def wait_ci(job):
                           for c in checks if ci_state([c]) == "fail"]
                 return f"CI failed on {head}: " + "; ".join(failed)
             if ci == "pass" or not ci and waited >= CI_NONE:
+                clean = ci and ci_clean(checks)
+                if clean and seen is not None:
+                    seen["passed"] = head
                 with open(job / "REPORT.md", "a", encoding="utf-8") as report:
-                    report.write(f"\n## CI\n\n- `{head}`: " + ("통과\n" if ci else f"체크 없음({CI_NONE:g}초 기다림)\n"))
+                    report.write(f"\n## CI\n\n- `{head}`: " + ("통과\n" if clean else "끝남, 통과가 아닌 결론이 있다(예: STALE)\n" if ci
+                                                               else f"체크 없음({CI_NONE:g}초 기다림)\n"))
                 return None
         elif isinstance(answer, dict) and answer.get("headRefOid") and waited >= CI_MOVED:
             # A push after the engine's, or a local commit never pushed: the reviewed head is stale (POLICY §5).
@@ -554,7 +709,7 @@ def advance(job, name, runner):
             print(f"blocked: see {blocked}")
             return BLOCKED
         if state["stage"] == "done":
-            print("done: the owner merges the PR (POLICY §5)")
+            print("done: see REPORT.md 「병합」: the engine queued an easy PR, else the owner merges it (POLICY §5)")
             return DONE
         index = ids.index(state["stage"])
         # An approval binds the file's content: any later change sends the task back to that approval.
@@ -567,8 +722,18 @@ def advance(job, name, runner):
         failed, detail, began = None, {}, int(time.time())
         if stage["by"] == "human":
             if stage.get("approve") and sha(job / stage["approve"]) != state.get("approved", {}).get(stage["id"]):
-                print(f"waiting: a person reads {job / stage['approve']} and runs engine.py approve {name}")
-                return WAIT
+                file = job / stage["approve"]
+                # The owner's standing approval (AGENTS.md 「설계 승인」): an easy design goes on; a hard one waits for a person.
+                raw = file.read_bytes() if file.exists() else b""
+                # Only the current wording: the old Door: 되돌리기 쉬움 still reads as easy for a PR, but never approves a design.
+                if stage.get("auto") != "easy" or not claims(raw, DOOR_CLAIM, {"되돌리기: 쉬움"}):
+                    print(f"waiting: a person reads {file} and runs engine.py approve {name}")
+                    return WAIT
+                # The sha256 of the bytes just judged easy: a file swapped since fails the binding check and comes back here.
+                state.setdefault("approved", {})[stage["id"]] = state.setdefault("auto_approved", {})[stage["id"]] = hashlib.sha256(raw).hexdigest()
+                state.pop("easy_pr", None)  # as approve(): an open PR is never proven again
+                save(state_path, state)
+                print(f"auto-approved {stage['approve']} {state['approved'][stage['id']]}: it says 되돌리기: 쉬움")
         elif stage["by"] == "script" and stage.get("body"):
             # Push only the commit the check stage passed: a commit made since (a rerun after a block) goes through it again.
             head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=job / "repo", capture_output=True, text=True).stdout.strip()
@@ -611,8 +776,13 @@ def advance(job, name, runner):
                 save(state_path, state)
             write_report(job, task, state, flow)
         elif stage["by"] == "script" and stage.get("ci"):
-            if error := wait_ci(job):  # a red CI needs a person: no retry, the leader passes it on
+            seen = {}
+            if error := wait_ci(job, seen):  # a red CI needs a person: no retry, the leader passes it on
                 return block(job, error)
+            if stage.get("enqueue") == "easy":
+                note = enqueue(job, task, state, seen.get("passed"), flow)
+                with open(job / "REPORT.md", "a", encoding="utf-8") as report:
+                    report.write(f"\n## 병합\n\n- {note}\n")
         elif stage["by"] == "script":
             git = lambda *a: subprocess.run(["git", *a], cwd=job / "repo", capture_output=True, text=True).stdout.strip()  # noqa: E731
             # Read what the worker handed over before the test writes its own files (caches, reports).
@@ -755,7 +925,7 @@ def preflight(name):
     if not ok:
         print("the preflight output is not the expected JSON", file=sys.stderr)
         return 2
-    argv = ["git", "-C", str(job / "repo"), "diff", f"{base}...{head}", "--", ".", ":!.env*", ":!**/.env*"]
+    argv = ["git", "-C", str(job / "repo"), "diff", "--ignore-submodules=none", f"{base}...{head}", "--", ".", ":!.env*", ":!**/.env*"]
     # Bytes, not text: a non-UTF-8 file in the PR would raise, and an uncaught error exits 1, the secrets-file code.
     diff = subprocess.run(argv, capture_output=True)
     if diff.returncode:
@@ -794,6 +964,7 @@ def approve(name):
         print(f"nothing to approve at stage {state['stage']}", file=sys.stderr)
         return 2
     state.setdefault("approved", {})[stage["id"]] = sha(job / stage["approve"])
+    state.get("auto_approved", {}).pop(stage["id"], None)  # a person approved these bytes
     state.pop("easy_pr", None)  # proven for the design approved before; an open PR is never proven again
     save(state_path, state)
     print(f"approved {stage['approve']} {state['approved'][stage['id']]}")
@@ -952,6 +1123,13 @@ def ci_state(checks):
     return "pass" if words else ""
 
 
+def ci_clean(checks):
+    """Every check finished with a conclusion that is a pass (SUCCESS, SKIPPED, NEUTRAL): STALE or anything new is not."""
+    words = [str(c.get("state") or "") if c.get("__typename") == "StatusContext" else str(c.get("conclusion") or "")
+             for c in (checks if isinstance(checks, list) else []) if isinstance(c, dict)]
+    return bool(words) and all(w in ("SUCCESS", "SKIPPED", "NEUTRAL") for w in words)
+
+
 def pr_state(job, state, ask=True):
     """(merged, merge, ci) for a task's open PR, from the stage after the PR is opened: merged is True once a finished
     task's PR is merged, merge is GitHub's mergeStateStatus while it is open (CLEAN, BEHIND, DIRTY, BLOCKED, UNSTABLE,
@@ -1080,9 +1258,9 @@ def clear_queue_block(job):
 
 
 def queue_removed(job, url):
-    """A person put the finished task's PR in the merge queue and it left unmerged (merge_group CI failed, a conflict, a
+    """A person or the ci stage put the finished task's PR in the merge queue and it left unmerged (merge_group CI failed, a conflict, a
     person dequeued it): write why into BLOCKED.md so workers and the board show it. Each removal event once (.queue-removed).
-    It only reads: the engine never enqueues, re-enqueues or merges. No answer from gh is no alert."""
+    It only reads: the engine queues a PR once (the ci stage) and never re-enqueues or merges. No answer from gh is no alert."""
     found = re.search(r"/pull/(\d+)", url)
     repo_slug = slug(url)
     if not found or not repo_slug:
@@ -1244,7 +1422,7 @@ def main(argv=None):
     created.add_argument("--repo", required=True)
     created.add_argument("--base", default="origin/main")
     sub.add_parser("doctor").add_argument("repo")
-    for command in ("run", "approve", "test", "preflight"):
+    for command in ("run", "approve", "test", "preflight", "seen"):
         sub.add_parser(command).add_argument("task")
     checked = sub.add_parser("skills")
     checked.add_argument("task")
@@ -1268,7 +1446,7 @@ def main(argv=None):
         return 0
     if args.command == "skills":
         return skills(args.task, args.base)
-    return {"run": run, "approve": approve, "test": test, "preflight": preflight}[args.command](args.task)
+    return {"run": run, "approve": approve, "test": test, "preflight": preflight, "seen": record_seen}[args.command](args.task)
 
 
 if __name__ == "__main__":

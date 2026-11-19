@@ -6,7 +6,8 @@
       "Bash(python3 ../pipeline/engine.py workers)",
       "Bash(python3 ../pipeline/engine.py doctor *)",
       "Bash(python3 ../pipeline/engine.py new *)",
-      "Bash(python3 ../pipeline/engine.py run *)"
+      "Bash(python3 ../pipeline/engine.py run *)",
+      "Bash(gh issue view *)"
     ],
     "ask": [
       "Bash(python3 ../pipeline/engine.py approve*)",

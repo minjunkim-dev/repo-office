@@ -112,6 +112,11 @@ class PipelineTests(unittest.TestCase):
         # The ci stage's question: the PR head is the task's HEAD, and its checks are self.checks (green by default).
         self.checks = Path(self.tmp.name) / "checks.json"
         self.checks.write_text('[{"name": "CI", "status": "COMPLETED", "conclusion": "SUCCESS"}]', encoding="utf-8")
+        # The ci stage's look before it queues an easy PR: the PR's node id, base and branch.
+        self.pr_json = Path(self.tmp.name) / "pr.json"
+        self.pr_json.write_text('{"id": "PR_7", "baseRefName": "main", "headRefName": "office/search"}', encoding="utf-8")
+        self.api_notes = Path(self.tmp.name) / "notes"  # what each REST list of reviews and comments prints: [id, body] per line
+        self.api_notes.write_text("", encoding="utf-8")
         (bin_dir / "gh").write_text(
             "#!/usr/bin/env python3\nimport json, sys\n"
             "stdin = [sys.stdin.read()] if sys.argv[1:3] == ['pr', 'edit'] else []\n"
@@ -123,8 +128,11 @@ class PipelineTests(unittest.TestCase):
             "    import subprocess\n"
             f"    head = subprocess.run(['git', '-C', {str(self.job / 'repo')!r}, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()\n"
             f"    print(json.dumps({{'headRefOid': head, 'statusCheckRollup': json.load(open({str(self.checks)!r}))}}))\n"
+            f"elif sys.argv[1:3] == ['pr', 'view'] and 'id,baseRefName,headRefName' in sys.argv: print(open({str(self.pr_json)!r}).read())\n"
             f"elif sys.argv[1:3] == ['pr', 'view']: print(open({str(draft)!r}).read().strip())\n"
-            f"if sys.argv[1:3] == ['pr', 'ready']: open({str(draft)!r}, 'w').write('false')\n", encoding="utf-8")
+            f"if sys.argv[1:3] == ['pr', 'ready']: open({str(draft)!r}, 'w').write('false')\n"
+            f"if sys.argv[1:2] == ['api'] and any(a.endswith('/comments') for a in sys.argv): print(open({str(self.api_notes)!r}).read(), end='')\n",
+            encoding="utf-8")
         (bin_dir / "gh").chmod(0o755)
         patcher = unittest.mock.patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"})
         patcher.start()
@@ -212,6 +220,134 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
         self.assertEqual(self.state()["stage"], "approve")
         self.assertEqual([c[0] for c in worker.calls], ["design"])
+
+    def test_an_easy_design_is_approved_by_the_engine_and_a_hard_one_waits(self):
+        design = ["되돌리기: 쉬움\n"]
+
+        class Worker(FakeWorker):
+            def __call__(w, name, cwd, argv, message):
+                super().__call__(name, cwd, argv, message)
+                if name.endswith("-design"):
+                    (self.job / "design.md").write_text(design[0], encoding="utf-8")
+
+        worker = Worker(self.job, skip=["implement", "implement"])  # stop after the approval: two tries, then a block
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.engine.run("search", worker)
+        state = self.state()
+        self.assertEqual(state["approved"]["approve"], self.engine.sha(self.job / "design.md"))
+        self.assertEqual(state["auto_approved"], state["approved"])  # the board and the report can tell it from a person's
+        # A design rewritten as hard goes back to the approval and waits for a person, who then owns the approval.
+        for line in ("되돌리기: 어려움\n", "되돌리기: 쉬움\n되돌리기: 어려움\n", "되돌리기 쉬움\n", "난이도: 쉬움\n",
+                     "Door: 되돌리기 쉬움\n"):  # the old wording reads as easy for a PR, but a person approves the design
+            with self.subTest(line=line):
+                (self.job / "BLOCKED.md").unlink(missing_ok=True)
+                (self.job / "design.md").write_text(line, encoding="utf-8")
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
+                self.assertEqual(self.state()["stage"], "approve")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.engine.approve("search"), 0)
+        self.assertNotIn("approve", self.state()["auto_approved"])
+
+    def queued(self, review, notes='[1, "LGTM"]\n', late="", review_files=(), checks=None, base="main", branch="office/search",
+               office=None, judged=True, redesign=False, url=None, push="https://github.com/o/r.git", **state):
+        """At the post stage with review.md, the PR's comments and state set, run to the end; the enqueue calls and REPORT.md 「병합」.
+        notes: the comment lists when the review worker recorded seen.json (judged=False: it never did); late: added afterwards.
+        review_files: the review worker commits these after the checked commit the draft stage proved easy."""
+        self.at_post()
+        if url:
+            (self.job / "pr.txt").write_text(url + "\n", encoding="utf-8")
+        self.pr_json.write_text(f'{{"id": "PR_7", "baseRefName": "{base}", "headRefName": "{branch}"}}', encoding="utf-8")
+        self.api_notes.write_text(notes, encoding="utf-8")
+        if judged:
+            self.assertEqual(self.engine.record_seen("search"), 0)
+        self.api_notes.write_text(notes + late, encoding="utf-8")
+        if redesign:  # the design changes while the engine reads the PR, after every earlier approval check
+            real = self.engine.pr_notes
+            def notes_then_edit(*a):
+                with open(self.job / "design.md", "a", encoding="utf-8") as design:
+                    design.write("\n한 줄 더\n")
+                return real(*a)
+            patched = unittest.mock.patch.object(self.engine, "pr_notes", notes_then_edit)
+            patched.start()
+            self.addCleanup(patched.stop)
+        own = "https://github.com/office/office.git" if office is None else office  # the office checkout's origin; "" for none
+        # The task repository fetches from a local bare repository (insteadOf): git reports the GitHub URL it stands for
+        fetches = {("remote", "get-url", "--all", "origin"): "https://github.com/o/r.git",
+                   ("remote", "get-url", "--push", "--all", "origin"): push}
+        patch = unittest.mock.patch.object(self.engine.subprocess, "run", side_effect=lambda argv, *a, _run=subprocess.run, **k: (
+            subprocess.CompletedProcess(argv, 0, own + "\n", "") if argv[:2] == ["git", "-C"] and argv[2] == str(self.engine.OFFICE)
+            and argv[3:] in (["config", "--get", "remote.origin.url"], ["remote", "get-url", "origin"])
+            else subprocess.CompletedProcess(argv, 0, fetches[tuple(argv[3:])] + "\n", "")
+            if argv[:3] == ["git", "-C", str(self.job / "repo")] and tuple(argv[3:]) in fetches else _run(argv, *a, **k)))
+        patch.start()
+        self.addCleanup(patch.stop)
+        if checks is not None:
+            self.checks.write_text(checks, encoding="utf-8")
+            self.engine.CI_NONE = 0
+            self.addCleanup(setattr, self.engine, "CI_NONE", 300)
+        checked = subprocess.run(["git", "-C", str(self.job / "repo"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        head = self.review_commit(*review_files) if review_files else checked
+        state = {"easy_pr": checked, "checked": checked, **state}
+        (self.job / "review.md").write_text(review.format(head=head), encoding="utf-8")
+        self.engine.save(self.job / "state.json", {**self.state(), "models": [
+            {"stage": "review", "model": "sonnet", "effort": "medium", "rerun": False, "start": 0, "end": int(time.time()) - 60}], **state})
+        self.assertEqual(self.post(), self.engine.DONE)
+        calls = [c for c in self.gh_calls() if c[:2] == ["api", "graphql"] and any("enqueuePullRequest" in a for a in c)]
+        return head, calls, (self.job / "REPORT.md").read_text().split("## 병합")[-1]
+
+    def test_an_easy_pr_with_nothing_left_goes_in_the_merge_queue_on_the_reviewed_head(self):
+        head, calls, note = self.queued("리뷰한 head와 되돌리기: {head}, 되돌리기 쉬움\n고친 것: P0 0, P1 0, P2 0\n남은 지적: 없음\n")
+        self.assertEqual(calls, [["api", "graphql", "-f", calls[0][3], "-f", "id=PR_7", "-f", f"sha={head}"]])
+        self.assertIn("expectedHeadOid:$sha", calls[0][3])  # the queue refuses any other head
+        self.assertIn(f"`{head}`를 머지 큐에 넣었다", note)
+        self.setUp()  # a review commit outside the trust paths is queued too, on its own head
+        head, calls, note = self.queued("리뷰한 head와 되돌리기: {head}, 되돌리기 쉬움\n남은 지적: 없음\n", review_files=("fix.py",))
+        self.assertEqual(calls[0][-1], f"sha={head}")
+
+    def test_seen_records_the_bodies_the_worker_judges(self):
+        self.queued("리뷰한 head와 되돌리기: {head}, 되돌리기 쉬움\n남은 지적: 없음\n")
+        judged = json.loads((self.job / "seen.json").read_text(encoding="utf-8"))
+        bodies = json.loads((self.job / "seen-bodies.json").read_text(encoding="utf-8"))
+        self.assertEqual(sorted(bodies), judged)
+        for note, body in bodies.items():  # each body hashes to its entry: what the worker reads is what was recorded
+            self.assertEqual(note.rsplit(":", 1)[1], hashlib.sha256(body.encode()).hexdigest())
+
+    def test_a_pr_that_needs_a_person_is_not_queued(self):
+        easy = "리뷰한 head와 되돌리기: {head}, 되돌리기 쉬움\n남은 지적: 없음\n"
+        cases = [("리뷰한 head와 되돌리기: {head}, 되돌리기 어려움\n남은 지적: 없음\n", {}, "리뷰가 쉬움으로"),
+                 ("리뷰한 head와 되돌리기: {head}, 되돌리기 쉬움\n남은 지적: [Spec] P2 y, a.py:3\n", {}, "남은 지적이"),
+                 ("리뷰한 head와 되돌리기: {head}, 되돌리기 쉬움\n", {}, "남은 지적이"),
+                 ("리뷰한 head와 되돌리기: " + "a" * 40 + ", 되돌리기 쉬움\n남은 지적: 없음\n", {}, "CI가 통과한 head와"),
+                 (easy, {"easy_pr": None}, "쉬움을 확인하지"),
+                 (easy + "남은 지적: [Spec] P1 x, a.py:1\n", {}, "남은 지적이"),  # every line, not the first
+                 (easy, {"review_files": ("docs/AGENTS.md",)}, "민감한 파일"),  # a review commit after the proof
+                 (easy, {"review_files": (".claude/settings.json",)}, "민감한 파일"),
+                 ("리뷰한 head와 되돌리기: {head}, 쉬움이 아님\n남은 지적: 없음\n", {}, "리뷰가 쉬움으로"),
+                 (easy + "리뷰한 head와 되돌리기: {head}, 어려움\n", {}, "리뷰가 쉬움으로"),  # a second verdict
+                 (easy, {"checks": "[]"}, "체크 없음"),
+                 (easy, {"checks": '[{"name": "CI", "status": "COMPLETED", "conclusion": "STALE"}]'}, "체크 없음"),  # not a pass
+                 (easy, {"base": "release"}, "base가"),
+                 (easy, {"office": "https://github.com/O/R.git"}, "repo-office 자신의 PR"),  # the PR is in the office repository
+                 (easy, {"office": ""}, "repo-office 자신의 PR"),  # no office origin: it cannot tell, so a person merges  # a person moved the PR: the trust check would see the wrong base  # no CI is not a green CI
+                 (easy, {"branch": "feature/x"}, "PR 브랜치가"),  # pr.txt names a PR the engine did not push
+                 (easy, {"url": "https://github.com/other/r/pull/7"}, "push한 저장소"),  # same branch name, another repository
+                 (easy, {"push": "https://github.com/other/r.git"}, "push한 저장소"),  # pushurl/pushInsteadOf send it elsewhere
+                 (easy, {"late": '[2, "P1: wrong"]\n'}, "판정하지 않은"),  # a comment or review after the worker's record
+                 (easy, {"notes": '[1, "LGTM"]\n', "late": '[1, "LGTM. P1: on second look"]\n'}, "판정하지 않은"),  # an edit
+                 (easy, {"notes": '[1, "LGTM"]\n', "late": ""}, None),  # control: the same notes are judged
+                 (easy, {"judged": False}, "seen.json"),
+                 (easy, {"redesign": True}, "승인 뒤 design.md")]  # the last check, right before the request
+        for review, state, why in cases:
+            with self.subTest(review=review, state=state):
+                self.setUp()
+                head, calls, note = self.queued(review, **state)
+                if why is None:
+                    self.assertEqual(len(calls), 1)
+                    continue
+                self.assertEqual(calls, [])
+                self.assertIn("사람이 병합한다", note)
+                self.assertIn(why, note)
 
     def test_approve_refuses_outside_an_approval_stage(self):
         self.engine.run("search", FakeWorker(self.job))
@@ -368,9 +504,13 @@ class PipelineTests(unittest.TestCase):
                                 subprocess.run([*git, "commit", "-q", "-m", "g"], check=True)
 
                 worker = Worker(self.job)
-                self.assertEqual(self.engine.run("search", worker), self.engine.WAIT)
-                self.assertEqual(self.engine.approve("search"), 0)
-                self.engine.run("search", worker)
+                if self.engine.run("search", worker) == self.engine.WAIT:
+                    # only the current wording approves a design: the old Door: wording waits for a person
+                    self.assertFalse(self.engine.claims(design.encode(), self.engine.DOOR_CLAIM, {"되돌리기: 쉬움"}))
+                    self.assertEqual(self.engine.approve("search"), 0)
+                    self.engine.run("search", worker)
+                else:  # an easy design needs no person: the approve stage recorded its bytes itself
+                    self.assertEqual(self.state()["auto_approved"]["approve"], self.engine.sha(self.job / "design.md"))
                 # Every PR is opened ready, so no draft-to-ready event runs the PR workflows twice;
                 # the proof of easy picks the review's model (and the report's note) only.
                 self.assertEqual(draft.read_text(), "false")
@@ -945,6 +1085,11 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(engine.slug("git@github.com:O/R.git\n"), "o/r")
         self.assertEqual(engine.slug("https://github.com/o/r/pull/1\n"), "o/r")
         self.assertIsNone(engine.slug("/tmp/r"))
+        self.assertEqual(engine.slug("ssh://git@github.com/O/R.git"), "o/r")
+        for other in ("https://notgithub.com/o/r.git", "https://evil.example/github.com/o/r", "https://github.com.evil/o/r",
+                      "git@evil.example:github.com/o/r", "file:///github.com/o/r", "https://github.com/o"):
+            with self.subTest(other=other):
+                self.assertIsNone(engine.slug(other))
 
     def test_task_names_are_safe_folder_and_terminal_names(self):
         for bad in ("../x", "검색", "A", "a" * 25):
@@ -1094,7 +1239,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(script[0][1:], [str(self.engine.BASELINE / "tools/review_preflight.py"), "https://github.com/o/r/pull/1", "--json"])
         self.assertEqual(kwargs["cwd"], self.job / "repo")
         # The worker cannot run the printed command (absolute -C path, quoted pathspecs), so the engine builds the same diff.
-        self.assertEqual(diff[0], ["git", "-C", f"{self.job}/repo", "diff", f"refs/remotes/origin/main...{head}", "--", ".", ":!.env*", ":!**/.env*"])
+        self.assertEqual(diff[0], ["git", "-C", f"{self.job}/repo", "diff", "--ignore-submodules=none", f"refs/remotes/origin/main...{head}", "--", ".", ":!.env*", ":!**/.env*"])
         # Text output, a secrets hit with exit 0, a missing diff_argv, or extra git options in head or base never reach git.
         bad = [{**fields, "head": head + " --output=/tmp/x"}, {**fields, "base": "--output=/tmp/x"},
                {**fields, "secret_hits": [".env"]}, {**fields, "diff_argv": None}, {"head": head}, [head]]
@@ -2089,6 +2234,22 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
                 contextlib.redirect_stderr(err):
             self.assertEqual(self.engine.run("search", FakeWorker(self.job)), self.engine.WAIT)  # design approval
         self.assertIn("board not written: TypeError", err.getvalue())
+
+    def test_a_submodule_pointer_under_a_trust_name_is_seen_even_when_git_hides_submodules(self):
+        repo = Path(self.tmp.name) / "sub"
+        run = lambda *a: subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True, check=True)
+        repo.mkdir()
+        run("init", "-q")
+        run("config", "user.email", "t@t"), run("config", "user.name", "t")
+        run("config", "diff.ignoreSubmodules", "all")
+        (repo / "a.txt").write_text("a\n")
+        run("add", "a.txt"), run("commit", "-qm", "base")
+        base = run("rev-parse", "HEAD").stdout.strip()
+        run("update-index", "--add", "--cacheinfo", f"160000,{base},.claude")
+        run("commit", "-qm", "pointer")
+        git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True)
+        self.assertTrue(self.engine.touches_trust(git, base, "HEAD"))
+
 
 class LayoutTests(unittest.TestCase):
     def test_rules_live_in_agents_files_with_do_and_do_not(self):

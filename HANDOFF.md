@@ -6,14 +6,14 @@
 
 소유자가 2026-11-11에 정한 목표:
 
-- 소유자가 이슈나 개발 요청 하나를 던지면, 정해진 파이프라인이 그것을 리뷰를 마친 PR까지 끌고 간다. 병합은 사람이 한다.
+- 소유자가 이슈나 개발 요청 하나를 던지면, 정해진 파이프라인이 그것을 리뷰를 마친 PR까지 끌고 간다. 되돌리기 쉬움이면 머지 큐까지 넣는다. 어려움 PR의 병합은 사람이 한다.
 - 모델이 부를 수 있는 스킬(`tdd`, `diagnosing-bugs`, `codebase-design`, `code-review`)은 단계마다 작업자가 부른다. 사람만 부를 수 있는 스킬(Matt 뼈대, pstack 대부분, §3)은 알맞은 때에 leader가 사람에게 실행을 권한다.
-- 기계로 막을 수 있는 규칙(push·병합 금지, 완료 증거)은 지시가 아니라 거부 규칙·엔진·CI로 지킨다. 판단이 필요한 것(설계 승인, 병합)은 사람이 한다. 2026-11-14부터 거부 규칙은 push·`gh pr merge`·`gh pr edit`·`gh api` 쓰기만 막고, 작업자에게 Bash가 열려 있어 `bash -c` 같은 우회는 막지 못한다. 그 밖의 것은 지시로만 지킨다(§6).
+- 기계로 막을 수 있는 규칙(push·병합 금지, 완료 증거)은 지시가 아니라 거부 규칙·엔진·CI로 지킨다. 판단이 필요한 것(되돌리기 어려움인 설계의 승인과 병합)은 사람이 한다. 2026-11-14부터 거부 규칙은 push·`gh pr merge`·`gh pr edit`·`gh api` 쓰기만 막고, 작업자에게 Bash가 열려 있어 `bash -c` 같은 우회는 막지 못한다. 그 밖의 것은 지시로만 지킨다(§6).
 - repo-baseline 규칙이 바닥이다. office, 스킬 묶음, 개인 도구는 그 위의 선택 층이고, 하나가 빠져도 나머지가 돈다.
 
 지금 상태(2026-11-12):
 
-- 흐름: 접수(leader) → 설계 → 사람 승인(`design.md` sha256) → 구현 → 검사(test 명령, 커밋하지 않은 변경) → 엔진이 push하고 PR을 열어 Ready, 쉬움이 아니면 리뷰 봇 요청 → 리뷰(다른 세션) → 엔진이 리뷰 커밋을 push하고 리뷰 본문을 PR에 올리고 REPORT.md → CI 결과를 기다려 실패면 막힘 → 사람이 병합.
+- 흐름: 접수(leader) → 설계 → 승인(`design.md` sha256, 쉬움은 엔진, 어려움은 사람) → 구현 → 검사(test 명령, 커밋하지 않은 변경) → 엔진이 push하고 PR을 열어 Ready, 쉬움이 아니면 리뷰 봇 요청 → 리뷰(다른 세션) → 엔진이 리뷰 커밋을 push하고 리뷰 본문을 PR에 올리고 REPORT.md → CI 결과를 기다려 실패면 막힘 → 쉬움 PR은 엔진이 리뷰한 head로 머지 큐에 넣고, 어려움 PR은 사람이 병합.
 - 이 흐름 전체를 장난감 저장소에서 엔진과 실제 작업자로 끝까지 돌렸다(leader 접수는 따로 돌렸다)(§6의 2026-11-12 항목). 단위 테스트는 92개다(2026-11-16).
 - 열린 이슈는 없다. 남은 결정은 §4에 있다.
 
@@ -141,6 +141,8 @@
   - 승인 대기: leader가 `blast-radius`를 실행 폴더·금지 폴더와 함께 권했다. 설계 작업자는 되돌리기 쉬움으로 봤다(외부 호출자 없음). 그래서 `interrogate` 권유와 어려운 PR의 봇 리뷰 요청(§4 남은 결정)은 이번에 돌지 않았다.
   - 구현 작업자는 `mattpocock-skills:tdd`로 빨강(`ImportError`) → 초록. 검사 통과, 엔진이 초안 PR을 열고 Ready를 기다렸다. 사람이 Ready로 바꾼 뒤 리뷰 작업자가 `engine.py skills` 종료 코드 0을 받고 `mattpocock-skills:code-review`를 불렀다. diff가 작아 축별 하위 에이전트는 띄우지 않고 두 축을 직접 봤다. CodeRabbit 건너뜀은 「없음(건너뜀)」으로 판정했다(repo-baseline #129 규칙대로).
 - 2026-11-14, 모델 배치: 작업자는 `--setting-sources project`로 hc에서 돌아 사용자의 모델 설정을 받지 않는다. 그래서 엔진이 단계마다 `--model`을 준다(`stage_model`). leader 폴더에서 `claude -p ... --output-format json`의 `modelUsage`는 `leader/.claude/settings.json`(`"model": "opus"`)이 있으면 `claude-opus-5-5`, 없으면 `claude-haiku-5-5`였다(Claude Code 2.1.323).
+- 2026-11-18, 쉬움은 사람 없이: leader 기록에서 사람에게 묻는 일의 대부분이 과제마다의 방향 질문, 등록 순서 질문, 설계 승인(사람이 「이번 묶음은 한 답으로…」를 거듭 입력), Issue 댓글 결정의 확인이었다. 소유자가 고른 대로 쉬움 설계는 엔진이 승인하고(`"auto": "easy"`), 쉬움 PR은 리뷰·CI 뒤 엔진이 머지 큐에 넣는다(`"enqueue": "easy"`, repo-baseline POLICY §5의 상시 지시). leader는 Issue 완료 조건을 방향으로 삼아 묻지 않고 등록하고, 파일이 겹치는 과제는 차례로, 나머지는 나란히 돌린다. Issue 글은 쓴 사람이 OWNER·MEMBER·COLLABORATOR면 결정을 묻지 않고 옮긴다. 남은 위험: 쉬움 판정을 설계 작업자가 스스로 적으므로, 잘못 적은 설계는 `TRUST_NAMES`·다른 세션 리뷰·CI만 막는다.
+  - 같은 날 PR #82 리뷰 뒤: 「리뷰가 끝난 뒤 새 댓글 없음」을 시각으로 보던 관문은 라운드마다 구멍이 나왔다(본문 수정, 작업자 정리 전후, 같은 초). 리뷰 작업자가 판정을 마친 뒤 `engine.py seen`으로 리뷰·댓글의 id와 본문 sha256을 `seen.json`에 남기고, 엔진이 큐 직전에 지금 목록과 비교하는 방식으로 바꿨다. `author_association`은 계정을 보여 줄 뿐 사람의 증거가 아니라고 leader 규칙에 적고, Issue에서 옮긴 결정이 승인·병합·리뷰·판정을 바꾸지 못하게 했다.
 - 2026-11-14, 사람 관문 둘: 설계 승인과 병합 말고는 엔진과 leader가 돈다. 엔진이 PR을 늘 Ready로 바꾸고, 쉬움이 아닌 PR이면 리뷰 봇에 한 번 요청한다. 다시 하면 풀릴 오류는 단계마다 한 번 다시 해 본다. 막힘의 답은 `INTENT.md` 결정 기록이고, 다시 띄운 작업자에게는 엔진이 첫 메시지로 다시 읽으라고 한다(지시서 문장만으로는 이어 받은 세션이 두 번 다시 읽지 않았다). 리뷰가 끝나면 `REPORT.md`를 쓴다. `new`는 `<base>`를 fetch하고, setup이 통과할 때까지 `BLOCKED.md`를 둔다(#33 리뷰의 P2 두 개).
 - 2026-11-16, 실패 기록: 과제 24개로 난이도 판정 기준선을 만들 때, 구현을 두 번 돈 과제(bg-576·bg-577·bg-529-crate-loot)의 실패 이유가 남지 않았다. `fails`는 통과나 답이 오면 지워지고, `check.md`는 다음 검사가 덮고, 시각은 파일 수정 시각으로 추정해야 했다. 그래서 엔진은 `state.json`에 지우지 않는 `failures`(단계, 이유, `at`, 그 실패를 센 작업자 실행의 model·effort, 검사면 `exit`과 `log`)를 쌓는다. 검사 실패는 그 커밋을 만든 구현 실행으로 센다. 실패한 검사의 전체 출력은 `<과제>/test.fail-<n>.log`에 남는다(`repo/` 밖이라 다음 검사를 더럽히지 않는다). hc 오류·사용량 한도·시간 초과와 작업자가 쓴 `BLOCKED.md`는 `"blocked": true`로 따로 표시한다. 단계 실패가 아니라 막힘이다. `models` 항목에 `start`·`end`, 스크립트 단계는 `timings`에 시각을 남긴다(epoch 초). 스크립트 단계가 막힘·대기로 일찍 끝나면 시각을 남기지 않는다. `workers`와 상태판은 막힘도 PR도 없고 `fails`가 남아 단계가 다시 돌 때 `직전 실패: …`를 보인다. 옛 `state.json`은 그대로 읽는다. 토큰·비용과 실패한 테스트 이름은 남기지 않는다.
 - 2026-11-16, office는 선택: 제품 저장소는 여러 사람이 쓰므로 제품 에이전트는 사람이 office로 돌리라고 할 때만 leader에 넘긴다. 그 밖에는 제품 저장소의 평소 절차를 따른다(연결 5단계).
@@ -162,8 +164,8 @@ git add -A && git commit -qm init
 # office 체크아웃 루트에서(이 폴더는 Claude Code에서 한 번 신뢰해 둔다. baseline.path를 먼저 적는다)
 python3 pipeline/engine.py new toy-subtract --repo /tmp/toy   # test 명령은 AGENTS.md 「명령」에서 읽는다
 # jobs/toy-subtract/INTENT.md에 목표를 쓴다. 예: calc.py에 subtract(a, b)와 테스트를 더한다
-OFFICE_STAGES=/tmp/stages-sonnet.json python3 pipeline/engine.py run toy-subtract   # exit 3: 설계 승인 대기
-python3 pipeline/engine.py approve toy-subtract                                       # 사람이 design.md를 읽은 뒤
+OFFICE_STAGES=/tmp/stages-sonnet.json python3 pipeline/engine.py run toy-subtract   # 쉬움 설계면 엔진이 승인하고 계속 간다. exit 3이면(어려움 등) 승인 대기
+python3 pipeline/engine.py approve toy-subtract                                       # exit 3이었을 때만. 사람이 design.md를 읽은 뒤
 OFFICE_STAGES=/tmp/stages-sonnet.json python3 pipeline/engine.py run toy-subtract   # exit 4: origin이 GitHub이 아니라 초안 PR을 못 연다. GitHub 저장소면 리뷰까지 돌고 exit 0
 python3 pipeline/engine.py workers
 ```
