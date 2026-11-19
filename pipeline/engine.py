@@ -328,13 +328,14 @@ def review_paths(text):
     """Backquoted paths in the 민감한 파일 section of a product REVIEW.md (repo-baseline REVIEW template)."""
     # Any heading level; every backquoted text counts (a bare `Makefile`, a path with spaces):
     # an extra pattern only sends more PRs to a person
-    start = re.search(r"^(#+)[ \t]*민감한 파일[^\n]*\n", text, re.M)
-    if not start:
-        return []
-    # The section ends at a heading of its own level or higher: its subheadings stay in it
-    end = re.search(rf"^#{{1,{len(start.group(1))}}}[ \t]", text[start.end():], re.M)
-    section = text[start.end():start.end() + end.start()] if end else text[start.end():]
-    return [p.strip() for p in re.findall(r"`([^`\n]+)`", section) if p.strip()]
+    paths = []
+    # Every such heading (a 민감한 파일 예시 before the real one must not hide it). A section ends at a heading
+    # of its own level or higher: its subheadings stay in it
+    for start in re.finditer(r"^(#+)[ \t]*민감한 파일[^\n]*\n", text, re.M):
+        end = re.search(rf"^#{{1,{len(start.group(1))}}}[ \t]", text[start.end():], re.M)
+        section = text[start.end():start.end() + end.start()] if end else text[start.end():]
+        paths += [p.strip() for p in re.findall(r"`([^`\n]+)`", section) if p.strip()]
+    return paths
 
 
 def sensitive(name, pattern):

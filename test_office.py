@@ -2342,6 +2342,8 @@ console.log(JSON.stringify(made.map(e => ({tag: e.tag, text: e.text, href: e.hre
         # A subheading stays in the section; a sibling heading of the same level ends it
         self.assertEqual(self.engine.review_paths("# 민감한 파일\n## 인증\n`src/auth`\n# 보고\n`x/y`\n"), ["src/auth"])
         self.assertEqual(self.engine.review_paths("### 민감한 파일\n`a/b`\n### 다른 절\n`x/y`\n"), ["a/b"])
+        self.assertEqual(self.engine.review_paths("## 민감한 파일 예시\n`docs/e.md`\n## 민감한 파일\n`scripts/godot.env`\n"),
+                         ["docs/e.md", "scripts/godot.env"])
         self.assertTrue(self.engine.sensitive("godot.env", "**/godot.env"))
         self.assertFalse(self.engine.sensitive("a/godot.env", "scripts/godot.env"))
         self.assertTrue(self.engine.sensitive("vendor/tools", "vendor/tools/"))  # a submodule pointer at the folder itself
