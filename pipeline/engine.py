@@ -622,12 +622,19 @@ def wait_ci(job, seen=None):
     start = time.time()
     while True:
         try:
-            view = subprocess.run(["gh", "pr", "view", url, "--json", "headRefOid,statusCheckRollup"],
+            view = subprocess.run(["gh", "pr", "view", url, "--json", "headRefOid,statusCheckRollup,state"],
                                   cwd=job, capture_output=True, text=True, timeout=20)
             answer = json.loads(view.stdout) if view.returncode == 0 else {}
         except (OSError, subprocess.TimeoutExpired, ValueError):  # gh or the network is down for a moment: ask again
             answer = {}
         waited = time.time() - start
+        if isinstance(answer, dict) and answer.get("state") == "MERGED":
+            # A person merged the PR (often from a later head they fixed) while this task was blocked here: nothing to wait for.
+            if seen is not None:
+                seen["merged"] = True
+            with open(job / "REPORT.md", "a", encoding="utf-8") as report:
+                report.write(f"\n## CI\n\n- 사람이 병합함(PR head `{answer.get('headRefOid')}`). 엔진은 그 CI를 기다리지 않았다\n")
+            return None
         if isinstance(answer, dict) and answer.get("headRefOid") == head:  # checks of an older head say nothing
             checks = answer.get("statusCheckRollup") if isinstance(answer.get("statusCheckRollup"), list) else []
             ci = ci_state(checks)
@@ -815,7 +822,7 @@ def advance(job, name, runner):
             seen = {}
             if error := wait_ci(job, seen):  # a red CI needs a person: no retry, the leader passes it on
                 return block(job, error)
-            if stage.get("enqueue") == "easy":
+            if stage.get("enqueue") == "easy" and not seen.get("merged"):
                 note = enqueue(job, task, state, seen.get("passed"), flow)
                 with open(job / "REPORT.md", "a", encoding="utf-8") as report:
                     report.write(f"\n## 병합\n\n- {note}\n")

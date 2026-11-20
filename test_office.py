@@ -124,7 +124,7 @@ class PipelineTests(unittest.TestCase):
             "if sys.argv[1:3] == ['pr', 'create']:\n"
             f"    open({str(draft)!r}, 'w').write(str('--draft' in sys.argv).lower())\n"
             "    print('https://github.com/O/R/pull/7')\n"
-            "if sys.argv[1:3] == ['pr', 'view'] and 'headRefOid,statusCheckRollup' in sys.argv:\n"
+            "if sys.argv[1:3] == ['pr', 'view'] and 'headRefOid,statusCheckRollup,state' in sys.argv:\n"
             "    import subprocess\n"
             f"    head = subprocess.run(['git', '-C', {str(self.job / 'repo')!r}, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()\n"
             f"    print(json.dumps({{'headRefOid': head, 'statusCheckRollup': json.load(open({str(self.checks)!r}))}}))\n"
@@ -881,7 +881,7 @@ class PipelineTests(unittest.TestCase):
         # The old head's checks are green: only the head comparison keeps them from ending the run.
         green = '[{"name": "CI", "status": "COMPLETED", "conclusion": "SUCCESS"}]'
         old = lambda argv, **kw: (subprocess.CompletedProcess(argv, 0, f'{{"headRefOid": "old", "statusCheckRollup": {green}}}', "")  # noqa: E731
-                                  if "headRefOid,statusCheckRollup" in argv else real(argv, **kw))
+                                  if "headRefOid,statusCheckRollup,state" in argv else real(argv, **kw))
         with unittest.mock.patch.object(self.engine.subprocess, "run", side_effect=old):
             self.assertEqual(self.post(), self.engine.BLOCKED)
         self.assertIn("did not finish", (self.job / "BLOCKED.md").read_text())
@@ -893,7 +893,7 @@ class PipelineTests(unittest.TestCase):
         real = subprocess.run
         green = '[{"name": "CI", "status": "COMPLETED", "conclusion": "SUCCESS"}]'
         moved = lambda argv, **kw: (subprocess.CompletedProcess(argv, 0, f'{{"headRefOid": "newer", "statusCheckRollup": {green}}}', "")  # noqa: E731
-                                    if "headRefOid,statusCheckRollup" in argv else real(argv, **kw))
+                                    if "headRefOid,statusCheckRollup,state" in argv else real(argv, **kw))
         started = time.time()
         with unittest.mock.patch.object(self.engine.subprocess, "run", side_effect=moved):
             self.assertEqual(self.post(), self.engine.BLOCKED)
@@ -902,6 +902,21 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("PR head moved", blocked)
         self.assertIn("newer", blocked)
         self.assertNotIn("## CI", (self.job / "REPORT.md").read_text())  # green checks of another head are not this PR's
+
+    def test_a_pr_a_person_merged_ends_the_ci_wait(self):
+        # bg-630·bg-635: CI failed on the engine's head, a person fixed and merged the PR; a rerun blocked again as "head moved".
+        self.at_post()
+        self.engine.CI_LIMIT, self.engine.CI_MOVED = 1, 0
+        real = subprocess.run
+        red = '[{"name": "smoke", "status": "COMPLETED", "conclusion": "FAILURE"}]'
+        merged = lambda argv, **kw: (subprocess.CompletedProcess(  # noqa: E731
+            argv, 0, f'{{"headRefOid": "newer", "state": "MERGED", "statusCheckRollup": {red}}}', "")
+            if "headRefOid,statusCheckRollup,state" in argv else real(argv, **kw))
+        with unittest.mock.patch.object(self.engine.subprocess, "run", side_effect=merged):
+            self.assertEqual(self.post(), self.engine.DONE)
+        self.assertFalse((self.job / "BLOCKED.md").exists())
+        self.assertIn("사람이 병합함(PR head `newer`)", (self.job / "REPORT.md").read_text())
+        self.assertEqual([c for c in self.gh_calls() if any("enqueuePullRequest" in a for a in c)], [])
 
     def test_easy_reads_the_new_lines_and_the_old_ones(self):
         easy = lambda d, b: self.engine.easy(d.encode(), b.encode())  # noqa: E731
