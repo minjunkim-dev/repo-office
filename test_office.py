@@ -915,7 +915,9 @@ class PipelineTests(unittest.TestCase):
         with unittest.mock.patch.object(self.engine.subprocess, "run", side_effect=merged):
             self.assertEqual(self.post(), self.engine.DONE)
         self.assertFalse((self.job / "BLOCKED.md").exists())
-        self.assertIn("사람이 병합함(PR head `newer`)", (self.job / "REPORT.md").read_text())
+        report = (self.job / "REPORT.md").read_text()
+        self.assertIn("사람이 병합함(PR head `newer`)", report)
+        self.assertNotIn("## 병합", report)  # enqueue is not asked about a merged PR, so no "a person merges" note either
         self.assertEqual([c for c in self.gh_calls() if any("enqueuePullRequest" in a for a in c)], [])
 
     def test_easy_reads_the_new_lines_and_the_old_ones(self):
