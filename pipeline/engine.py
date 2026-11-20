@@ -646,7 +646,7 @@ def wait_ci(job, seen=None):
         elif isinstance(answer, dict) and answer.get("headRefOid") and waited >= CI_MOVED:
             # A push after the engine's, or a local commit never pushed: the reviewed head is stale (POLICY §5).
             return (f"PR head moved: the PR is at {answer['headRefOid']}, not {head} the engine pushed and the review saw. "
-                    f"Waiting cannot fix it: a person reviews the new head again")
+                    f"Waiting cannot fix it: a different context reviews the new head (AGENTS.md 「엔진이 멈춘 뒤의 처리」)")
         if waited >= CI_LIMIT:
             return f"CI did not finish on {head} within {CI_LIMIT:g}s (OFFICE_CI_TIMEOUT): a person looks at {url}"
         time.sleep(CI_EVERY)
